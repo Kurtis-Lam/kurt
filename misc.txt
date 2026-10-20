@@ -1,0 +1,1 @@
+zip -r kurt.zip . -x "*.git*" "build/*" "kurt.egg-info/*" "kurt.zip"
