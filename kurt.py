@@ -5,9 +5,9 @@ Run `kurt` in any project folder. Kurt can read your files and propose
 edits / new files / shell commands. Nothing is changed without your OK.
 """
 import contextlib
-import difflib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -24,7 +24,6 @@ from rich.console import Console, Group
 from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Prompt
-from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
@@ -37,11 +36,12 @@ class KurtConsole(Console):
             return super().print(*objects, **kwargs)
 
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 DEFAULT_MODEL = "hf.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M"
 CONFIG_DIR = Path.home() / ".kurt"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+HW_CACHE_FILE = CONFIG_DIR / "hardware.json"
 
 
 def load_config():
@@ -62,11 +62,35 @@ else:
 WORKERS = [w for w in _cfg.get("workers", []) if isinstance(w, str)]
 MAX_AGENTS = max(1, int(os.environ.get("KURT_MAX_AGENTS", "4")))
 
+
+def _env_flag(name):
+    v = os.environ.get(name)
+    if v is None or not v.strip():
+        return None
+    v = v.strip().lower()
+    if v in ("1", "true", "on", "yes"):
+        return True
+    if v in ("0", "false", "off", "no"):
+        return False
+    return None
+
+
+# Thinking mode: True / False, or None = decide from the detected hardware.
+THINK = _env_flag("KURT_THINK")
+if THINK is None and isinstance(_cfg.get("think"), bool):
+    THINK = _cfg["think"]
+TIP_SHOWN = bool(_cfg.get("tip_shown", False))
+
 _host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 if not _host.startswith("http"):
     _host = "http://" + _host
 HOST = _host.replace("0.0.0.0", "127.0.0.1").rstrip("/")
-CTX = int(os.environ.get("KURT_CTX", "16384"))  # context window sent to Ollama
+CTX = int(os.environ.get("KURT_CTX", "16384"))  # context window sent to Ollama (auto-tuned at startup)
+NUM_THREAD = None  # CPU threads for inference (auto-tuned)
+NUM_BATCH = None  # prompt batch size (auto-tuned)
+KEEP_ALIVE = "60m"
+STOP_SEQUENCES = ["[tool results]"]  # the model must never invent tool results itself
+SERVER_EXTERNAL = False  # True when Ollama was already running before Kurt started
 MAX_ROUNDS = 6  # max automatic read/run follow-ups per user message
 IGNORE_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build",
@@ -820,7 +844,7 @@ def print_summary(meter):
     console.print(Text("✻ " + " · ".join(parts), style="dim green"))
 
 
-SYSTEM = """You are Kurt, an expert coding assistant running inside the user's terminal.
+SYSTEM = """You are Kurt, an expert coding assistant running inside the user's terminal. You were made by Kurtis, a Hong Kong grade 11 student. 
 Project directory: {cwd}
 
 You can act on the project by emitting ACTION BLOCKS. The user is asked to confirm
@@ -874,7 +898,11 @@ def save_config():
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(
             json.dumps(
-                {"model": SAVED_MODEL, "agents": AGENTS, "workers": WORKERS}, indent=2
+                {
+                    "model": SAVED_MODEL, "agents": AGENTS, "workers": WORKERS,
+                    "think": THINK, "tip_shown": TIP_SHOWN,
+                },
+                indent=2,
             ),
             encoding="utf-8",
         )
@@ -898,6 +926,346 @@ def fmt_size(n):
     return f"{n / 1e9:.1f} GB" if n else ""
 
 
+# ------------------------------------------------------- Hardware tuning ---
+HW = None  # detected hardware profile (dict), cached on disk
+TUNE = {}  # what the tuner decided (for /speed and the startup line)
+CTX_TIERS = (4096, 6144, 8192, 12288, 16384)
+
+_PS_PROBE = (
+    "$c=@(Get-CimInstance Win32_Processor);"
+    "$o=@{name=$c[0].Name;"
+    "cores=($c|Measure-Object NumberOfCores -Sum).Sum;"
+    "threads=($c|Measure-Object NumberOfLogicalProcessors -Sum).Sum;"
+    "gpu=@(Get-CimInstance Win32_VideoController|ForEach-Object{$_.Name})};"
+    "$o|ConvertTo-Json -Compress"
+)
+
+
+def _run(cmd, timeout=4):
+    """Run a small helper command quietly; return stdout or '' on any failure."""
+    kwargs = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+    try:
+        r = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, errors="replace", **kwargs
+        )
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _int(s, default=0):
+    try:
+        return int(str(s).strip().split()[0])
+    except Exception:
+        return default
+
+
+def _sysctl(name):
+    return _run(["sysctl", "-n", name], timeout=2)
+
+
+def _windows_ram_gb():
+    try:
+        import ctypes
+
+        class MemStatus(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        st = MemStatus()
+        st.dwLength = ctypes.sizeof(MemStatus)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
+        return st.ullTotalPhys / 2**30
+    except Exception:
+        return 0.0
+
+
+def _nvidia_gpus():
+    """[(name, vram_gb)] from nvidia-smi (Windows and Linux)."""
+    exe = shutil.which("nvidia-smi")
+    if not exe and os.name == "nt":
+        for p in (
+            r"C:\Windows\System32\nvidia-smi.exe",
+            r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+        ):
+            if os.path.isfile(p):
+                exe = p
+                break
+    if not exe:
+        return []
+    out = _run([exe, "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"], timeout=8)
+    gpus = []
+    for line in out.splitlines():
+        name, _, mem = line.rpartition(",")
+        mb = _int(mem)
+        if name.strip() and mb > 0:
+            gpus.append((name.strip(), mb / 1024))
+    return gpus
+
+
+def detect_hardware():
+    """Look at this machine once: OS, CPU, RAM and which accelerator Ollama can really use."""
+    hw = {
+        "os": "linux", "arch": platform.machine().lower(), "cpu": "",
+        "logical": os.cpu_count() or 1, "physical": 0, "ram_gb": 0.0,
+        "accel": "cpu", "gpu": "", "vram_gb": 0.0, "rosetta": False, "apple_silicon": False,
+    }
+    gpu_names = []
+    if sys.platform == "darwin":
+        hw["os"] = "mac"
+        # hw.optional.arm64 is 1 on Apple Silicon even when Python itself runs under Rosetta
+        hw["apple_silicon"] = _sysctl("hw.optional.arm64") == "1"
+        hw["rosetta"] = _sysctl("sysctl.proc_translated") == "1"
+        hw["cpu"] = _sysctl("machdep.cpu.brand_string")
+        hw["physical"] = _int(_sysctl("hw.physicalcpu"))
+        hw["logical"] = _int(_sysctl("hw.logicalcpu"), hw["logical"])
+        hw["ram_gb"] = _int(_sysctl("hw.memsize")) / 2**30
+        if hw["apple_silicon"]:
+            hw["accel"] = "metal"  # Metal GPU, memory shared with the CPU
+            hw["gpu"] = hw["cpu"] or "Apple GPU"
+            hw["vram_gb"] = hw["ram_gb"]
+        # Intel Macs: Ollama has no GPU support there, so inference runs on the CPU
+    elif os.name == "nt":
+        hw["os"] = "windows"
+        hw["ram_gb"] = _windows_ram_gb()
+        out = _run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS_PROBE], timeout=20)
+        try:
+            d = json.loads(out)
+            hw["cpu"] = str(d.get("name") or "").strip()
+            hw["physical"] = _int(d.get("cores"))
+            hw["logical"] = _int(d.get("threads"), hw["logical"])
+            g = d.get("gpu") or []
+            gpu_names = [g] if isinstance(g, str) else [str(x) for x in g]
+        except Exception:
+            pass
+    else:
+        try:
+            info = Path("/proc/cpuinfo").read_text(errors="replace")
+            m = re.search(r"model name\s*:\s*(.+)", info)
+            hw["cpu"] = m.group(1).strip() if m else ""
+            cores = set(re.findall(r"physical id\s*:\s*(\d+)\s*\n(?:.*\n)*?core id\s*:\s*(\d+)", info))
+            hw["physical"] = len(cores)
+        except Exception:
+            pass
+        try:
+            m = re.search(r"MemTotal:\s*(\d+)\s*kB", Path("/proc/meminfo").read_text())
+            hw["ram_gb"] = int(m.group(1)) / 2**20 if m else 0.0
+        except Exception:
+            pass
+
+    if sys.platform != "darwin":
+        gpus = _nvidia_gpus()
+        if gpus:
+            hw["accel"] = "cuda"
+            hw["gpu"] = ", ".join(n for n, _ in gpus)
+            hw["vram_gb"] = sum(v for _, v in gpus)
+        else:
+            amd = [n for n in gpu_names if re.search(r"radeon\s+(rx|pro|vii)|instinct", n, re.I)]
+            if amd or shutil.which("rocm-smi"):
+                hw["accel"] = "amd"
+                hw["gpu"] = ", ".join(amd) or "AMD GPU"
+    if not hw["physical"]:
+        hw["physical"] = max(1, hw["logical"] // 2) if hw["logical"] > 2 else hw["logical"]
+    return hw
+
+
+def get_hardware(refresh=False):
+    """Hardware profile, cached in ~/.kurt/hardware.json (re-detected weekly or on /speed refresh)."""
+    global HW
+    if HW and not refresh:
+        return HW
+    fp = f"{sys.platform}|{platform.machine()}|{os.cpu_count()}|{platform.node()}"
+    if not refresh:
+        try:
+            c = json.loads(HW_CACHE_FILE.read_text(encoding="utf-8"))
+            if c.get("v") == 1 and c.get("fp") == fp and time.time() - c.get("ts", 0) < 7 * 86400:
+                HW = c["hw"]
+                return HW
+        except Exception:
+            pass
+    HW = detect_hardware()
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        HW_CACHE_FILE.write_text(
+            json.dumps({"v": 1, "fp": fp, "ts": time.time(), "hw": HW}), encoding="utf-8"
+        )
+    except Exception:
+        pass
+    return HW
+
+
+def pick_ctx(hw, model_gb):
+    """Largest context that fits fast memory (VRAM / unified memory / RAM) for this model.
+
+    A context that spills out of VRAM, or that is too long to process on a CPU, is the most
+    common reason local models feel slow."""
+    accel, ram = hw["accel"], hw["ram_gb"] or 8.0
+    if accel == "metal":
+        budget = ram * (0.66 if ram <= 36 else 0.75)
+    elif accel == "cuda":
+        budget = hw["vram_gb"]
+    elif accel == "amd":
+        budget = 8.0
+    else:
+        budget = ram * 0.6
+    cap = 16384
+    if accel == "cpu":
+        cap = 12288 if hw["physical"] >= 12 else 8192  # prompt processing is slow on CPUs
+    elif accel == "amd":
+        cap = 8192
+    best = CTX_TIERS[0]
+    for t in CTX_TIERS:
+        if t <= cap and model_gb + 1.0 + 0.12 * t / 1000 <= budget:  # ~0.12 GB of KV cache per 1k tokens
+            best = t
+    return best
+
+
+def think_enabled():
+    """Thinking makes answers slower; on by default only where a GPU can keep up."""
+    if THINK is not None:
+        return THINK
+    return get_hardware()["accel"] != "cpu"
+
+
+def device_label(hw):
+    if hw["os"] == "mac":
+        return "Apple Silicon Mac" if hw["apple_silicon"] else "Intel Mac"
+    return {"windows": "Windows", "linux": "Linux"}.get(hw["os"], hw["os"])
+
+
+def retune():
+    """Choose context size, CPU threads and batch size for this device and the current model."""
+    global CTX, NUM_THREAD, NUM_BATCH, MAX_AGENTS, TUNE
+    hw = get_hardware()
+    tuning_off = _env_flag("KURT_TUNE") is False
+    model_gb = 5.5  # default 9B Q4_K_M
+    for m in installed_models():
+        if same_model(m["name"], MODEL) and m["size"]:
+            model_gb = m["size"] / 1e9
+    accel = hw["accel"]
+
+    if os.environ.get("KURT_CTX"):
+        CTX = int(os.environ["KURT_CTX"])
+    elif tuning_off:
+        CTX = 16384
+    else:
+        CTX = pick_ctx(hw, model_gb)
+
+    NUM_THREAD = None
+    if os.environ.get("KURT_THREADS"):
+        NUM_THREAD = max(1, int(os.environ["KURT_THREADS"]))
+    elif not tuning_off and accel == "cpu":
+        NUM_THREAD = max(1, hw["physical"])  # one thread per physical core beats hyper-threads
+
+    NUM_BATCH = None
+    if os.environ.get("KURT_BATCH"):
+        NUM_BATCH = max(1, int(os.environ["KURT_BATCH"]))
+    elif not tuning_off and (
+        (accel == "cuda" and hw["vram_gb"] >= 8) or (accel == "metal" and hw["ram_gb"] >= 16)
+    ):
+        NUM_BATCH = 1024  # faster prompt processing when there is memory to spare
+
+    if "KURT_MAX_AGENTS" not in os.environ:
+        MAX_AGENTS = 2 if accel == "cpu" else 4  # parallel helpers do not speed up a CPU
+
+    where = {
+        "metal": f"Metal GPU, {hw['ram_gb']:.0f} GB unified memory",
+        "cuda": f"{hw['gpu']}, {hw['vram_gb']:.0f} GB VRAM",
+        "amd": hw["gpu"] or "AMD GPU",
+    }.get(accel, f"CPU only, {hw['physical']} cores, {hw['ram_gb']:.0f} GB RAM")
+    bits = [f"ctx {CTX}"]
+    if NUM_THREAD:
+        bits.append(f"{NUM_THREAD} threads")
+    if NUM_BATCH:
+        bits.append(f"batch {NUM_BATCH}")
+    bits.append("thinking " + ("on" if think_enabled() else "off"))
+    TUNE = {"where": where, "bits": bits, "model_gb": model_gb, "off": tuning_off}
+    return TUNE
+
+
+def tune_summary():
+    if not TUNE:
+        return ""
+    off = " (tuning off)" if TUNE["off"] else ""
+    return f"⚡ {device_label(get_hardware())} · {TUNE['where']} → {' · '.join(TUNE['bits'])}{off}"
+
+
+def runner_options():
+    """Options that change how the model is loaded. They must be identical in every request,
+    otherwise Ollama reloads the model (a multi-second stall)."""
+    o = {"num_ctx": CTX}
+    if NUM_THREAD:
+        o["num_thread"] = NUM_THREAD
+    if NUM_BATCH:
+        o["num_batch"] = NUM_BATCH
+    return o
+
+
+def server_env():
+    """Ollama server settings Kurt applies when it starts Ollama itself."""
+    hw = get_hardware()
+    env = {"OLLAMA_NUM_PARALLEL": "2" if (AGENTS and hw["accel"] in ("cuda", "metal")) else "1"}
+    if hw["accel"] in ("cuda", "metal"):
+        env["OLLAMA_FLASH_ATTENTION"] = "1"
+    return env
+
+
+def server_env_help():
+    hw = get_hardware()
+    env = server_env()
+    if hw["os"] == "mac":
+        lines = [f"launchctl setenv {k} {v}" for k, v in env.items()]
+        after = "Then quit the Ollama app from the menu bar and open it again."
+    elif hw["os"] == "windows":
+        lines = [f"setx {k} {v}" for k, v in env.items()]
+        after = "Then quit Ollama from the system tray and open it again."
+    else:
+        lines = [f"Environment={k}={v}" for k, v in env.items()]
+        after = "Put these in `sudo systemctl edit ollama` under [Service], then restart ollama."
+    return lines, after
+
+
+def speed_report(refresh=False):
+    hw = get_hardware(refresh=refresh)
+    retune()
+    table = Table(box=None, show_header=False, padding=(0, 2))
+    table.add_column(style="bold")
+    table.add_column()
+    table.add_row("Device", device_label(hw))
+    table.add_row("CPU", f"{hw['cpu'] or hw['arch']} ({hw['physical']} cores / {hw['logical']} threads)")
+    table.add_row("Memory", f"{hw['ram_gb']:.1f} GB")
+    table.add_row("Accelerator", TUNE["where"])
+    table.add_row("Model", f"{short_model(MODEL, 50)} ({TUNE['model_gb']:.1f} GB)")
+    table.add_row("Applied", ", ".join(TUNE["bits"]))
+    console.print(Panel(table, title="Speed", border_style="green", expand=False))
+    notes = []
+    if hw["accel"] == "cpu":
+        notes.append("No usable GPU: thinking is off and the context is kept short because CPUs "
+                     "are slow at reading long prompts. /think on turns thinking back on.")
+        if hw["os"] == "mac":
+            notes.append("Intel Macs cannot use the GPU in Ollama. A smaller model (/models) is "
+                         "the biggest remaining speed-up.")
+    if hw["rosetta"]:
+        notes.append("Python is running under Rosetta. Installing a native arm64 Python makes Kurt itself faster.")
+    for n in notes:
+        console.print(f"[dim]• {escape(n)}[/]")
+    lines, after = server_env_help()
+    console.print("[dim]Kurt sets these when it starts Ollama itself. If the Ollama app was already "
+                  "running, set them once:[/]")
+    for ln in lines:
+        console.print(f"  {escape(ln)}", markup=True)
+    console.print(f"[dim]{escape(after)}[/]")
+    console.print("[dim]Override anything with KURT_CTX, KURT_THREADS, KURT_BATCH, KURT_THINK, "
+                  "KURT_TUNE=off. `/speed refresh` re-detects the hardware.[/]")
+
+
 # ----------------------------------------------------------------- Ollama ---
 def http_json(path, payload=None, timeout=5):
     data = json.dumps(payload).encode() if payload is not None else None
@@ -917,7 +1285,9 @@ def ollama_up():
 
 
 def ensure_ollama():
+    global SERVER_EXTERNAL
     if ollama_up():
+        SERVER_EXTERNAL = True
         return True
     exe = shutil.which("ollama")
     if not exe:
@@ -925,17 +1295,22 @@ def ensure_ollama():
             "[red]Ollama isn't installed or isn't on PATH.[/] Get it at https://ollama.com/download"
         )
         return False
+    env = os.environ.copy()
+    for k, v in server_env().items():
+        env.setdefault(k, v)  # anything the user already set wins
     with console.status("Starting Ollama..."):
-        kwargs = {}
+        kwargs = {"env": env}
         if os.name == "nt":
-            kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+            kwargs["creationflags"] = 0x08000000 | 0x00008000  # no window, above-normal priority
+        else:
+            kwargs["start_new_session"] = True  # stays warm for the next launch, survives Ctrl+C
         subprocess.Popen(
             [exe, "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kwargs
         )
-        for _ in range(40):
+        for _ in range(100):
             if ollama_up():
                 return True
-            time.sleep(0.5)
+            time.sleep(0.2)
     console.print("[red]Could not start Ollama.[/]")
     return False
 
@@ -974,32 +1349,69 @@ def ensure_model():
     return pull_model(MODEL)
 
 
-def warm_model():
+def warm_model(quiet=False):
+    """Load the model into memory with the exact runner options later requests will use."""
+    payload = {"model": MODEL, "keep_alive": KEEP_ALIVE, "options": runner_options()}
+    if quiet:
+        try:
+            http_json("/api/generate", payload, timeout=600)
+        except Exception:
+            pass
+        return
     with console.status(f"Loading {escape(short_model(MODEL))} into memory..."):
         try:
-            http_json(
-                "/api/generate",
-                {"model": MODEL, "keep_alive": "30m", "options": {"num_ctx": CTX}},
-                timeout=600,
-            )
+            http_json("/api/generate", payload, timeout=600)
         except Exception as e:
             console.print(f"[yellow]Warm-up skipped:[/] {escape(str(e))}")
 
 
-def stream_chat(messages):
+_THINK_BROKEN = False  # set when the server rejects the `think` field
+
+
+def _open_chat(payload, timeout):
+    """POST /api/chat. Retries once without `think` if this Ollama/model rejects it."""
+    global _THINK_BROKEN
+    if _THINK_BROKEN:
+        payload.pop("think", None)
+    for attempt in (0, 1):
+        req = urllib.request.Request(
+            HOST + "/api/chat",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            return urllib.request.urlopen(req, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")
+            if attempt == 0 and "think" in payload and "think" in body.lower():
+                _THINK_BROKEN = True
+                payload.pop("think", None)
+                continue
+            try:
+                body = json.loads(body).get("error", body)
+            except Exception:
+                pass
+            raise RuntimeError(body or str(e))
+
+
+def _chat_payload(model, messages, stream, temperature, think, stop=None):
+    options = dict(runner_options(), temperature=temperature)
+    if stop:
+        options["stop"] = stop
     payload = {
-        "model": MODEL,
-        "messages": messages,
-        "stream": True,
-        "keep_alive": "30m",
-        "options": {"num_ctx": CTX, "temperature": 0.2},
+        "model": model, "messages": messages, "stream": stream,
+        "keep_alive": KEEP_ALIVE, "options": options,
     }
-    req = urllib.request.Request(
-        HOST + "/api/chat",
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+    if think is not None:
+        payload["think"] = think
+    return payload
+
+
+def stream_chat(messages):
+    payload = _chat_payload(
+        MODEL, messages, True, 0.2, think_enabled(), stop=STOP_SEQUENCES
     )
-    with urllib.request.urlopen(req, timeout=900) as r:
+    with _open_chat(payload, 900) as r:
         for line in r:
             if not line.strip():
                 continue
@@ -1019,18 +1431,12 @@ def stream_chat(messages):
                 break
 
 
-def chat_once(model, messages, temperature=0.2, timeout=900):
-    d = http_json(
-        "/api/chat",
-        {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "keep_alive": "30m",
-            "options": {"num_ctx": CTX, "temperature": temperature},
-        },
-        timeout=timeout,
-    )
+def chat_once(model, messages, temperature=0.2, timeout=900, think=None):
+    if think is None:
+        think = think_enabled()
+    payload = _chat_payload(model, messages, False, temperature, think)
+    with _open_chat(payload, timeout) as r:
+        d = json.loads(r.read().decode() or "{}")
     if "error" in d:
         raise RuntimeError(d["error"])
     out = d.get("message", {}).get("content", "")
@@ -1078,6 +1484,7 @@ def set_model(name):
     MODEL = name
     SAVED_MODEL = name
     save_config()
+    retune()  # a different model needs a different context size
     warm_model()
     console.print(f"[green]✔ main model:[/] {escape(name)}")
 
@@ -1364,7 +1771,9 @@ def plan_agents(request):
         max_agents=MAX_AGENTS, tree=project_tree(80), request=request[:6000]
     )
     try:
-        out = chat_once(MODEL, [{"role": "user", "content": prompt}], temperature=0, timeout=300)
+        out = chat_once(
+            MODEL, [{"role": "user", "content": prompt}], temperature=0, timeout=300, think=False
+        )
     except Exception as e:
         console.print(f"[dim]agents: planning failed ({escape(str(e))}), continuing alone[/]")
         return []
@@ -1424,7 +1833,7 @@ def run_agents(request):
             p = safe_path(f)
             if p and p.is_file():
                 text, _ = read_file(p)
-                attached.append(f"[File {f}]\n{text[:20000]}")
+                attached.append(f"[File {f}]\n{text[: file_cap() * 2 // 3]}")
         user = (
             f"Overall user request:\n{request}\n\nYour subtask:\n{t['task']}\n\n"
             + "\n\n".join(attached)
@@ -1511,7 +1920,15 @@ def project_tree(limit=150):
     return "\n".join(out) or "(empty directory)"
 
 
+def file_cap():
+    """Max characters of one file sent to the model; smaller contexts get smaller files."""
+    return max(6000, min(30000, int(CTX * 2)))
+
+
 def show_diff(old, new, name):
+    import difflib
+    from rich.syntax import Syntax
+
     diff = "".join(
         difflib.unified_diff(
             old.splitlines(True), new.splitlines(True), f"a/{name}", f"b/{name}", n=3
@@ -1524,6 +1941,8 @@ def show_diff(old, new, name):
 
 
 def show_new_file(name, text):
+    from rich.syntax import Syntax
+
     lines = text.splitlines()
     shown = "\n".join(lines[:80]) + (f"\n... ({len(lines) - 80} more lines)" if len(lines) > 80 else "")
     try:
@@ -1552,8 +1971,9 @@ def do_read(arg):
         return f"READ {arg}: ERROR file not found (or outside project)."
     text, _ = read_file(p)
     console.print(f"[dim]📖 read {arg} ({len(text)} chars)[/]")
-    if len(text) > 30000:
-        text = text[:30000] + "\n... [truncated]"
+    cap = file_cap()
+    if len(text) > cap:
+        text = text[:cap] + "\n... [truncated]"
     return f"READ {arg}:\n{text}"
 
 
@@ -1650,20 +2070,75 @@ def handle_actions(text):
 
 # ------------------------------------------------------------------- Chat ---
 def trim(messages):
+    """Keep the conversation inside the context window.
+
+    When over budget, drop old messages down to 70% of it in ONE go. Ollama reuses its cached
+    prompt as long as the start of the conversation is unchanged, so trimming rarely (instead of
+    shaving one message every turn) avoids re-reading the whole prompt on every request."""
     budget = int(CTX * 3)  # ~3 chars per token, leave headroom
-    while sum(len(m["content"]) for m in messages) > budget and len(messages) > 3:
-        del messages[1]
+    total = sum(len(m["content"]) for m in messages)
+    if total <= budget:
+        return
+    target = int(budget * 0.7)
+    cut = 1
+    while total > target and len(messages) - (cut - 1) > 3:
+        total -= len(messages[cut]["content"])
+        cut += 1
+    del messages[1:cut]
 
 
 def attach_mentions(text):
     extra = []
+    cap = file_cap()
     for m in set(re.findall(r"@([\w./\\-]+)", text)):
         p = safe_path(m)
         if p and p.is_file():
             content, _ = read_file(p)
-            extra.append(f"\n\n[Attached file {m}]\n{content[:30000]}")
+            extra.append(f"\n\n[Attached file {m}]\n{content[:cap]}")
             console.print(f"[dim]📎 attached {m}[/]")
     return text + "".join(extra)
+
+
+class StreamPrinter:
+    """Batches streamed text so the terminal is redrawn ~20 times a second, not once per token."""
+
+    def __init__(self, interval=0.05):
+        self.interval = interval
+        self.parts = []
+        self.style = None
+        self.last = time.monotonic()
+
+    def write(self, text, style=None):
+        if self.parts and style != self.style:
+            self.flush()
+        self.style = style
+        self.parts.append(text)
+        if time.monotonic() - self.last >= self.interval:
+            self.flush()
+
+    def flush(self):
+        if self.parts:
+            text, self.parts = "".join(self.parts), []
+            console.print(text, style=self.style, end="", markup=False, soft_wrap=True)
+        self.last = time.monotonic()
+
+
+def early_stop_point(full, state):
+    """After the model asks to READ a file or RUN a command it must wait for the result.
+    If it keeps writing instead (guessing what the file contains), stop generating and return
+    the index where the reply should be cut; otherwise None."""
+    end = full.rfind("@@@ END")
+    if end < 0:
+        return None
+    cut = end + len("@@@ END")
+    tail = full[cut:]
+    if len(tail) < 160 or "@@@" in tail:
+        return None
+    if state.get("cut") != cut:
+        blocks = BLOCK_RE.findall(full[:cut])
+        state["cut"] = cut
+        state["fetch"] = bool(blocks) and blocks[-1][0] in ("READ", "RUN")
+    return cut if state["fetch"] else None
 
 
 
@@ -1684,9 +2159,11 @@ def run_turn(messages):
         else:
             console.print(Text("✦ K is thinking…", style="bold bright_green"))
         failed = False
+        printer = StreamPrinter()
+        stop_state = {}
         try:
-            with BtwListener():
-                for kind, chunk in stream_chat(messages):
+            with BtwListener(), contextlib.closing(stream_chat(messages)) as stream:
+                for kind, chunk in stream:
                     if kind == "stats":
                         meter.tokens = chunk.get("eval_count") or meter.tokens
                         continue
@@ -1694,25 +2171,34 @@ def run_turn(messages):
                     if kind == "thinking":
                         meter.label = "Thinking"
                         if not thinking_started:
+                            printer.flush()
                             console.print(Text("Thinking", style="bold green"))
                             thinking_started = True
-                        console.print(chunk, style="dim green", end="", markup=False, soft_wrap=True)
+                        printer.write(chunk, "dim green")
                     else:
                         meter.label = "Writing"
                         if not answer_started:
+                            printer.flush()
                             if thinking_started:
                                 console.print()
                             console.print(Text("K › ", style="bold bright_green"), end="")
                             answer_started = True
                         full += chunk
-                        console.print(chunk, end="", markup=False, soft_wrap=True)
+                        printer.write(chunk)
+                        cut = early_stop_point(full, stop_state)
+                        if cut is not None:
+                            full = full[:cut]  # closing the stream makes Ollama stop generating
+                            break
         except KeyboardInterrupt:
             interrupted = True
+            printer.flush()
             console.print("\n[yellow]⏹ interrupted[/]")
         except Exception as e:
             failed = True
+            printer.flush()
             console.print(f"\n[red]Error talking to Ollama:[/] {escape(str(e))}")
         finally:
+            printer.flush()
             meter.stop()
             if ui:
                 ui.end_work()
@@ -1742,6 +2228,9 @@ HELP = """[bold]Commands[/]
   /models         list models, switch the main model, add a model from Hugging Face,
                   and turn agents on or off
   /btw <note>     add info for Kurt while it is working, without interrupting it
+  /speed          show the detected hardware and the speed settings in use
+                  (/speed refresh re-detects it)
+  /think [on|off] turn thinking on or off (off is much faster on computers without a GPU)
   /files          list project files
   /add <path>     put a file's contents into the conversation (or use @path in a message)
   /auto           toggle auto-accept for file edits (commands always ask)
@@ -1755,7 +2244,7 @@ def new_messages():
 
 
 def handle_command(line, messages):
-    global AUTO
+    global AUTO, THINK
     cmd, _, arg = line.partition(" ")
     cmd = cmd.lower()
     if cmd in ("/exit", "/quit", "/q"):
@@ -1770,6 +2259,23 @@ def handle_command(line, messages):
         else:
             add_btw(arg.strip())
             console.print("[dim]📝 btw noted - Kurt will get it with your next message[/]")
+    elif cmd == "/speed":
+        speed_report(refresh=arg.strip().lower() == "refresh")
+    elif cmd == "/think":
+        a = arg.strip().lower()
+        if a in ("on", "off"):
+            THINK = a == "on"
+        elif a in ("auto", "default"):
+            THINK = None
+        elif a:
+            console.print("usage: /think [on|off|auto]", markup=False)
+            return None
+        else:
+            THINK = not think_enabled()
+        save_config()
+        retune()
+        console.print(f"thinking: [bold]{'ON' if think_enabled() else 'OFF'}[/]"
+                      + (" [dim](auto)[/]" if THINK is None else ""))
     elif cmd == "/files":
         console.print(project_tree(), markup=False)
     elif cmd == "/clear":
@@ -1784,7 +2290,7 @@ def handle_command(line, messages):
             console.print("[red]file not found[/]")
         else:
             text, _ = read_file(p)
-            messages.append({"role": "user", "content": f"[File {arg}]\n{text[:30000]}"})
+            messages.append({"role": "user", "content": f"[File {arg}]\n{text[:file_cap()]}"})
             messages.append({"role": "assistant", "content": f"Got it, I have {arg}."})
             console.print(f"[dim]added {arg}[/]")
     elif cmd == "/undo":
@@ -1811,14 +2317,19 @@ def read_input():
     return console.input("[bold bright_green]kurt >[/] [dim]/help · /models · /btw <note> · @file[/] ")
 
 
+def _cfg_is_first_scan():
+    return not HW_CACHE_FILE.exists()
+
+
 def main():
-    global TERMINAL_UI
+    global TERMINAL_UI, TIP_SHOWN
     if len(sys.argv) > 1 and sys.argv[1] in ("-v", "--version"):
         print(f"kurt {__version__}")
         return
     if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
         print(__doc__)
-        print("Env: KURT_MODEL, KURT_CTX, KURT_AGENTS, KURT_MAX_AGENTS, OLLAMA_HOST")
+        print("Env: KURT_MODEL, KURT_CTX, KURT_THREADS, KURT_BATCH, KURT_THINK, KURT_TUNE,")
+        print("     KURT_AGENTS, KURT_MAX_AGENTS, OLLAMA_HOST")
         return
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -1828,9 +2339,21 @@ def main():
         os.system("")
 
     print_brand()
+    if _cfg_is_first_scan():
+        with console.status("Detecting your hardware (first run only)..."):
+            get_hardware()
+    else:
+        get_hardware()
     if not ensure_ollama() or not ensure_model():
         sys.exit(1)
-    warm_model()
+    retune()
+    console.print(Text(tune_summary(), style="dim green"))
+    # load the model in the background so you can start typing right away
+    threading.Thread(target=warm_model, kwargs={"quiet": True}, daemon=True).start()
+    if SERVER_EXTERNAL and not TIP_SHOWN:
+        console.print("[dim]Tip: /speed shows Ollama settings that can make it even faster.[/]")
+        TIP_SHOWN = True
+        save_config()
 
     messages = new_messages()
     messages.append(
