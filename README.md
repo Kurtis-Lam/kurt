@@ -6,6 +6,7 @@ code and propose edits, new files and shell commands. **Nothing changes until yo
 
 - 100% local — your code never leaves your computer
 - Works on macOS (Intel and Apple Silicon) and Windows
+- Detects your hardware and tunes itself for speed (see [Speed](#speed))
 - Shows a colored diff before every edit, with `/undo` to revert
 
 ---
@@ -116,6 +117,8 @@ Kurt can only read and write inside the folder you launched it from.
 | Command | What it does |
 |---|---|
 | `/help` | Show help |
+| `/speed` | Show the detected hardware and the speed settings in use (`/speed refresh` re-detects) |
+| `/think [on\|off\|auto]` | Turn thinking on or off. Off is much faster on computers without a GPU |
 | `/files` | List the project's files |
 | `/add <path>` | Load a file into the conversation (or write `@path` inside any message) |
 | `/auto` | Toggle auto-accept for file edits |
@@ -136,6 +139,30 @@ Press **Ctrl+C** while Kurt is typing to stop its answer.
 
 ---
 
+## Speed
+
+Kurt looks at your computer the first time it runs (result cached in `~/.kurt/hardware.json`)
+and picks the fastest safe settings for it. It prints one line at startup, for example
+`⚡ Intel Mac · CPU only, 6 cores, 16 GB RAM → ctx 8192 · 6 threads · thinking off`.
+
+| Your computer | What Kurt does |
+|---|---|
+| **Intel Mac** (no GPU support in Ollama) | CPU inference with one thread per physical core, a shorter context (4096-8192 depending on RAM), thinking off |
+| **Apple Silicon Mac** | Metal GPU, context sized to your unified memory, larger prompt batches on 16 GB or more, thinking on, Flash Attention |
+| **Windows with an NVIDIA GPU** | Context sized to your VRAM so the model never spills onto the CPU, larger batches on 8 GB or more, thinking on, Flash Attention |
+| **Windows without a supported GPU** | Same as an Intel Mac: CPU threads, short context, thinking off |
+
+Other things that make it faster on every computer: the model loads in the background while you
+type, replies are drawn in batches instead of once per token, Kurt stops generating as soon as it
+has asked to read a file or run a command, old messages are trimmed in one go so Ollama can reuse
+its cached prompt, and large files are cut down to fit smaller contexts.
+
+Type `/speed` to see what was detected and applied. If the Ollama app was already running when you
+started Kurt, `/speed` also shows two one-time settings (`OLLAMA_FLASH_ATTENTION`,
+`OLLAMA_NUM_PARALLEL`) to give it; Kurt sets them itself whenever it starts Ollama.
+
+---
+
 ## Configuration (optional)
 
 Set these environment variables before running `kurt`:
@@ -143,7 +170,11 @@ Set these environment variables before running `kurt`:
 | Variable | Default | Meaning |
 |---|---|---|
 | `KURT_MODEL` | the Qwythos model above | Any other Ollama model name |
-| `KURT_CTX` | `16384` | Context window in tokens (bigger = more memory use) |
+| `KURT_CTX` | auto (4096-16384) | Context window in tokens (bigger = more memory use) |
+| `KURT_THREADS` | auto | CPU threads used for inference |
+| `KURT_BATCH` | auto | Prompt batch size |
+| `KURT_THINK` | auto | `on` or `off`: whether the model thinks before answering |
+| `KURT_TUNE` | on | `off` disables all hardware auto-tuning |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Use a remote or custom Ollama server |
 
 Examples:
@@ -173,7 +204,8 @@ Install Python from python.org and tick **Add python.exe to PATH**. If Windows o
 instead, turn off the "python.exe" app-execution alias in *Settings → Apps → Advanced app settings → App execution aliases*.
 
 **It's slow or the Mac gets hot**
-A 9B model is heavy. Close other big apps, and lower `KURT_CTX` (for example `8192`).
+A 9B model is heavy. Close other big apps and run `/speed` to see the settings Kurt picked for your
+computer. You can lower `KURT_CTX` further (for example `4096`) or pick a smaller model with `/models`.
 Intel Macs have no GPU acceleration for Ollama, so expect slower responses than on Apple Silicon.
 
 **Kurt's edits don't apply ("SEARCH not found")**
