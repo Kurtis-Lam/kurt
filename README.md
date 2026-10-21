@@ -119,6 +119,7 @@ Kurt can only read and write inside the folder you launched it from.
 | `/help` | Show help |
 | `/speed` | Show the detected hardware and the speed settings in use (`/speed refresh` re-detects) |
 | `/think [on\|off\|auto]` | Turn thinking on or off. Off is much faster on computers without a GPU |
+| `/fast [model]` | Switch to a small, much faster model (default `qwen2.5-coder:3b`, about 2 GB) |
 | `/files` | List the project's files |
 | `/add <path>` | Load a file into the conversation (or write `@path` inside any message) |
 | `/auto` | Toggle auto-accept for file edits |
