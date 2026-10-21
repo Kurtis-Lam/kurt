@@ -490,6 +490,10 @@ class LineEditor:
         return None
 
 
+def w_safe_width(width):
+    return max(12, min(42, width - 8))
+
+
 class TerminalUI:
     """Fixed bottom area (live status line + rounded input box + hints) under a scrolling output region."""
 
@@ -502,11 +506,12 @@ class TerminalUI:
     REV = "\x1b[7m"
     NOREV = "\x1b[27m"
     RESET = "\x1b[0m"
-    HINTS = "/help · /models · @file"
-    HINTS_BUSY = "Esc stops Kurt"
-    PLACEHOLDER = 'Try "explain this project" or "fix the bug in @file"'
-    PLACEHOLDER_BUSY = "Kurt is working · Esc to stop"
-    HEIGHT = 5  # status row, box top, input row, box bottom, hints row
+    HINTS = "/help · /models · @ files"
+    HINTS_BUSY = "Esc to interrupt"
+    PLACEHOLDER = "Message Kurt…"
+    PLACEHOLDER_BUSY = "Working… press Esc to interrupt"
+    HEIGHT = 5  # context row, input frame, and compact command hints
+    PICKER_VISIBLE = 5
 
     def __init__(self):
         self.width, self.rows = term_size()
@@ -530,17 +535,23 @@ class TerminalUI:
         self._last_frame = None
         self._cursor_col = 5
         self._stale = False
+        self._file_cache = []
+        self._file_cache_at = 0.0
+        self._picker_context = None
+        self._picker_query = None
+        self._picker_matches = []
+        self._picker_selected = 0
+        self._picker_dismissed = None
+        self._picker_rendered_rows = 0
+        self._last_picker_frame = None
 
     # ---- lifecycle
     def start(self):
         if not self.enabled:
             return False
         with TERMINAL_LOCK:
-            # make room at the bottom without clearing what is already on screen
-            sys.stdout.write(
-                "\n" * self.HEIGHT + f"\x1b[{self.HEIGHT}A"
-                + "\x1b7" + f"\x1b[1;{self.scroll_bottom}r" + "\x1b8"
-            )
+            # Anchor the footer without printing placeholder blank lines into the conversation.
+            sys.stdout.write("\x1b7" + f"\x1b[1;{self.scroll_bottom}r" + "\x1b8")
             sys.stdout.flush()
         return True
 
@@ -601,10 +612,72 @@ class TerminalUI:
         self._stale = True
         self._last_frame = None
 
+    def _context_status(self):
+        ed = self.main_editor
+        text = ed.buf
+        files = []
+        for match in re.finditer(r"(?<!\S)@([\w./\\-]+)", text):
+            candidate = safe_path(match.group(1))
+            if candidate and candidate.is_file():
+                rel = str(candidate.relative_to(Path.cwd())).replace("\\", "/")
+                if rel not in files:
+                    files.append(rel)
+
+        picker_ctx = self._picker_context
+        if picker_ctx and self._picker_matches:
+            selected = self._picker_matches[min(self._picker_selected, len(self._picker_matches) - 1)]
+            target = selected[0] + ("/" if selected[1] else "")
+            activity = "selecting file"
+        elif files:
+            target = files[0]
+            action = self._activity_for(text)
+            selected = f"{len(files)} file{'s' if len(files) != 1 else ''} selected"
+            activity = selected if action == "ready" else f"{action}  ·  {selected}"
+        else:
+            target = self._default_context_file() or Path.cwd().name or "project"
+            activity = self._activity_for(text)
+
+        return f"in {short_path(target, max(12, min(42, w_safe_width(self.width))))}  ·  {activity}"
+
+    @staticmethod
+    def _activity_for(text):
+        value = text.lower()
+        if re.search(r"\b(debug|traceback|exception|error|bug)\b", value):
+            return "debugging"
+        if re.search(r"\b(test|pytest|benchmark|spec)\b", value):
+            return "running tests"
+        if re.search(r"\b(fix|edit|modify|change|update|implement|create|write|refactor|remove|delete)\b", value):
+            return "editing"
+        if re.search(r"\b(find|search|locate|where|grep)\b", value):
+            return "searching"
+        if re.search(r"\b(explain|read|review|inspect|understand|describe|summari[sz]e)\b", value):
+            return "reading"
+        if re.search(r"\b(run|execute|install|deploy)\b", value):
+            return "running command"
+        return "ready"
+
+    @staticmethod
+    def _default_context_file():
+        root = Path.cwd()
+        likely = (
+            "main.py", "app.py", "index.py", "manage.py", "src/main.py", "src/app.py",
+            "index.html", "src/index.html", "index.js", "index.ts", "src/index.js",
+            "src/main.js", "src/main.ts", "src/App.jsx", "src/App.tsx", "main.go",
+            "Cargo.toml", "pyproject.toml", "package.json",
+        )
+        for name in likely:
+            if (root / name).is_file():
+                return name
+        py_files = sorted(x.name for x in root.glob("*.py") if x.is_file())
+        if len(py_files) == 1:
+            return py_files[0]
+        return None
+
     def _status_row(self, w):
         m = self.meter
         if m is None:
-            return " " * w
+            label = self._context_status()
+            return f"{self.DIM} {fit_cells(label, w - 1)}{self.RESET}" + " " * max(0, w - 1 - cell_len(label))
         t = m.elapsed
         frame = SPINNER[int(t * 8) % len(SPINNER)]
         parts = [fmt_elapsed(t)]
@@ -617,6 +690,121 @@ class TerminalUI:
             meta = fit_cells(meta, max(0, w - cell_len(head))).rstrip()
         pad = " " * max(0, w - cell_len(head) - cell_len(meta))
         return f"{self.BRIGHT_GREEN}{head}{self.RESET}{self.DIM}{meta}{self.RESET}{pad}"
+
+    def _file_candidates(self, refresh=False):
+        now = time.monotonic()
+        if not refresh and self._file_cache and now - self._file_cache_at < 2.0:
+            return self._file_cache
+        root = Path.cwd()
+        found = []
+        for dirpath, dirs, files in os.walk(root):
+            dirs[:] = sorted(d for d in dirs if d not in IGNORE_DIRS)
+            rel_dir = Path(dirpath).relative_to(root)
+            for name in sorted(dirs):
+                path = (rel_dir / name).as_posix()
+                found.append((path, True))
+            for name in sorted(files):
+                path = (rel_dir / name).as_posix()
+                found.append((path, False))
+        self._file_cache = sorted(found, key=lambda item: (item[0].lower(), not item[1]))
+        self._file_cache_at = now
+        return self._file_cache
+
+    @staticmethod
+    def _mention_context(editor):
+        prefix = editor.buf[:editor.pos]
+        match = re.search(r"(?<!\S)@([^\s]*)$", prefix)
+        if not match:
+            return None
+        return (match.start(), editor.pos, match.group(1))
+
+    def _matches_for_query(self, query):
+        query = query.replace("\\", "/")
+        if query.startswith("./"):
+            query = query[2:]
+        candidates = self._file_candidates()
+        if "/" in query:
+            parent, leaf = query.rsplit("/", 1)
+            parent = parent.strip("/")
+            results = [
+                item for item in candidates
+                if item[0].rpartition("/")[0] == parent
+                and item[0].rsplit("/", 1)[-1].lower().startswith(leaf.lower())
+            ]
+        elif not query:
+            results = candidates
+        else:
+            q = query.lower()
+            results = [item for item in candidates if q in item[0].lower()]
+            results.sort(key=lambda item: (
+                0 if item[0].lower().startswith(q) else
+                1 if item[0].rsplit("/", 1)[-1].lower().startswith(q) else 2,
+                item[0].lower(),
+            ))
+        return results
+
+    def _refresh_picker_state(self):
+        context = self._mention_context(self.editor)
+        if context is None:
+            self._picker_context = None
+            self._picker_query = None
+            self._picker_matches = []
+            self._picker_selected = 0
+            self._picker_dismissed = None
+            return
+        signature = (self.editor.buf, self.editor.pos)
+        if signature == self._picker_dismissed:
+            self._picker_context = None
+            self._picker_matches = []
+            return
+        query = context[2]
+        if query != self._picker_query:
+            self._picker_selected = 0
+        self._picker_context = context
+        self._picker_query = query
+        self._picker_matches = self._matches_for_query(query)
+        if self._picker_matches:
+            self._picker_selected %= len(self._picker_matches)
+        else:
+            self._picker_selected = 0
+
+    def _picker_lines(self, w):
+        self._refresh_picker_state()
+        if not self._picker_context or not self._picker_matches:
+            return []
+        matches = self._picker_matches
+        selected = self._picker_selected
+        visible = min(self.PICKER_VISIBLE, len(matches))
+        start = max(0, min(selected - visible // 2, len(matches) - visible))
+        header = f" Files  ·  {selected + 1}/{len(matches)}  ·  ↑↓ move  Enter select  Esc close"
+        lines = [f"{self.DIM}{fit_cells(header, w)}{self.RESET}"]
+        for i in range(start, start + visible):
+            path, is_dir = matches[i]
+            label = path + ("/" if is_dir else "")
+            prefix = " › " if i == selected else "   "
+            fitted = fit_cells(prefix + label, w)
+            if i == selected:
+                lines.append(f"{self.REV}{self.CYAN}{fitted}{self.RESET}")
+            else:
+                lines.append(f"{self.DIM}{fitted}{self.RESET}")
+        return lines
+
+    def _select_picker_item(self):
+        if not self._picker_context or not self._picker_matches:
+            return False
+        start, end, _ = self._picker_context
+        path, is_dir = self._picker_matches[self._picker_selected]
+        insertion = "@" + path + ("/" if is_dir else "")
+        ed = self.editor
+        ed.buf = ed.buf[:start] + insertion + ed.buf[end:]
+        ed.pos = start + len(insertion)
+        ed.hist_idx = None
+        self._picker_dismissed = None if is_dir else (ed.buf, ed.pos)
+        self._picker_context = None
+        self._picker_matches = []
+        self._picker_query = None
+        self._picker_selected = 0
+        return is_dir
 
     def _hint_row(self, w):
         hint = " " + (self.HINTS_BUSY if self.busy else self.HINTS)
@@ -673,10 +861,24 @@ class TerminalUI:
             return
         with TERMINAL_LOCK:
             self._sync_size()
+            self._refresh_picker_state()
             lines = self._lines()
-            frame = "\x1b[?7l" + "".join(
+            popup_lines = self._picker_lines(max(20, self.width - 1)) if not self.busy else []
+            footer_frame = "\x1b[?7l" + "".join(
                 f"\x1b[{self.footer_top + i};1H{line}\x1b[K" for i, line in enumerate(lines)
-            ) + "\x1b[?7h"
+            )
+            popup_top = max(1, self.footer_top - len(popup_lines))
+            popup_frame = ""
+            if self._picker_rendered_rows > len(popup_lines):
+                old_top = max(1, self.footer_top - self._picker_rendered_rows)
+                for row in range(old_top, min(popup_top, old_top + self._picker_rendered_rows)):
+                    popup_frame += f"\x1b[{row};1H\x1b[K"
+            popup_frame += "".join(
+                f"\x1b[{popup_top + i};1H{line}\x1b[K" for i, line in enumerate(popup_lines)
+            )
+            self._picker_rendered_rows = len(popup_lines)
+            self._last_picker_frame = popup_frame
+            frame = footer_frame + popup_frame + "\x1b[?7h"
             if preserve_cursor:
                 if frame == self._last_frame:
                     return
@@ -767,6 +969,28 @@ class TerminalUI:
                         continue
                     if ev[0] == "eof":
                         raise EOFError
+                    if ev[0] == "key" and self._picker_context and self._picker_matches:
+                        if ev[1] == "up":
+                            self._picker_selected = (self._picker_selected - 1) % len(self._picker_matches)
+                            self.draw_footer(preserve_cursor=False, active=True)
+                            continue
+                        if ev[1] == "down":
+                            self._picker_selected = (self._picker_selected + 1) % len(self._picker_matches)
+                            self.draw_footer(preserve_cursor=False, active=True)
+                            continue
+                        if ev[1] == "enter":
+                            is_dir = self._select_picker_item()
+                            self.draw_footer(preserve_cursor=False, active=True)
+                            if is_dir:
+                                continue
+                            continue
+                        if ev[1] == "escape":
+                            self._picker_dismissed = (ed.buf, ed.pos)
+                            self._picker_context = None
+                            self._picker_matches = []
+                            self._picker_selected = 0
+                            self.draw_footer(preserve_cursor=False, active=True)
+                            continue
                     act = ed.feed(ev)
                     if act == "submit":
                         line, self.last_display = ed.value(), ed.display()
@@ -815,28 +1039,15 @@ MASCOT_STYLE = "rgb(61,214,110)"
 
 
 def print_brand():
-    mascot = Text("\n".join(MASCOT), style=MASCOT_STYLE, no_wrap=True)
-    path_limit = max(16, console.width - len(MASCOT[0]) - 14)
-    details = Group(
-        Text("Kurt", style="bold " + MASCOT_STYLE),
-        Text("Your local coding companion", style="bold"),
-        Text(short_model(MODEL), style="green"),
-        Text(short_path(Path.cwd(), path_limit), style="dim", no_wrap=True),
+    heading = Text.assemble(
+        ("Kurt", "bold " + MASCOT_STYLE),
+        (f"  v{__version__}", "dim"),
+        ("  ·  ", "dim"),
+        (short_model(MODEL, 34), "green"),
     )
-    grid = Table.grid(padding=(0, 3))
-    grid.add_column(no_wrap=True)
-    grid.add_column()
-    grid.add_row(mascot, details)
-    console.print(
-        Panel(
-            grid,
-            title=f"Kurt v{__version__}",
-            title_align="left",
-            border_style=MASCOT_STYLE,
-            padding=(1, 2),
-            expand=False,
-        )
-    )
+    location = Text(short_path(Path.cwd(), max(24, console.width - 4)), style="dim", no_wrap=True)
+    console.print(heading)
+    console.print(location)
 
 
 def print_summary(meter):
@@ -3049,8 +3260,6 @@ def main():
         sys.exit(1)
     retune()
     console.print(Text(tune_summary(), style="dim green"))
-    if get_hardware()["accel"] == "cpu" and TUNE.get("model_gb", 0) > 3.5:
-        console.print("[dim]Slow on this computer? Type /fast for a small model that is several times faster.[/]")
     # load the model in the background so you can start typing right away
     threading.Thread(target=warm_model, kwargs={"quiet": True}, daemon=True).start()
     if SERVER_EXTERNAL and not TIP_SHOWN:
@@ -3067,16 +3276,8 @@ def main():
     )
 
     ui = TerminalUI()
-    if ui.enabled:
-        console.print(
-            "[dim]Ask in plain English. Use @file to attach a file. "
-            "Esc stops Kurt while it works.[/]"
-        )
-    else:
-        console.print(
-            "[dim]Ask for changes in plain English. /help for commands, /models to switch models "
-            "or turn agents on. Use @file to attach a file.[/]\n"
-        )
+    if not ui.enabled:
+        console.print("[dim]/help for commands · /models to switch models · @file to attach a file[/]")
     if ui.start():
         TERMINAL_UI = ui
         ui.draw_footer(preserve_cursor=True)
