@@ -61,7 +61,7 @@ if _env_agents is not None:
 else:
     AGENTS = bool(_cfg.get("agents", False))
 WORKERS = [w for w in _cfg.get("workers", []) if isinstance(w, str)]
-MODEL_SORT = _cfg.get("model_sort") if _cfg.get("model_sort") in ("name", "size", "params", "quant", "family", "date") else "date"
+MODEL_SORT = _cfg.get("model_sort") if _cfg.get("model_sort") in ("name", "size", "params") else "size"
 MODEL_SORT_DESC = bool(_cfg.get("model_sort_desc", True))
 MAX_AGENTS = max(1, int(os.environ.get("KURT_MAX_AGENTS", "4")))
 
@@ -2020,21 +2020,60 @@ def add_model_flow():
         set_model(name)
 
 
+MENU_SORT_ORDER = ("name", "size", "params")
+
+
+def read_menu_key():
+    """Read one keypress. Returns a character, or 'up'/'down'/'left'/'right'/'esc'/'enter'/'backspace'/'ctrl-c'. None if not a terminal."""
+    try:
+        if not sys.stdin.isatty():
+            return None
+    except Exception:
+        return None
+    if os.name == "nt":
+        import msvcrt
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):
+            return {"H": "up", "P": "down", "K": "left", "M": "right"}.get(msvcrt.getwch(), "")
+        return {"\r": "enter", "\n": "enter", "\x1b": "esc", "\x08": "backspace", "\x03": "ctrl-c"}.get(ch, ch)
+    import select
+    import termios
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    new = termios.tcgetattr(fd)
+    new[3] &= ~(termios.ECHO | termios.ICANON)
+    new[6][termios.VMIN] = 1
+    new[6][termios.VTIME] = 0
+    try:
+        termios.tcsetattr(fd, termios.TCSADRAIN, new)
+        ch = os.read(fd, 1).decode("utf-8", "ignore")
+        if ch == "\x1b":
+            if not select.select([fd], [], [], 0.05)[0]:
+                return "esc"
+            seq = os.read(fd, 2).decode("utf-8", "ignore")
+            return {"[A": "up", "[B": "down", "[C": "right", "[D": "left"}.get(seq, "")
+        return {"\r": "enter", "\n": "enter", "\x7f": "backspace", "\x08": "backspace", "\x03": "ctrl-c"}.get(ch, ch)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 def models_menu():
     global AGENTS, WORKERS, MODEL_SORT, MODEL_SORT_DESC
+    buf = ""
+    note = ""
+    skip_clear = False
     while True:
         models = sort_models(installed_models(), MODEL_SORT, MODEL_SORT_DESC)
         arrow = " ▼" if MODEL_SORT_DESC else " ▲"
+
         def head(key, label):
             return label + (arrow if MODEL_SORT == key else "")
-        table = Table(box=None, header_style="bold", padding=(0, 1))
+
+        table = Table(box=None, header_style="bold", padding=(0, 2))
         table.add_column("#", justify="right", no_wrap=True)
         table.add_column(head("name", "Model"), overflow="fold")
         table.add_column(head("params", "Params"), justify="right", no_wrap=True)
         table.add_column(head("size", "Size"), justify="right", no_wrap=True)
-        table.add_column(head("quant", "Quant"), no_wrap=True)
-        table.add_column(head("family", "Family"), no_wrap=True)
-        table.add_column(head("date", "Modified"), no_wrap=True)
         table.add_column("Role", no_wrap=True)
         for i, m in enumerate(models, 1):
             role = []
@@ -2043,83 +2082,112 @@ def models_menu():
             if any(same_model(m["name"], w) for w in WORKERS):
                 role.append("agent worker")
             table.add_row(
-                str(i), Text(m["name"]), m["params"] or "-", fmt_size(m["size"]) or "-",
-                m["quant"] or "-", m["family"] or "-", m["modified"][:10] or "-", ", ".join(role),
+                str(i), Text(m["name"]), m["params"] or "-", fmt_size(m["size"]) or "-", ", ".join(role),
             )
-        extras = Text.from_markup(
-            "\n[green]+[/]  Add a new model (download from Hugging Face)\n"
-            f"[bold]g[/]  Agents: [bold]{'ON' if AGENTS else 'OFF'}[/] (toggle)"
-        )
-        console.print(Panel(Group(table, extras), title="Models", border_style="magenta", expand=False))
-        console.print(
-            "[dim]number = use as main model · + = add a model · g = toggle agents · "
-            "w <number> = toggle a model as agent worker · Enter = close\n"
-            "s <size|params|name|quant|family|date> \\[asc|desc] = sort "
-            "(same key again flips the direction)[/]"
-        )
-        choice = Prompt.ask("›", console=console, default="", show_default=False).strip().lower()
-        if not choice:
+
+        keys = Table.grid(padding=(0, 2))
+        keys.add_column(style="bold", no_wrap=True)
+        keys.add_column()
+        keys.add_row("number + Enter", "use as main model")
+        keys.add_row("+", "add a model")
+        keys.add_row("g", f"toggle agents (now {'ON' if AGENTS else 'OFF'})")
+        keys.add_row("w + number + Enter", "toggle a model as agent worker")
+        keys.add_row("s  or  ← →", f"sort by Model / Size / Params (now {SORT_KEYS[MODEL_SORT][0]})")
+        keys.add_row("r  or  ↑ ↓", "reverse the sort order")
+        keys.add_row("Enter / q", "close")
+
+        interactive = True
+        try:
+            interactive = sys.stdin.isatty()
+        except Exception:
+            interactive = False
+        if interactive and not skip_clear:
+            console.clear()
+        skip_clear = False
+        console.print(Panel(table, title="Models", border_style="magenta", expand=False))
+        console.print()
+        console.print(keys)
+        if note:
+            console.print(f"\n[dim]{note}[/]")
+            note = ""
+        if not interactive:
             return
-        ms = re.fullmatch(r"(?:s|sort)(?:\s+(\S+))?(?:\s+(\S+))?", choice)
-        if ms:
-            words = [w for w in (ms.group(1), ms.group(2)) if w]
-            key, direction = None, None
-            for w in words:
-                if w in ("asc", "ascending", "up", "low", "small"):
-                    direction = False
-                elif w in ("desc", "descending", "down", "high", "big", "large"):
-                    direction = True
-                elif w in SORT_ALIASES:
-                    key = SORT_ALIASES[w]
+        console.print(f"\n[bold]›[/] {escape(buf)}", end="")
+        key = read_menu_key()
+        console.print()
+        if key is None or key == "ctrl-c":
+            return
+        if key == "enter":
+            if not buf:
+                return
+            cmd, buf = buf, ""
+            mw = re.fullmatch(r"w\s*(\d+)", cmd)
+            if mw:
+                idx = int(mw.group(1))
+                if 1 <= idx <= len(models):
+                    name = models[idx - 1]["name"]
+                    if any(same_model(w, name) for w in WORKERS):
+                        WORKERS = [w for w in WORKERS if not same_model(w, name)]
+                        note = f"removed worker {escape(name)}"
+                    else:
+                        WORKERS.append(name)
+                        note = f"added worker {escape(name)}"
+                    save_config()
                 else:
-                    key = False
-            if not words or key is False or (key is None and direction is None):
-                console.print("usage: s <size|params|name|quant|family|date> [asc|desc]", markup=False)
+                    note = "[red]no such model number[/]"
+            elif cmd.isdigit():
+                idx = int(cmd)
+                if 1 <= idx <= len(models):
+                    set_model(models[idx - 1]["name"])
+                else:
+                    note = "[red]no such model number[/]"
+            else:
+                note = "[red]not an option[/]"
+            continue
+        if key == "backspace":
+            buf = buf[:-1]
+            continue
+        if key == "esc":
+            if buf:
+                buf = ""
                 continue
-            if key is None:
-                key = MODEL_SORT
-            if direction is None:
-                direction = (not MODEL_SORT_DESC) if key == MODEL_SORT else SORT_KEYS[key][1]
-            MODEL_SORT, MODEL_SORT_DESC = key, direction
+            return
+        if len(key) != 1:
+            k = key
+            if buf:
+                continue
+        else:
+            k = key.lower()
+        if k.isdigit():
+            buf += k
+        elif k == "w" and not buf:
+            buf = "w"
+        elif buf:
+            continue
+        elif k == "q":
+            return
+        elif k in ("s", "right"):
+            i = MENU_SORT_ORDER.index(MODEL_SORT) if MODEL_SORT in MENU_SORT_ORDER else 0
+            MODEL_SORT = MENU_SORT_ORDER[(i + 1) % len(MENU_SORT_ORDER)]
+            MODEL_SORT_DESC = SORT_KEYS[MODEL_SORT][1]
             save_config()
-            continue
-        if choice in ("+", "a", "add"):
+        elif k == "left":
+            i = MENU_SORT_ORDER.index(MODEL_SORT) if MODEL_SORT in MENU_SORT_ORDER else 0
+            MODEL_SORT = MENU_SORT_ORDER[(i - 1) % len(MENU_SORT_ORDER)]
+            MODEL_SORT_DESC = SORT_KEYS[MODEL_SORT][1]
+            save_config()
+        elif k in ("r", "up", "down"):
+            MODEL_SORT_DESC = not MODEL_SORT_DESC
+            save_config()
+        elif k in ("+", "a"):
             add_model_flow()
-            continue
-        if choice in ("g", "agents"):
+            skip_clear = True
+        elif k == "g":
             AGENTS = not AGENTS
             save_config()
-            console.print(f"agents: [bold]{'ON' if AGENTS else 'OFF'}[/]")
+            note = f"agents: {'ON' if AGENTS else 'OFF'}"
             if AGENTS and not WORKERS:
-                console.print(
-                    "[dim]No worker models chosen, so helpers will use the main model. "
-                    "Add more with: w <number>[/]"
-                )
-            continue
-        mw = re.fullmatch(r"w\s*(\d+)", choice)
-        if mw:
-            idx = int(mw.group(1))
-            if 1 <= idx <= len(models):
-                name = models[idx - 1]["name"]
-                hit = [w for w in WORKERS if same_model(w, name)]
-                if hit:
-                    WORKERS = [w for w in WORKERS if not same_model(w, name)]
-                    console.print(f"[dim]removed worker {escape(name)}[/]")
-                else:
-                    WORKERS.append(name)
-                    console.print(f"[dim]added worker {escape(name)}[/]")
-                save_config()
-            else:
-                console.print("[red]no such model number[/]")
-            continue
-        if choice.isdigit():
-            idx = int(choice)
-            if 1 <= idx <= len(models):
-                set_model(models[idx - 1]["name"])
-            else:
-                console.print("[red]no such model number[/]")
-            continue
-        console.print("[red]not an option[/]")
+                note += " · no worker models chosen, so helpers will use the main model (press w then a number)"
 
 
 # ------------------------------------------------------- busy-time input ---
