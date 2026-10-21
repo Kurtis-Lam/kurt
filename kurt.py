@@ -4,6 +4,7 @@
 Run `kurt` in any project folder. Kurt can read your files and propose
 edits / new files / shell commands. Nothing is changed without your OK.
 """
+import contextlib
 import difflib
 import json
 import os
@@ -18,6 +19,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from rich.cells import cell_len
 from rich.console import Console, Group
 from rich.markup import escape
 from rich.panel import Panel
@@ -78,107 +80,599 @@ UNDO = []  # stack of (path, old_text_or_None, crlf)
 PENDING_BTW = []  # notes added with /btw, delivered to the model at the next step
 
 
-class TerminalUI:
-    """ANSI terminal layout with a fixed bottom input frame and scrolling output region."""
 
-    GREEN = "\x1b[38;5;82m"
-    BRIGHT_GREEN = "\x1b[1;38;5;82m"
-    DIM = "\x1b[2;37m"
-    RESET = "\x1b[0m"
-    HINTS = "/help  ·  /models  ·  /btw <note>  ·  @file"
+
+SPINNER = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"]
+
+
+def term_size():
+    try:
+        s = os.get_terminal_size(sys.__stdout__.fileno())
+        return s.columns, s.lines
+    except Exception:
+        s = shutil.get_terminal_size(fallback=(100, 30))
+        return s.columns, s.lines
+
+
+def fit_cells(text, width):
+    """Cut or pad text to exactly `width` terminal cells."""
+    total = cell_len(text)
+    if total <= width:
+        return text + " " * (width - total)
+    out, used = "", 0
+    for ch in text:
+        cw = cell_len(ch)
+        if used + cw > width - 1:
+            break
+        out += ch
+        used += cw
+    return out + "…" + " " * max(0, width - used - 1)
+
+
+def fmt_tokens(n):
+    return str(n) if n < 1000 else f"{n / 1000:.1f}k"
+
+
+def fmt_elapsed(seconds):
+    s = int(seconds)
+    return f"{s}s" if s < 60 else f"{s // 60}m {s % 60:02d}s"
+
+
+class Meter:
+    """Live clock and token counter for one model call."""
+
+    def __init__(self, label="Thinking"):
+        self.start = time.time()
+        self.end = None
+        self.tokens = 0
+        self.label = label
+
+    def stop(self):
+        if self.end is None:
+            self.end = time.time()
+
+    @property
+    def elapsed(self):
+        return (self.end or time.time()) - self.start
+
+
+def _window(text, pos, avail):
+    """Pick the slice of `text` that fits in `avail` cells and keeps the cursor visible.
+
+    Returns (visible_text, cursor_index_inside_visible_text)."""
+    if cell_len(text) <= avail:
+        return text, pos
+    start = 0
+    while start < pos and cell_len(text[start:pos]) > avail - 1:
+        start += 1
+    lead = "…" if start > 0 else ""
+    room = avail - cell_len(lead)
+    out, used = "", 0
+    for ch in text[start:]:
+        cw = cell_len(ch)
+        if used + cw > room:
+            break
+        out += ch
+        used += cw
+    return lead + out, len(lead) + (pos - start)
+
+
+class KeyReader:
+    """Turns raw terminal input into events: ('char', 'a'), ('key', 'left'), ('paste', text)."""
+
+    CSI = {
+        "A": "up", "B": "down", "C": "right", "D": "left", "H": "home", "F": "end",
+        "1~": "home", "4~": "end", "7~": "home", "8~": "end", "3~": "delete",
+        "1;5C": "word-right", "1;5D": "word-left", "1;3C": "word-right", "1;3D": "word-left",
+    }
+    CTRL = {
+        "\r": "enter", "\n": "enter", "\x7f": "backspace", "\x08": "backspace",
+        "\x03": "ctrl-c", "\x04": "ctrl-d", "\x01": "home", "\x05": "end",
+        "\x02": "left", "\x06": "right", "\x0b": "kill-end", "\x15": "kill-start",
+        "\x17": "kill-word", "\x10": "up", "\x0e": "down", "\x1b": "escape",
+    }
 
     def __init__(self):
-        size = shutil.get_terminal_size(fallback=(100, 30))
-        self.width = size.columns
-        self.rows = size.lines
+        self.reset()
+
+    def reset(self):
+        self._pushback = b""
+        self._decoder = None
+        if os.name != "nt":
+            import codecs
+            self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+
+    def read(self, timeout=None):
+        """Next event, or None when `timeout` seconds pass with no input."""
+        if os.name == "nt":
+            return self._read_windows(timeout)
+        return self._read_posix(timeout)
+
+    def _classify(self, ch):
+        if ch in self.CTRL:
+            return ("key", self.CTRL[ch])
+        if ch == "\t":
+            return ("char", "    ")
+        if ch < " ":
+            return ("key", "noop")
+        return ("char", ch)
+
+    # -- POSIX
+    def _next_byte(self, timeout):
+        if self._pushback:
+            b, self._pushback = self._pushback[:1], self._pushback[1:]
+            return b
+        import select
+        fd = sys.stdin.fileno()
+        if timeout is not None:
+            ready, _, _ = select.select([fd], [], [], timeout)
+            if not ready:
+                return None
+        return os.read(fd, 1)
+
+    def _read_posix(self, timeout):
+        b = self._next_byte(timeout)
+        if b is None:
+            return None
+        if b == b"":
+            return ("eof", "")
+        if b == b"\x1b":
+            return self._read_escape()
+        ch = self._decoder.decode(b)
+        if not ch:
+            return ("key", "noop")
+        return self._classify(ch)
+
+    def _read_escape(self):
+        b = self._next_byte(0.03)
+        if b is None:
+            return ("key", "escape")
+        if b in (b"[", b"O"):
+            seq = ""
+            while True:
+                c = self._next_byte(0.05)
+                if not c:
+                    break
+                seq += c.decode("latin-1")
+                if "@" <= seq[-1] <= "~":
+                    break
+            if seq == "200~":
+                return ("paste", self._read_paste())
+            return ("key", self.CSI.get(seq, "noop"))
+        if b in (b"\x7f", b"\x08"):
+            return ("key", "kill-word")
+        if b == b"b":
+            return ("key", "word-left")
+        if b == b"f":
+            return ("key", "word-right")
+        return ("key", "noop")
+
+    def _read_paste(self):
+        import select
+        fd = sys.stdin.fileno()
+        end = b"\x1b[201~"
+        data, self._pushback = self._pushback, b""
+        while end not in data:
+            ready, _, _ = select.select([fd], [], [], 1.0)
+            if not ready:
+                break
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            data += chunk
+        head, _, tail = data.partition(end)
+        self._pushback = tail
+        return head.decode("utf-8", "replace")
+
+    # -- Windows
+    def _read_windows(self, timeout):
+        import msvcrt
+        if timeout is not None:
+            deadline = time.time() + timeout
+            while not msvcrt.kbhit():
+                if time.time() >= deadline:
+                    return None
+                time.sleep(0.01)
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):
+            code = msvcrt.getwch()
+            names = {"H": "up", "P": "down", "K": "left", "M": "right",
+                     "G": "home", "O": "end", "S": "delete"}
+            return ("key", names.get(code, "noop"))
+        gathered = ch
+        while True:  # characters arriving together are a paste
+            deadline = time.time() + 0.02
+            while not msvcrt.kbhit() and time.time() < deadline:
+                time.sleep(0.002)
+            if not msvcrt.kbhit():
+                break
+            nxt = msvcrt.getwch()
+            if nxt in ("\x00", "\xe0"):
+                msvcrt.getwch()
+                continue
+            gathered += nxt
+        if len(gathered) > 1:
+            return ("paste", gathered)
+        return self._classify(ch)
+
+
+class LineEditor:
+    """Single-line editor with a cursor, history and compact paste placeholders."""
+
+    TOKEN_RE = re.compile(r"\[Pasted text #(\d+) \+\d+ lines?\]")
+
+    def __init__(self):
+        self.history = []
+        self.hist_idx = None
+        self.draft = None
+        self.reset()
+
+    def reset(self):
+        self.buf = ""
+        self.pos = 0
+        self.pastes = {}
+        self.paste_count = 0
+        self.hist_idx = None
+
+    # -- content
+    def display(self):
+        return self.buf.replace("\n", " ")
+
+    def value(self):
+        return self.TOKEN_RE.sub(
+            lambda m: self.pastes.get(int(m.group(1)), m.group(0)), self.buf
+        )
+
+    def remember(self):
+        if not self.buf.strip():
+            return
+        snap = (self.buf, dict(self.pastes), self.paste_count)
+        if not self.history or self.history[-1] != snap:
+            self.history.append(snap)
+
+    def insert(self, text):
+        self.buf = self.buf[: self.pos] + text + self.buf[self.pos:]
+        self.pos += len(text)
+
+    def paste(self, text):
+        text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", "    ").rstrip("\n")
+        if "\n" in text or len(text) > 300:
+            self.paste_count += 1
+            lines = text.count("\n") + 1
+            self.pastes[self.paste_count] = text
+            self.insert(
+                f"[Pasted text #{self.paste_count} +{lines} line{'s' if lines != 1 else ''}]"
+            )
+        else:
+            self.insert("".join(c for c in text if c >= " " and c != "\x7f"))
+
+    # -- helpers
+    def _token_before(self, pos):
+        for m in self.TOKEN_RE.finditer(self.buf):
+            if m.end() == pos:
+                return m
+        return None
+
+    def _token_after(self, pos):
+        for m in self.TOKEN_RE.finditer(self.buf):
+            if m.start() == pos:
+                return m
+        return None
+
+    def _word_left(self, pos):
+        while pos > 0 and self.buf[pos - 1].isspace():
+            pos -= 1
+        m = self._token_before(pos)
+        if m:
+            return m.start()
+        while pos > 0 and not self.buf[pos - 1].isspace():
+            pos -= 1
+        return pos
+
+    def _word_right(self, pos):
+        n = len(self.buf)
+        while pos < n and self.buf[pos].isspace():
+            pos += 1
+        m = self._token_after(pos)
+        if m:
+            return m.end()
+        while pos < n and not self.buf[pos].isspace():
+            pos += 1
+        return pos
+
+    def _load(self, snap):
+        self.buf, pastes, self.paste_count = snap
+        self.pastes = dict(pastes)
+        self.pos = len(self.buf)
+
+    # -- events
+    def feed(self, ev):
+        """Apply one key event. Returns 'submit', 'interrupt', 'eof', 'escape' or None."""
+        kind, val = ev
+        if kind == "char":
+            self.hist_idx = None
+            self.insert(val)
+        elif kind == "paste":
+            self.hist_idx = None
+            self.paste(val)
+        elif kind == "key":
+            return self._key(val)
+        return None
+
+    def _key(self, k):
+        if k == "enter":
+            return "submit"
+        if k == "ctrl-c":
+            return "interrupt"
+        if k == "escape":
+            return "escape"
+        if k == "ctrl-d":
+            if not self.buf:
+                return "eof"
+            k = "delete"
+        buf, pos = self.buf, self.pos
+        if k == "backspace" and pos > 0:
+            m = self._token_before(pos)
+            n = pos - m.start() if m else 1
+            self.buf, self.pos = buf[: pos - n] + buf[pos:], pos - n
+            self.hist_idx = None
+        elif k == "delete" and pos < len(buf):
+            m = self._token_after(pos)
+            n = m.end() - pos if m else 1
+            self.buf = buf[:pos] + buf[pos + n:]
+            self.hist_idx = None
+        elif k == "left" and pos > 0:
+            m = self._token_before(pos)
+            self.pos = m.start() if m else pos - 1
+        elif k == "right" and pos < len(buf):
+            m = self._token_after(pos)
+            self.pos = m.end() if m else pos + 1
+        elif k == "home":
+            self.pos = 0
+        elif k == "end":
+            self.pos = len(buf)
+        elif k == "word-left":
+            self.pos = self._word_left(pos)
+        elif k == "word-right":
+            self.pos = self._word_right(pos)
+        elif k == "kill-word":
+            start = self._word_left(pos)
+            self.buf, self.pos = buf[:start] + buf[pos:], start
+            self.hist_idx = None
+        elif k == "kill-start":
+            self.buf, self.pos = buf[pos:], 0
+            self.hist_idx = None
+        elif k == "kill-end":
+            self.buf = buf[:pos]
+            self.hist_idx = None
+        elif k == "up" and self.history:
+            if self.hist_idx is None:
+                self.draft = (self.buf, dict(self.pastes), self.paste_count)
+                self.hist_idx = len(self.history) - 1
+            elif self.hist_idx > 0:
+                self.hist_idx -= 1
+            self._load(self.history[self.hist_idx])
+        elif k == "down" and self.hist_idx is not None:
+            if self.hist_idx < len(self.history) - 1:
+                self.hist_idx += 1
+                self._load(self.history[self.hist_idx])
+            else:
+                self.hist_idx = None
+                self._load(self.draft or ("", {}, 0))
+        return None
+
+
+class TerminalUI:
+    """Fixed bottom area (live status line + rounded input box + hints) under a scrolling output region."""
+
+    GREEN = "\x1b[38;5;78m"
+    BRIGHT_GREEN = "\x1b[1;38;5;83m"
+    BORDER = "\x1b[38;5;244m"
+    BORDER_BUSY = "\x1b[38;5;239m"
+    DIM = "\x1b[38;5;245m"
+    CYAN = "\x1b[38;5;80m"
+    REV = "\x1b[7m"
+    NOREV = "\x1b[27m"
+    RESET = "\x1b[0m"
+    HINTS = "/help · /models · /btw <note> · @file"
+    HINTS_BUSY = "/btw <note> adds context without interrupting"
+    PLACEHOLDER = 'Try "explain this project" or "fix the bug in @file"'
+    PLACEHOLDER_BUSY = "Type /btw <note> to add context while Kurt works"
+    HEIGHT = 5  # status row, box top, input row, box bottom, hints row
+
+    def __init__(self):
+        self.width, self.rows = term_size()
         self.enabled = (
             sys.stdin.isatty()
             and sys.stdout.isatty()
             and self.width >= 56
             and self.rows >= 14
         )
-        self.scroll_bottom = max(1, self.rows - 4)
+        self.scroll_bottom = max(1, self.rows - self.HEIGHT)
         self.footer_top = self.scroll_bottom + 1
-        self.buffer = ""
+        self.keys = KeyReader()
+        self.main_editor = LineEditor()
+        self.editor = self.main_editor
         self.busy = False
         self.notice = ""
+        self.meter = None
+        self.last_display = ""
+        self._ticker = None
+        self._tick_stop = None
+        self._last_frame = None
+        self._cursor_col = 5
+        self._stale = False
 
+    # ---- lifecycle
     def start(self):
         if not self.enabled:
             return False
         with TERMINAL_LOCK:
-            sys.stdout.write("\x1b[r\x1b[2J\x1b[H")
-            sys.stdout.write(f"\x1b[1;{self.scroll_bottom}r")
+            # make room at the bottom without clearing what is already on screen
+            sys.stdout.write(
+                "\n" * self.HEIGHT + f"\x1b[{self.HEIGHT}A"
+                + "\x1b7" + f"\x1b[1;{self.scroll_bottom}r" + "\x1b8"
+            )
             sys.stdout.flush()
         return True
 
     def stop(self):
         if not self.enabled:
             return
+        self.end_work()
         with TERMINAL_LOCK:
-            sys.stdout.write("\x1b[r")
-            sys.stdout.write(f"\x1b[{self.footer_top};1H\x1b[J")
-            sys.stdout.write(f"\x1b[{self.rows};1H\r\n\x1b[?25h")
+            sys.stdout.write("\x1b[?7h\x1b[?2004l\x1b[r")
+            if self._stale:
+                sys.stdout.write(f"\x1b[{self.scroll_bottom};1H\r\n")
+            sys.stdout.write("\r\x1b[J\x1b[?25h")
             sys.stdout.flush()
         self.enabled = False
 
-    def _fit(self, value, width):
-        value = str(value)
-        if len(value) > width:
-            value = value[: max(0, width - 1)] + "…"
-        return value + (" " * max(0, width - len(value)))
+    @contextlib.contextmanager
+    def raw(self):
+        """Raw keyboard input (output processing stays on) with bracketed paste enabled."""
+        fd = old = None
+        if os.name != "nt":
+            import termios
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            new = termios.tcgetattr(fd)
+            new[0] &= ~(termios.BRKINT | termios.ICRNL | termios.INPCK
+                        | termios.ISTRIP | termios.IXON)
+            new[3] &= ~(termios.ECHO | termios.ICANON | termios.IEXTEN | termios.ISIG)
+            new[6][termios.VMIN] = 1
+            new[6][termios.VTIME] = 0
+            termios.tcsetattr(fd, termios.TCSADRAIN, new)
+            self.keys.reset()
+            with TERMINAL_LOCK:
+                sys.stdout.write("\x1b[?2004h")
+                sys.stdout.flush()
+        try:
+            yield
+        finally:
+            if old is not None:
+                import termios
+                with TERMINAL_LOCK:
+                    sys.stdout.write("\x1b[?2004l")
+                    sys.stdout.flush()
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    # ---- layout
+    def _sync_size(self):
+        cols, rows = term_size()
+        if (cols, rows) == (self.width, self.rows):
+            return
+        old_top = self.footer_top
+        self.width, self.rows = cols, rows
+        self.scroll_bottom = max(1, rows - self.HEIGHT)
+        self.footer_top = self.scroll_bottom + 1
+        out = "\x1b7" + f"\x1b[1;{self.scroll_bottom}r"
+        for r in range(max(1, min(old_top, self.footer_top)), rows + 1):
+            out += f"\x1b[{r};1H\x1b[2K"
+        sys.stdout.write(out + "\x1b8")
+        self._stale = True
+        self._last_frame = None
+
+    def _status_row(self, w):
+        m = self.meter
+        if m is None:
+            return " " * w
+        t = m.elapsed
+        frame = SPINNER[int(t * 8) % len(SPINNER)]
+        parts = [fmt_elapsed(t)]
+        if m.tokens:
+            parts.append(f"↓ {fmt_tokens(m.tokens)} tokens")
+        parts.append("esc to interrupt")
+        head = f" {frame} {m.label}…"
+        meta = " (" + " · ".join(parts) + ")"
+        if cell_len(head + meta) > w:
+            meta = fit_cells(meta, max(0, w - cell_len(head))).rstrip()
+        pad = " " * max(0, w - cell_len(head) - cell_len(meta))
+        return f"{self.BRIGHT_GREEN}{head}{self.RESET}{self.DIM}{meta}{self.RESET}{pad}"
+
+    def _hint_row(self, w):
+        hint = " " + (self.HINTS_BUSY if self.busy else self.HINTS)
+        if self.notice and cell_len(hint) + 3 + cell_len(self.notice) <= w:
+            used = cell_len(hint) + 3 + cell_len(self.notice)
+            return (f"{self.DIM}{hint}   {self.RESET}{self.GREEN}{self.notice}{self.RESET}"
+                    + " " * (w - used))
+        return f"{self.DIM}{fit_cells(hint, w)}{self.RESET}"
+
+    def _input_row(self, inner, border):
+        R = self.RESET
+        avail = inner - 4  # " > " prefix plus one spare cell for the cursor
+        ed = self.editor
+        if not ed.buf:
+            ph = self.PLACEHOLDER_BUSY if self.busy else self.PLACEHOLDER
+            if self.busy:
+                body = f"{self.REV} {self.NOREV}{self.DIM}{fit_cells(ph, avail - 1)}{R}"
+            else:
+                body = f"{self.DIM}{fit_cells(ph, avail)}{R}"
+            used = avail
+            self._cursor_col = 5
+        else:
+            visible, ci = _window(ed.display(), ed.pos, avail)
+            before, after = visible[:ci], visible[ci:]
+
+            def style(s):
+                return ed.TOKEN_RE.sub(lambda m: f"{self.CYAN}{m.group(0)}{R}", s)
+
+            self._cursor_col = 5 + cell_len(before)
+            if self.busy:
+                cur, rest = (after[:1] or " "), after[1:]
+                body = f"{style(before)}{self.REV}{cur}{self.NOREV}{style(rest)}"
+                used = cell_len(before) + cell_len(cur) + cell_len(rest)
+            else:
+                body = style(before + after)
+                used = cell_len(visible)
+        pad = " " * max(0, inner - 3 - used)
+        return f"{border}│{R} {self.BRIGHT_GREEN}>{R} {body}{R}{pad}{border}│{R}"
 
     def _lines(self):
-        inner = self.width - 2
-        top_label = "─ Kurt · ask anything "
-        top = "╭" + self._fit(top_label + "─" * inner, inner) + "╮"
-        prefix = " ❯ "
-        caret = "▌" if self.busy else ""
-        available = max(1, inner - len(prefix) - len(caret))
-        shown = self.buffer
-        if len(shown) > available:
-            shown = "…" + shown[-(available - 1):] if available > 1 else shown[-1:]
-        input_content = self._fit(prefix + shown + caret, inner)
-        input_line = "│" + input_content + "│"
-        hint = self.HINTS
-        if self.notice:
-            hint += "   ·   " + self.notice
-        hint_line = "│" + self._fit(" " + hint, inner) + "│"
-        bottom = "╰" + ("─" * inner) + "╯"
-        return [top, input_line, hint_line, bottom]
+        w = max(20, self.width - 1)  # keep the last column free
+        inner = w - 2
+        border = self.BORDER_BUSY if self.busy else self.BORDER
+        return [
+            self._status_row(w),
+            f"{border}╭{'─' * inner}╮{self.RESET}",
+            self._input_row(inner, border),
+            f"{border}╰{'─' * inner}╯{self.RESET}",
+            self._hint_row(w),
+        ]
 
     def draw_footer(self, preserve_cursor=True, active=False):
         if not self.enabled:
             return
         with TERMINAL_LOCK:
+            self._sync_size()
+            lines = self._lines()
+            frame = "\x1b[?7l" + "".join(
+                f"\x1b[{self.footer_top + i};1H{line}\x1b[K" for i, line in enumerate(lines)
+            ) + "\x1b[?7h"
             if preserve_cursor:
-                sys.stdout.write("\x1b[s")
-            for offset, line in enumerate(self._lines()):
-                sys.stdout.write(f"\x1b[{self.footer_top + offset};1H\x1b[2K")
-                color = self.BRIGHT_GREEN if offset in (0, 3) else self.GREEN
-                sys.stdout.write(color + line + self.RESET)
-            if preserve_cursor:
-                sys.stdout.write("\x1b[u")
-            elif active:
-                prefix_len = 3
-                max_col = max(4, self.width - 1)
-                col = min(max_col, 2 + prefix_len + len(self.buffer))
-                sys.stdout.write(f"\x1b[{self.footer_top + 1};{col}H\x1b[?25h")
+                if frame == self._last_frame:
+                    return
+                self._last_frame = frame
+                out = "\x1b7" + frame + "\x1b8"
+            else:
+                self._last_frame = None
+                col = max(1, min(self._cursor_col, self.width - 1))
+                out = frame + f"\x1b[{self.footer_top + 2};{col}H" + ("\x1b[?25h" if active else "")
+            sys.stdout.write(out)
             sys.stdout.flush()
 
+    def redraw(self):
+        self.draw_footer(preserve_cursor=True)
+
+    # ---- state
     def set_busy(self, busy):
         if not self.enabled:
             return
         self.busy = busy
-        self.buffer = ""
+        self.editor = LineEditor() if busy else self.main_editor
         with TERMINAL_LOCK:
             sys.stdout.write("\x1b[?25l" if busy else "\x1b[?25h")
-        self.draw_footer(preserve_cursor=True)
-
-    def update_busy_input(self, buffer):
-        if not self.enabled:
-            return
-        self.buffer = buffer
+            sys.stdout.flush()
         self.draw_footer(preserve_cursor=True)
 
     def set_notice(self, notice):
@@ -187,112 +681,144 @@ class TerminalUI:
         self.notice = notice
         self.draw_footer(preserve_cursor=True)
 
-    def reset_decoder(self):
-        if os.name != "nt":
-            import codecs
-            self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
-
-    def decode_bytes(self, raw):
-        if os.name == "nt":
-            return raw.decode("utf-8", "replace")
-        if not hasattr(self, "_decoder"):
-            self.reset_decoder()
-        return self._decoder.decode(raw)
-
-    def _read_char(self):
-        if os.name == "nt":
-            import msvcrt
-            ch = msvcrt.getwch()
-            if ch in ("\x00", "\xe0"):
-                msvcrt.getwch()
-                return ""
-            return ch
-        return self.decode_bytes(os.read(sys.stdin.fileno(), 1))
-
-    def _swallow_escape(self):
-        if os.name == "nt":
-            import msvcrt
-            if msvcrt.kbhit():
-                ch = msvcrt.getwch()
-                if ch in ("[", "O") and msvcrt.kbhit():
-                    msvcrt.getwch()
+    def begin_work(self, meter):
+        if not self.enabled:
             return
-        import select
-        fd = sys.stdin.fileno()
-        for _ in range(2):
-            ready, _, _ = select.select([fd], [], [], 0.01)
-            if not ready:
-                break
-            os.read(fd, 1)
+        self.meter = meter
+        self._tick_stop = threading.Event()
+        self._ticker = threading.Thread(target=self._tick, args=(self._tick_stop,), daemon=True)
+        self.draw_footer(preserve_cursor=True)
+        self._ticker.start()
+
+    def _tick(self, stop):
+        while not stop.wait(0.12):
+            try:
+                self.draw_footer(preserve_cursor=True)
+            except Exception:
+                pass
+
+    def end_work(self):
+        if self._tick_stop is not None:
+            self._tick_stop.set()
+            if self._ticker is not None:
+                self._ticker.join(timeout=1)
+        self._tick_stop = self._ticker = None
+        if self.meter is not None:
+            self.meter.stop()
+            self.meter = None
+            self.draw_footer(preserve_cursor=True)
+
+    # ---- input
+    def _restore_content_cursor(self):
+        with TERMINAL_LOCK:
+            if self._stale:
+                sys.stdout.write(f"\x1b[{self.scroll_bottom};1H\r\n")
+                self._stale = False
+            else:
+                sys.stdout.write("\x1b8")
+            sys.stdout.flush()
 
     def read_line(self):
-        self.buffer = ""
+        ed = self.main_editor
+        ed.reset()
+        self.editor = ed
         self.notice = ""
-        old_settings = None
-        fd = None
+        self.last_display = ""
+        with TERMINAL_LOCK:
+            sys.stdout.write("\x1b7")  # remember where output continues
+            sys.stdout.flush()
+        self._stale = False
         try:
-            if os.name != "nt":
-                import termios
-                import tty
-                fd = sys.stdin.fileno()
-                old_settings = termios.tcgetattr(fd)
-                self.reset_decoder()
-                tty.setraw(fd)
-            self.draw_footer(preserve_cursor=False, active=True)
-            while True:
-                ch = self._read_char()
-                if not ch:
-                    continue
-                if ch in ("\r", "\n"):
-                    line = self.buffer
-                    self.buffer = ""
-                    self.draw_footer(preserve_cursor=False)
-                    with TERMINAL_LOCK:
-                        sys.stdout.write(f"\x1b[{self.scroll_bottom};1H\r\n")
-                        sys.stdout.flush()
-                    return line
-                if ch == "\x03":
-                    raise KeyboardInterrupt
-                if ch == "\x04":
-                    if not self.buffer:
-                        raise EOFError
-                    continue
-                if ch == "\x1b":
-                    self._swallow_escape()
-                    continue
-                if ch in ("\x7f", "\x08"):
-                    self.buffer = self.buffer[:-1]
-                elif ch >= " " and ch != "\x7f":
-                    self.buffer += ch
+            with self.raw():
                 self.draw_footer(preserve_cursor=False, active=True)
+                while True:
+                    ev = self.keys.read(timeout=0.4)
+                    if ev is None:
+                        if self._size_changed():
+                            self.draw_footer(preserve_cursor=False, active=True)
+                        continue
+                    if ev[0] == "eof":
+                        raise EOFError
+                    act = ed.feed(ev)
+                    if act == "submit":
+                        line, self.last_display = ed.value(), ed.display()
+                        ed.remember()
+                        ed.reset()
+                        self.draw_footer(preserve_cursor=False)
+                        return line
+                    if act == "interrupt":
+                        if ed.buf:
+                            ed.reset()
+                            self.draw_footer(preserve_cursor=False, active=True)
+                            continue
+                        raise KeyboardInterrupt
+                    if act == "eof":
+                        raise EOFError
+                    self.draw_footer(preserve_cursor=False, active=True)
         finally:
-            if old_settings is not None:
-                import termios
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            self._restore_content_cursor()
+
+    def _size_changed(self):
+        return term_size() != (self.width, self.rows)
+
+
+def short_path(path, limit):
+    p = str(path)
+    home = str(Path.home())
+    if p == home or p.startswith(home + os.sep):
+        p = "~" + p[len(home):]
+    if len(p) <= limit:
+        return p
+    tail = p[-(limit - 1):]
+    cut = tail.find(os.sep)
+    if 0 <= cut < len(tail) - 1:
+        tail = tail[cut:]
+    return "…" + tail
+
+
+# A block-letter "K" mascot in the style of Claude Code's, drawn in green.
+MASCOT = [
+    "███  ▗▄█▛▀",
+    "▌█▐▄█▛▀   ",
+    "███▀█▙▄   ",
+    "███  ▝▀█▙▄",
+]
+MASCOT_STYLE = "rgb(61,214,110)"
 
 
 def print_brand():
-    mascot = Text(
-        "       ╭────────╮\n"
-        "   o───┤  ◕  ◕  ├───o\n"
-        "       │   K    │\n"
-        "       │  ╰──╯  │\n"
-        "       ╰──┬──┬──╯\n"
-        "          ╱  ╲",
-        style="bold bright_green",
-        justify="center",
-    )
+    mascot = Text("\n".join(MASCOT), style=MASCOT_STYLE, no_wrap=True)
+    path_limit = max(16, console.width - len(MASCOT[0]) - 14)
     details = Group(
-        Text("Kurt", style="bold bright_green"),
+        Text("Kurt", style="bold " + MASCOT_STYLE),
         Text("Your local coding companion", style="bold"),
-        Text(f"{short_model(MODEL)}", style="green"),
-        Text(str(Path.cwd()), style="dim"),
+        Text(short_model(MODEL), style="green"),
+        Text(short_path(Path.cwd(), path_limit), style="dim", no_wrap=True),
     )
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column()
+    grid = Table.grid(padding=(0, 3))
+    grid.add_column(no_wrap=True)
     grid.add_column()
     grid.add_row(mascot, details)
-    console.print(Panel(grid, border_style="bright_green", padding=(1, 2), expand=False))
+    console.print(
+        Panel(
+            grid,
+            title=f"Kurt v{__version__}",
+            title_align="left",
+            border_style=MASCOT_STYLE,
+            padding=(1, 2),
+            expand=False,
+        )
+    )
+
+
+def print_summary(meter):
+    parts = [f"Done in {fmt_elapsed(meter.elapsed)}"]
+    if meter.tokens:
+        parts.append(f"↓ {meter.tokens:,} tokens")
+        if meter.elapsed >= 1:
+            parts.append(f"{meter.tokens / meter.elapsed:.0f} tok/s")
+    console.print(Text("✻ " + " · ".join(parts), style="dim green"))
+
 
 SYSTEM = """You are Kurt, an expert coding assistant running inside the user's terminal.
 Project directory: {cwd}
@@ -486,6 +1012,10 @@ def stream_chat(messages):
             if m.get("content"):
                 yield "content", m["content"]
             if d.get("done"):
+                yield "stats", {
+                    "eval_count": d.get("eval_count"),
+                    "prompt_eval_count": d.get("prompt_eval_count"),
+                }
                 break
 
 
@@ -684,6 +1214,7 @@ def drain_btw(messages):
     console.print(f"[dim]📝 passing {len(notes)} btw note(s) to Kurt[/]")
 
 
+
 class BtwListener:
     """While Kurt works, keep keyboard input in the bottom box and accept `/btw <note>`."""
 
@@ -697,7 +1228,10 @@ class BtwListener:
         except Exception:
             interactive = False
         if interactive:
-            target = self._run_windows if os.name == "nt" else self._run_posix
+            if TERMINAL_UI and TERMINAL_UI.enabled:
+                target = self._run_ui
+            else:
+                target = self._run_windows if os.name == "nt" else self._run_posix
             self._thread = threading.Thread(target=target, daemon=True)
             self._thread.start()
         return self
@@ -705,7 +1239,7 @@ class BtwListener:
     def __exit__(self, *exc):
         self._stop.set()
         if self._thread:
-            self._thread.join(timeout=1)
+            self._thread.join(timeout=2)
         return False
 
     def _handle(self, line):
@@ -724,58 +1258,34 @@ class BtwListener:
         else:
             console.print("[dim]Kurt is busy - only '/btw <note>' works right now (Ctrl+C stops it).[/]")
 
-    def _busy_char(self, ch, buf):
+    def _run_ui(self):
         import _thread
-        if ch in ("\r", "\n"):
-            self._handle(buf)
-            buf = ""
-        elif ch in ("\x03",):
-            _thread.interrupt_main()
-        elif ch in ("\x7f", "\x08"):
-            buf = buf[:-1]
-        elif ch == "\x1b":
-            return buf
-        elif ch >= " " and ch != "\x7f":
-            buf += ch
-        if TERMINAL_UI and TERMINAL_UI.enabled:
-            TERMINAL_UI.update_busy_input(buf)
-        return buf
+        ui = TERMINAL_UI
+        ed = ui.editor
+        try:
+            with ui.raw():
+                while not self._stop.is_set():
+                    ev = ui.keys.read(timeout=0.1)
+                    if ev is None:
+                        continue
+                    if ev[0] == "eof":
+                        return
+                    act = ed.feed(ev)
+                    if act == "submit":
+                        self._handle(ed.value())
+                        ed.remember()
+                        ed.reset()
+                    elif act in ("interrupt", "escape"):
+                        _thread.interrupt_main()
+                    ui.redraw()
+        except Exception:
+            return
 
     def _run_posix(self):
         try:
             fd = sys.stdin.fileno()
         except Exception:
             return
-        if TERMINAL_UI and TERMINAL_UI.enabled:
-            import select
-            import termios
-            import tty
-            buf = ""
-            old_settings = None
-            try:
-                old_settings = termios.tcgetattr(fd)
-                TERMINAL_UI.reset_decoder()
-                tty.setraw(fd)
-                while not self._stop.is_set():
-                    ready, _, _ = select.select([fd], [], [], 0.1)
-                    if not ready:
-                        continue
-                    raw = os.read(fd, 1)
-                    if not raw:
-                        return
-                    ch = TERMINAL_UI.decode_bytes(raw)
-                    if ch == "\x1b":
-                        TERMINAL_UI._swallow_escape()
-                        continue
-                    if ch:
-                        buf = self._busy_char(ch, buf)
-            except Exception:
-                return
-            finally:
-                if old_settings is not None:
-                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            return
-
         import select
         buf = b""
         while not self._stop.is_set():
@@ -804,9 +1314,7 @@ class BtwListener:
             if ch in ("\x00", "\xe0"):
                 msvcrt.getwch()
                 continue
-            if TERMINAL_UI and TERMINAL_UI.enabled:
-                buf = self._busy_char(ch, buf)
-            elif ch in ("\r", "\n"):
+            if ch in ("\r", "\n"):
                 self._handle(buf)
                 buf = ""
             elif ch == "\x08":
@@ -1158,6 +1666,8 @@ def attach_mentions(text):
     return text + "".join(extra)
 
 
+
+
 def run_turn(messages):
     for _ in range(MAX_ROUNDS):
         drain_btw(messages)
@@ -1165,19 +1675,30 @@ def run_turn(messages):
         full, interrupted = "", False
         thinking_started = False
         answer_started = False
+        meter = Meter()
+        ui = TERMINAL_UI if TERMINAL_UI and TERMINAL_UI.enabled else None
         console.print()
-        console.print(Text("✦ K is thinking…", style="bold bright_green"))
-        if TERMINAL_UI and TERMINAL_UI.enabled:
-            TERMINAL_UI.set_busy(True)
+        if ui:
+            ui.set_busy(True)
+            ui.begin_work(meter)
+        else:
+            console.print(Text("✦ K is thinking…", style="bold bright_green"))
+        failed = False
         try:
             with BtwListener():
                 for kind, chunk in stream_chat(messages):
+                    if kind == "stats":
+                        meter.tokens = chunk.get("eval_count") or meter.tokens
+                        continue
+                    meter.tokens += 1  # live estimate: one streamed chunk is about one token
                     if kind == "thinking":
+                        meter.label = "Thinking"
                         if not thinking_started:
                             console.print(Text("Thinking", style="bold green"))
                             thinking_started = True
                         console.print(chunk, style="dim green", end="", markup=False, soft_wrap=True)
                     else:
+                        meter.label = "Writing"
                         if not answer_started:
                             if thinking_started:
                                 console.print()
@@ -1189,14 +1710,19 @@ def run_turn(messages):
             interrupted = True
             console.print("\n[yellow]⏹ interrupted[/]")
         except Exception as e:
+            failed = True
             console.print(f"\n[red]Error talking to Ollama:[/] {escape(str(e))}")
+        finally:
+            meter.stop()
+            if ui:
+                ui.end_work()
+                ui.set_busy(False)
+        if failed:
             if messages and messages[-1]["role"] == "user":
                 messages.pop()
             return
-        finally:
-            if TERMINAL_UI and TERMINAL_UI.enabled:
-                TERMINAL_UI.set_busy(False)
         console.print()
+        print_summary(meter)
         messages.append({"role": "assistant", "content": full})
         if interrupted:
             if PENDING_BTW:
@@ -1276,12 +1802,13 @@ def handle_command(line, messages):
     return None
 
 
+
 # --------------------------------------------------------------- Input box ---
 def read_input():
-    """Read from Kurt's fixed bottom input frame when the terminal supports it."""
+    """Read from Kurt's fixed bottom input box when the terminal supports it."""
     if TERMINAL_UI and TERMINAL_UI.enabled:
         return TERMINAL_UI.read_line()
-    return console.input("[bold bright_green]kurt ❯[/] [dim]/help · /models · /btw <note> · @file[/] ")
+    return console.input("[bold bright_green]kurt >[/] [dim]/help · /models · /btw <note> · @file[/] ")
 
 
 def main():
@@ -1313,21 +1840,21 @@ def main():
         {"role": "assistant", "content": "Understood. I can READ, EDIT, WRITE and RUN as needed. What should we work on?"}
     )
 
-    candidate_ui = TerminalUI()
-    if candidate_ui.start():
-        TERMINAL_UI = candidate_ui
-        print_brand()
+    ui = TerminalUI()
+    if ui.enabled:
         console.print(
             "[dim]Ask in plain English. Use @file to attach a file. While Kurt works, "
-            "type /btw <note> in the bottom box to add context without interrupting.[/]"
+            "type /btw <note> in the bottom box to add context without interrupting "
+            "(Esc stops it).[/]"
         )
-        TERMINAL_UI.draw_footer(preserve_cursor=True)
     else:
-        TERMINAL_UI = None
         console.print(
             "[dim]Ask for changes in plain English. /help for commands, /models to switch models "
             "or turn agents on, /btw to add info while Kurt works. Use @file to attach a file.[/]\n"
         )
+    if ui.start():
+        TERMINAL_UI = ui
+        ui.draw_footer(preserve_cursor=True)
 
     try:
         while True:
@@ -1339,7 +1866,10 @@ def main():
             if not line:
                 continue
             if TERMINAL_UI and TERMINAL_UI.enabled:
-                console.print(Text("❯ " + line, style="bold bright_green"), markup=False)
+                console.print()
+                console.print(
+                    Text.assemble(("> ", "bold bright_green"), (TERMINAL_UI.last_display.strip(), "bold"))
+                )
             if line.startswith("/"):
                 if handle_command(line, messages) == "exit":
                     break
