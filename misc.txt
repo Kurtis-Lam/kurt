@@ -1,1 +1,3 @@
-zip -r kurt.zip . -x "*.git*" "build/*" "kurt.egg-info/*" "kurt.zip"
+zip -r kurt.zip . -x "*.git*" "build/*" "kurt.egg-info/*" "kurt.zip" ".DS_Store"
+
+curl -s http://localhost:11434/api/tags | jq -r '.models | sort_by(.size) | reverse | .[] | "\((.size / 1000000000 * 10 | round) / 10) GB  \(.name)"'
