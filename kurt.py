@@ -2061,7 +2061,7 @@ def models_menu():
     global AGENTS, WORKERS, MODEL_SORT, MODEL_SORT_DESC
     buf = ""
     note = ""
-    skip_clear = False
+    prev_lines = 0
     while True:
         models = sort_models(installed_models(), MODEL_SORT, MODEL_SORT_DESC)
         arrow = " ▼" if MODEL_SORT_DESC else " ▲"
@@ -2092,27 +2092,29 @@ def models_menu():
         keys.add_row("+", "add a model")
         keys.add_row("g", f"toggle agents (now {'ON' if AGENTS else 'OFF'})")
         keys.add_row("w + number + Enter", "toggle a model as agent worker")
-        keys.add_row("s  or  ← →", f"sort by Model / Size / Params (now {SORT_KEYS[MODEL_SORT][0]})")
+        keys.add_row("s  or  ← →", f"sort by Model / Size / Params (now {({"name": "Model", "size": "Size", "params": "Params"})[MODEL_SORT]})")
         keys.add_row("r  or  ↑ ↓", "reverse the sort order")
         keys.add_row("Enter / q", "close")
 
-        interactive = True
         try:
             interactive = sys.stdin.isatty()
         except Exception:
             interactive = False
-        if interactive and not skip_clear:
-            console.clear()
-        skip_clear = False
-        console.print(Panel(table, title="Models", border_style="magenta", expand=False))
-        console.print()
-        console.print(keys)
-        if note:
-            console.print(f"\n[dim]{note}[/]")
-            note = ""
+        with console.capture() as cap:
+            console.print(Panel(table, title="Models", border_style="magenta", expand=False))
+            console.print(keys)
+            if note:
+                console.print(f"[dim]{note}[/]")
+        frame = cap.get()
+        note = ""
+        if interactive and prev_lines:
+            sys.stdout.write(f"\x1b[{prev_lines}A\r\x1b[J")
+        console.file.write(frame)
+        console.file.flush()
         if not interactive:
             return
-        console.print(f"\n[bold]›[/] {escape(buf)}", end="")
+        console.print(f"[bold]›[/] {escape(buf)}", end="")
+        prev_lines = frame.count("\n") + 1
         key = read_menu_key()
         console.print()
         if key is None or key == "ctrl-c":
@@ -2138,6 +2140,7 @@ def models_menu():
             elif cmd.isdigit():
                 idx = int(cmd)
                 if 1 <= idx <= len(models):
+                    prev_lines = 0
                     set_model(models[idx - 1]["name"])
                 else:
                     note = "[red]no such model number[/]"
@@ -2180,8 +2183,8 @@ def models_menu():
             MODEL_SORT_DESC = not MODEL_SORT_DESC
             save_config()
         elif k in ("+", "a"):
+            prev_lines = 0
             add_model_flow()
-            skip_clear = True
         elif k == "g":
             AGENTS = not AGENTS
             save_config()
