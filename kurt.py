@@ -855,8 +855,10 @@ def print_summary(meter):
 SYSTEM = """You are Kurt, an expert coding assistant running inside the user's terminal. You were made by Kurtis, a Hong Kong grade 11 student. 
 Project directory: {cwd}
 
-You can act on the project by emitting ACTION BLOCKS. The user is asked to confirm
-every change, and results are sent back to you. Formats (exactly):
+You can act on the project by emitting ACTION BLOCKS. Reading files, creating new files and
+view-only commands (ls, cat, grep, git status ...) run automatically. The user is asked to confirm
+only edits to existing files and commands that could change or delete things. Results are sent
+back to you. Formats (exactly):
 
 Read a file:
 @@@ READ relative/path.py
@@ -877,7 +879,7 @@ Create a new file or fully overwrite one:
 full file contents
 @@@ END
 
-Run a shell command (user confirms first):
+Run a shell command (use it to look around, e.g. ls or grep; risky commands need the user's OK):
 @@@ RUN python -m pytest -q
 @@@ END
 
@@ -2489,31 +2491,108 @@ def file_cap():
     return max(6000, min(30000, int(CTX * 2)))
 
 
-def show_diff(old, new, name):
+def diff_panel(old, new, name, title):
     import difflib
-    from rich.syntax import Syntax
 
-    diff = "".join(
-        difflib.unified_diff(
-            old.splitlines(True), new.splitlines(True), f"a/{name}", f"b/{name}", n=3
-        )
+    a, b = old.splitlines(), new.splitlines()
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    w = len(str(max(len(a), len(b), 1)))
+    t = Text()
+    added = removed = rows = 0
+    limit = 60
+    first = True
+    for group in sm.get_grouped_opcodes(2):
+        if not first:
+            t.append(" " * (w + 2) + "⋯\n", style="dim")
+        first = False
+        for tag, i1, i2, j1, j2 in group:
+            if tag == "equal":
+                for k in range(i1, i2):
+                    if rows < limit:
+                        t.append(f" {j1 + k - i1 + 1:>{w}}   {a[k]}\n", style="dim")
+                    rows += 1
+                continue
+            for k in range(i1, i2):
+                removed += 1
+                if rows < limit:
+                    t.append(f" {k + 1:>{w}} - {a[k]}\n", style="red")
+                rows += 1
+            for k in range(j1, j2):
+                added += 1
+                if rows < limit:
+                    t.append(f" {k + 1:>{w}} + {b[k]}\n", style="green")
+                rows += 1
+    if rows > limit:
+        t.append(f"\n … {rows - limit} more lines", style="dim")
+    if not t.plain.strip():
+        t = Text("(no changes)", style="dim")
+    t.rstrip()
+    return Panel(
+        t, title=f"[bold]{title}[/] {escape(name)}", border_style="yellow",
+        subtitle=f"[green]+{added}[/] [red]-{removed}[/]", subtitle_align="right",
     )
-    lines = diff.splitlines()
-    if len(lines) > 120:
-        diff = "\n".join(lines[:120]) + f"\n... ({len(lines) - 120} more lines)"
-    console.print(Syntax(diff or "(no changes)", "diff", theme="ansi_dark"))
 
 
-def show_new_file(name, text):
+def new_file_panel(name, text):
     from rich.syntax import Syntax
 
     lines = text.splitlines()
-    shown = "\n".join(lines[:80]) + (f"\n... ({len(lines) - 80} more lines)" if len(lines) > 80 else "")
+    shown = "\n".join(lines[:40]) + (f"\n… {len(lines) - 40} more lines" if len(lines) > 40 else "")
     try:
         lexer = Syntax.guess_lexer(name, shown)
     except Exception:
         lexer = "text"
-    console.print(Syntax(shown, lexer, theme="ansi_dark", line_numbers=True))
+    return Panel(
+        Syntax(shown, lexer, theme="ansi_dark", line_numbers=True, word_wrap=True),
+        title=f"[bold]New file[/] {escape(name)}", border_style="green",
+        subtitle=f"{len(lines)} lines", subtitle_align="right",
+    )
+
+
+SAFE_VIEW_COMMANDS = {
+    "ls", "dir", "cat", "type", "head", "tail", "pwd", "wc", "grep", "egrep", "fgrep", "rg",
+    "find", "tree", "stat", "file", "du", "df", "which", "where", "whoami", "date", "echo",
+    "printf", "sort", "uniq", "cut", "tr", "diff", "cmp", "realpath", "basename", "dirname",
+    "findstr", "mkdir", "touch",
+}
+SAFE_GIT = {"status", "log", "diff", "show", "ls-files", "blame", "rev-parse", "describe"}
+VERSION_FLAGS = {"--version", "-v", "-V", "version"}
+
+
+def is_safe_command(cmd):
+    """True for commands that only look at things (or create empty files/folders)."""
+    import shlex
+
+    if re.search(r"[;&`><\n]|\$\(|\|\|", cmd):
+        return False
+    for seg in cmd.split("|"):
+        try:
+            toks = shlex.split(seg, posix=(os.name != "nt"))
+        except ValueError:
+            return False
+        if not toks:
+            return False
+        name = Path(toks[0]).name.lower()
+        if name.endswith(".exe"):
+            name = name[:-4]
+        args = toks[1:]
+        if name in SAFE_VIEW_COMMANDS:
+            if name == "find" and any(x in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf") for x in args):
+                return False
+            if name == "sort" and any(x == "-o" or x.startswith("--output") for x in args):
+                return False
+            if name == "tail" and any(x in ("-f", "-F", "--follow") for x in args):
+                return False
+            continue
+        if name == "git":
+            sub = [x for x in args if not x.startswith("-")]
+            if sub and sub[0] in SAFE_GIT:
+                continue
+            return False
+        if name in ("python", "python3", "py", "node", "npm", "pip", "pip3") and len(args) == 1 and args[0] in VERSION_FLAGS:
+            continue
+        return False
+    return True
 
 
 def confirm(question):
@@ -2557,9 +2636,8 @@ def do_edit(arg, body):
         if n > 1:
             return f"EDIT {arg}: ERROR SEARCH #{i} matches {n} places. Include more context to make it unique."
         new = new.replace(s, r, 1)
-    console.print(Panel(f"[bold]Edit[/] {arg}", border_style="yellow", expand=False))
-    show_diff(old, new, arg)
-    if not confirm("Apply this edit? (y=yes, n=no, a=yes to all)"):
+    console.print(diff_panel(old, new, arg, "Edit"))
+    if not confirm("Apply this change? (y=yes, n=no, a=yes to all)"):
         return f"EDIT {arg}: REJECTED by user."
     UNDO.append((p, old, crlf))
     write_file(p, new, crlf)
@@ -2574,24 +2652,31 @@ def do_write(arg, body):
     exists = p.is_file()
     old, crlf = read_file(p) if exists else ("", False)
     new = body if body.endswith("\n") else body + "\n"
-    verb = "Overwrite" if exists else "Create"
-    console.print(Panel(f"[bold]{verb}[/] {arg}", border_style="yellow", expand=False))
     if exists:
-        show_diff(old, new, arg)
+        console.print(diff_panel(old, new, arg, "Overwrite"))
+        if not confirm("Overwrite this file? (y=yes, n=no, a=yes to all)"):
+            return f"WRITE {arg}: REJECTED by user."
     else:
-        show_new_file(arg, new)
-    if not confirm(f"{verb} this file? (y=yes, n=no, a=yes to all)"):
-        return f"WRITE {arg}: REJECTED by user."
+        console.print(new_file_panel(arg, new))
     UNDO.append((p, old if exists else None, crlf))
     write_file(p, new, crlf)
-    console.print(f"[green]✔ wrote {arg}[/]")
+    console.print(f"[green]✔ {'overwrote' if exists else 'created'} {escape(arg)}[/]")
     return f"WRITE {arg}: applied."
 
 
 def do_run(cmd):
+    from rich.syntax import Syntax
+
     cmd = cmd.strip()
-    console.print(Panel(f"[bold]Run command[/]\n{cmd}", border_style="red", expand=False))
-    if Prompt.ask("Run it?", choices=["y", "n"], default="n", console=console) != "y":
+    safe = is_safe_command(cmd)
+    console.print(Panel(
+        Syntax(cmd, "bash", theme="ansi_dark", word_wrap=True, background_color="default"),
+        title="[bold]Run command[/]",
+        subtitle="view-only · running automatically" if safe else "can change things · needs your OK",
+        subtitle_align="right",
+        border_style="green" if safe else "red",
+    ))
+    if not safe and Prompt.ask("Run it?", choices=["y", "n"], default="n", console=console) != "y":
         return f"RUN {cmd}: REJECTED by user."
     try:
         r = subprocess.run(
@@ -2602,7 +2687,14 @@ def do_run(cmd):
         code = r.returncode
     except subprocess.TimeoutExpired:
         out, code = "timed out after 180s", -1
-    console.print(out[:3000] or "[dim](no output)[/]", markup=False)
+    shown = out[:3000]
+    if len(out) > 3000:
+        shown += "\n… (output truncated)"
+    console.print(Panel(
+        Text(shown or "(no output)", style="" if shown else "dim"),
+        title="[bold]Output[/]", subtitle=f"exit {code}", subtitle_align="right",
+        border_style="dim" if code == 0 else "red",
+    ))
     if len(out) > 4000:
         out = out[:4000] + "\n... [truncated]"
     return f"RUN {cmd}: exit code {code}\n{out}"
@@ -2687,6 +2779,45 @@ class StreamPrinter:
         self.last = time.monotonic()
 
 
+class ActionFilter:
+    """Hides @@@ action blocks from the streamed text; they are shown as tidy boxes afterwards."""
+
+    OPEN = "@@@ "
+    CLOSE = "@@@ END"
+
+    def __init__(self):
+        self.pending = ""
+        self.in_block = False
+
+    def feed(self, chunk):
+        self.pending += chunk
+        out = []
+        while True:
+            if self.in_block:
+                i = self.pending.find(self.CLOSE)
+                if i < 0:
+                    self.pending = self.pending[-(len(self.CLOSE) - 1):]
+                    break
+                self.pending = self.pending[i + len(self.CLOSE):].lstrip("\n")
+                self.in_block = False
+                continue
+            i = self.pending.find(self.OPEN)
+            if i >= 0:
+                out.append(self.pending[:i].rstrip(" "))
+                self.pending = self.pending[i:]
+                self.in_block = True
+                continue
+            keep = 0
+            for n in range(min(len(self.OPEN) - 1, len(self.pending)), 0, -1):
+                if self.OPEN.startswith(self.pending[-n:]):
+                    keep = n
+                    break
+            out.append(self.pending[: len(self.pending) - keep])
+            self.pending = self.pending[len(self.pending) - keep:]
+            break
+        return "".join(out)
+
+
 def early_stop_point(full, state):
     """After the model asks to READ a file or RUN a command it must wait for the result.
     If it keeps writing instead (guessing what the file contains), stop generating and return
@@ -2724,6 +2855,7 @@ def run_turn(messages):
         failed = False
         printer = StreamPrinter()
         stop_state = {}
+        afilter = ActionFilter()
         try:
             with BusyListener(), contextlib.closing(stream_chat(messages)) as stream:
                 for kind, chunk in stream:
@@ -2744,7 +2876,7 @@ def run_turn(messages):
                             thinking_started = True
                         printer.write(chunk, "dim green")
                     else:
-                        meter.label = "Writing"
+                        meter.label = "Preparing action" if afilter.in_block else "Writing"
                         if not answer_started:
                             printer.flush()
                             if thinking_started:
@@ -2752,7 +2884,9 @@ def run_turn(messages):
                             console.print(Text("K › ", style="bold bright_green"), end="")
                             answer_started = True
                         full += chunk
-                        printer.write(chunk)
+                        visible = afilter.feed(chunk)
+                        if visible:
+                            printer.write(visible)
                         cut = early_stop_point(full, stop_state)
                         if cut is not None:
                             full = full[:cut]  # closing the stream makes Ollama stop generating
@@ -2797,7 +2931,7 @@ HELP = """[bold]Commands[/]
   /fast [model]   switch to a small, much faster model (default qwen2.5-coder:3b)
   /files          list project files
   /add <path>     put a file's contents into the conversation (or use @path in a message)
-  /auto           toggle auto-accept for file edits (commands always ask)
+  /auto           toggle auto-accept for edits (new files and view-only commands never ask)
   /undo           revert the last applied change
   /clear          forget the conversation
   /exit           quit  (Ctrl+C while Kurt is typing stops generation)"""
