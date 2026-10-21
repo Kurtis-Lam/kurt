@@ -102,7 +102,6 @@ console = KurtConsole(highlight=False)
 TERMINAL_UI = None
 AUTO = False  # "accept all edits" for this session
 UNDO = []  # stack of (path, old_text_or_None, crlf)
-PENDING_BTW = []  # notes added with /btw, delivered to the model at the next step
 
 
 
@@ -501,10 +500,10 @@ class TerminalUI:
     REV = "\x1b[7m"
     NOREV = "\x1b[27m"
     RESET = "\x1b[0m"
-    HINTS = "/help · /models · /btw <note> · @file"
-    HINTS_BUSY = "/btw <note> adds context without interrupting"
+    HINTS = "/help · /models · @file"
+    HINTS_BUSY = "Esc stops Kurt"
     PLACEHOLDER = 'Try "explain this project" or "fix the bug in @file"'
-    PLACEHOLDER_BUSY = "Type /btw <note> to add context while Kurt works"
+    PLACEHOLDER_BUSY = "Kurt is working · Esc to stop"
     HEIGHT = 5  # status row, box top, input row, box bottom, hints row
 
     def __init__(self):
@@ -887,8 +886,6 @@ Rules:
 - Briefly explain what you are doing, then emit the blocks. Do not wrap blocks in code fences.
 - Do not claim a change is applied until the tool result says so.
 - If a tool result reports an error, fix your block and try again.
-- A "[btw ...]" section in a user message is extra information the user added while you
-  were working. Take it into account without starting over unless it changes the task.
 - A "[Helper agent reports ...]" section holds findings from helper agents that ran in
   parallel. Use them, double-check against the files, and make any changes yourself.
 """
@@ -1339,13 +1336,73 @@ def model_installed():
     return any(same_model(m["name"], MODEL) for m in installed_models())
 
 
+LAST_PULL_ERROR = ""
+
+
+def _progress(text):
+    with TERMINAL_LOCK:
+        sys.stdout.write("\r\x1b[2K" + text)
+        sys.stdout.flush()
+
+
+def _progress_end():
+    with TERMINAL_LOCK:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+
+def fmt_bytes(n):
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1000 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1000
+
+
 def pull_model(name):
-    exe = shutil.which("ollama") or "ollama"
+    """Pull a model through Ollama's HTTP API (clean progress + readable errors)."""
+    global LAST_PULL_ERROR
+    LAST_PULL_ERROR = ""
+    req = urllib.request.Request(
+        HOST + "/api/pull",
+        data=json.dumps({"model": name, "stream": True}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    shown = False
     try:
-        return subprocess.run([exe, "pull", name]).returncode == 0
-    except OSError as e:
-        console.print(f"[red]Could not run ollama:[/] {escape(str(e))}")
+        with urllib.request.urlopen(req, timeout=600) as r:
+            for raw in r:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except ValueError:
+                    continue
+                if ev.get("error"):
+                    LAST_PULL_ERROR = str(ev["error"])
+                    break
+                status = ev.get("status", "")
+                total, done = ev.get("total") or 0, ev.get("completed") or 0
+                if total:
+                    pct = 100 * done / total
+                    _progress(f"  {status[:28]:<28} {pct:5.1f}%  {fmt_bytes(done)} / {fmt_bytes(total)}")
+                else:
+                    _progress(f"  {status[:70]}")
+                shown = True
+    except urllib.error.HTTPError as e:
+        try:
+            LAST_PULL_ERROR = json.loads(e.read().decode()).get("error", "") or str(e)
+        except Exception:
+            LAST_PULL_ERROR = str(e)
+    except Exception as e:
+        LAST_PULL_ERROR = str(e)
+    if shown:
+        _progress_end()
+    if LAST_PULL_ERROR:
+        console.print(f"[red]Ollama:[/] {escape(LAST_PULL_ERROR)}")
         return False
+    return True
 
 
 def ensure_model():
@@ -1455,6 +1512,22 @@ def chat_once(model, messages, temperature=0.2, timeout=900, think=None):
 
 
 # ------------------------------------------------------------ Hugging Face ---
+# Ollama itself only runs GGUF. To support every kind of model, Kurt tries, in order:
+#   1. the repo is GGUF                      -> `ollama pull hf.co/<repo>[:quant]`
+#   2. a ready-made GGUF conversion exists   -> pull that one instead
+#   3. otherwise download the original weights (safetensors / pytorch) from Hugging
+#      Face and import them: `ollama create` (supported architectures), or convert
+#      with llama.cpp's convert_hf_to_gguf.py when it is available (FP8/AWQ/GPTQ etc.).
+MODELS_DIR = CONFIG_DIR / "models"
+HF_BASE = "https://huggingface.co"
+UNSUPPORTED_QUANT_RE = re.compile(r"[-_.](fp8|fp4|nvfp4|awq|gptq|bnb|int4|int8|w4a16|w8a8|mxfp4)\b", re.I)
+IMPORT_NAMES = {
+    "config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json",
+    "tokenizer.model", "special_tokens_map.json", "added_tokens.json", "vocab.json",
+    "merges.txt", "chat_template.jinja", "chat_template.json", "preprocessor_config.json",
+}
+
+
 def parse_hf_ref(text):
     """'user/repo[:quant]' or a huggingface.co link -> (repo, quant) or None."""
     t = text.strip()
@@ -1469,25 +1542,325 @@ def parse_hf_ref(text):
     return "/".join(parts[:2]), quant.strip()
 
 
-def hf_search(query):
-    url = "https://huggingface.co/api/models?" + urllib.parse.urlencode(
-        {
-            "search": query,
-            "filter": "gguf",
-            "sort": "downloads",
-            "direction": "-1",
-            "limit": "10",
-        }
-    )
-    req = urllib.request.Request(url, headers={"User-Agent": f"kurt/{__version__}"})
+def _hf_headers(extra=None):
+    h = {"User-Agent": f"kurt/{__version__}"}
+    tok = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if tok:
+        h["Authorization"] = "Bearer " + tok
+    h.update(extra or {})
+    return h
+
+
+def hf_json(url):
+    req = urllib.request.Request(url, headers=_hf_headers())
     with urllib.request.urlopen(req, timeout=20) as r:
-        data = json.loads(r.read().decode())
+        return json.loads(r.read().decode())
+
+
+def hf_search(query, gguf_only=False, filt=None, limit=10):
+    params = {"sort": "downloads", "direction": "-1", "limit": str(limit)}
+    if query:
+        params["search"] = query
+    if filt:
+        params["filter"] = filt
+    elif gguf_only:
+        params["filter"] = "gguf"
+    data = hf_json(f"{HF_BASE}/api/models?" + urllib.parse.urlencode(params))
     out = []
     for m in data:
         rid = m.get("id") or m.get("modelId")
         if rid:
-            out.append((rid, m.get("downloads", 0)))
+            out.append((rid, m.get("downloads", 0), m.get("tags") or []))
     return out
+
+
+def hf_repo_files(repo):
+    """-> [(filename, size_bytes)] for every file in the repo (raises on failure)."""
+    info = hf_json(f"{HF_BASE}/api/models/{repo}?blobs=true")
+    return [(s["rfilename"], s.get("size") or 0) for s in info.get("siblings", [])]
+
+
+def hf_config(repo):
+    try:
+        req = urllib.request.Request(f"{HF_BASE}/{repo}/resolve/main/config.json", headers=_hf_headers())
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read().decode())
+    except Exception:
+        return {}
+
+
+def repo_formats(files):
+    low = [n.lower().rsplit("/", 1)[-1] for n, _ in files]
+    return {
+        "gguf": any(n.endswith(".gguf") for n in low),
+        "safetensors": any(n.endswith(".safetensors") for n in low),
+        "bin": any(re.match(r"pytorch_model.*\.bin$", n) for n in low),
+    }
+
+
+def gguf_quants(files):
+    found = []
+    rx = re.compile(r"(?:^|[-_.])((?:IQ|Q)\d(?:_[A-Z0-9]+)*|BF16|F16|F32)(?=[-_.]|$)", re.I)
+    for n, _ in files:
+        base = n.rsplit("/", 1)[-1]
+        if not base.lower().endswith(".gguf"):
+            continue
+        m = rx.search(base[:-5])
+        if m and m.group(1).upper() not in found:
+            found.append(m.group(1).upper())
+    return found
+
+
+def local_model_name(repo, quant=""):
+    slug = re.sub(r"[^a-z0-9._-]+", "-", repo.lower().replace("/", "-")).strip("-")
+    return f"{slug}:{quant.lower()}" if quant else slug
+
+
+def find_llama_converter():
+    """Look for llama.cpp's convert_hf_to_gguf.py (optional)."""
+    dirs = [os.environ.get("KURT_LLAMA_CPP")]
+    home = Path.home()
+    dirs += [home / "llama.cpp", home / "src" / "llama.cpp", Path.cwd() / "llama.cpp", CONFIG_DIR / "llama.cpp"]
+    for d in dirs:
+        if d and (Path(d) / "convert_hf_to_gguf.py").is_file():
+            return str(Path(d) / "convert_hf_to_gguf.py")
+    return shutil.which("convert_hf_to_gguf.py") or shutil.which("convert_hf_to_gguf")
+
+
+def hf_download_repo(repo, files, dest):
+    """Download files with resume support. Returns True when everything is present."""
+    total = sum(sz for _, sz in files)
+    done_before = 0
+    t0 = time.time()
+    got_this_run = 0
+    for idx, (name, size) in enumerate(files, 1):
+        path = dest / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and (not size or path.stat().st_size == size):
+            done_before += size
+            continue
+        part = path.with_name(path.name + ".part")
+        url = f"{HF_BASE}/{repo}/resolve/main/{urllib.parse.quote(name)}"
+        for attempt in range(6):
+            pos = part.stat().st_size if part.exists() else 0
+            hdrs = {"Range": f"bytes={pos}-"} if pos else {}
+            try:
+                req = urllib.request.Request(url, headers=_hf_headers(hdrs))
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    if pos and r.status != 206:
+                        pos = 0
+                    with open(part, "ab" if pos else "wb") as f:
+                        while True:
+                            chunk = r.read(1 << 20)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            pos += len(chunk)
+                            got_this_run += len(chunk)
+                            rate = got_this_run / max(time.time() - t0, 0.1)
+                            have = done_before + pos
+                            pct = 100 * have / total if total else 0
+                            _progress(
+                                f"  [{idx}/{len(files)}] {name[:34]:<34} {pct:5.1f}%  "
+                                f"{fmt_bytes(have)} / {fmt_bytes(total)}  {fmt_bytes(rate)}/s"
+                            )
+                part.replace(path)
+                break
+            except urllib.error.HTTPError as e:
+                if e.code == 416 and part.exists():  # already complete
+                    part.replace(path)
+                    break
+                _progress_end()
+                if e.code in (401, 403):
+                    console.print(
+                        f"[red]Access denied ({e.code}).[/] This repo may be gated: accept its terms on "
+                        "huggingface.co, then set HF_TOKEN to a read token and try again."
+                    )
+                else:
+                    console.print(f"[red]Download error:[/] HTTP {e.code} on {escape(name)}")
+                return False
+            except (urllib.error.URLError, OSError, TimeoutError) as e:
+                if attempt == 5:
+                    _progress_end()
+                    console.print(f"[red]Download failed:[/] {escape(str(e))} (run again to resume)")
+                    return False
+                time.sleep(2 + attempt * 2)
+        done_before += size
+    _progress_end()
+    return True
+
+
+def _run(cmd, **kw):
+    try:
+        return subprocess.run(cmd, **kw).returncode == 0
+    except OSError as e:
+        console.print(f"[red]Could not run {escape(str(cmd[0]))}:[/] {escape(str(e))}")
+        return False
+
+
+def import_weights(repo, files, depth=0):
+    """Download original weights and turn them into an Ollama model. -> model name or None."""
+    fm = repo_formats(files)
+    if not (fm["safetensors"] or fm["bin"]):
+        console.print("[red]No safetensors / pytorch weights in this repo, so there is nothing to import.[/]")
+        return None
+    cfg = hf_config(repo)
+    qcfg = cfg.get("quantization_config") or (cfg.get("text_config") or {}).get("quantization_config")
+    quantized_src = bool(qcfg) or bool(UNSUPPORTED_QUANT_RE.search(repo))
+    conv = find_llama_converter()
+    if (quantized_src or not fm["safetensors"]) and not conv:
+        why = "pre-quantized weights (FP8/AWQ/GPTQ...)" if quantized_src else "pytorch .bin weights"
+        console.print(
+            f"[yellow]This repo has {why}. Ollama can't import those directly, and llama.cpp's "
+            "convert_hf_to_gguf.py was not found (set KURT_LLAMA_CPP to your llama.cpp folder to use it).[/]"
+        )
+        base = UNSUPPORTED_QUANT_RE.sub("", repo)
+        if depth == 0 and base != repo:
+            console.print(f"The full-precision original is probably [bold]{escape(base)}[/].")
+            if Prompt.ask("Download that instead?", choices=["y", "n"], default="y", console=console) == "y":
+                try:
+                    return install_hf_model(base, "", depth=1)
+                except Exception as e:
+                    console.print(f"[red]Could not use {escape(base)}:[/] {escape(str(e))}")
+        return None
+
+    keep = []
+    for n, sz in files:
+        if "/" in n:
+            continue
+        low = n.lower()
+        if (
+            low.endswith(".safetensors") or low.endswith(".safetensors.index.json")
+            or low in IMPORT_NAMES
+            or (not fm["safetensors"] and re.match(r"pytorch_model.*\.bin(\.index\.json)?$", low))
+        ):
+            keep.append((n, sz))
+    total = sum(sz for _, sz in keep)
+    dest = MODELS_DIR / re.sub(r"[^A-Za-z0-9._-]+", "__", repo)
+    dest.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(dest).free
+    console.print(
+        f"Will download [bold]{fmt_bytes(total)}[/] of original weights to {escape(str(dest))} "
+        f"([dim]{fmt_bytes(free)} free[/])"
+    )
+    if total * 1.1 > free:
+        console.print("[yellow]Warning: that looks like more than your free disk space.[/]")
+    if Prompt.ask("Continue?", choices=["y", "n"], default="y", console=console) != "y":
+        return None
+    quant = Prompt.ask(
+        "Quantize to (Enter = q4_K_M, q8_0, or 'none' for full precision)",
+        console=console, default="", show_default=False,
+    ).strip() or "q4_K_M"
+    if quant.lower() == "none":
+        quant = ""
+    if not hf_download_repo(repo, keep, dest):
+        return None
+
+    source = str(dest)
+    quantize_arg = quant
+    if conv and (quantized_src or not fm["safetensors"]):
+        out = dest / "model.gguf"
+        outtype = "q8_0" if quant.lower() == "q8_0" else "f16"
+        console.print(f"[bold]Converting to GGUF with llama.cpp ({outtype}) ...[/]")
+        if not _run([sys.executable, conv, str(dest), "--outfile", str(out), "--outtype", outtype]):
+            console.print("[red]Conversion failed.[/] The converter needs: pip install torch transformers gguf")
+            return None
+        source = str(out)
+        if outtype == "q8_0":
+            quantize_arg = ""
+    name = local_model_name(repo, quant)
+    modelfile = dest / "Modelfile"
+    modelfile.write_text(f"FROM {source}\n", encoding="utf-8")
+    exe = shutil.which("ollama") or "ollama"
+    cmd = [exe, "create", name, "-f", str(modelfile)]
+    if quantize_arg:
+        cmd += ["--quantize", quantize_arg]
+    console.print(f"[bold]Importing into Ollama as[/] {escape(name)} ...")
+    if not _run(cmd):
+        console.print(
+            "[red]ollama create failed.[/] The architecture may not be supported by your Ollama version "
+            "(update Ollama, or use a GGUF conversion)."
+        )
+        return None
+    if Prompt.ask("Delete the downloaded source files to free disk space?", choices=["y", "n"], default="y", console=console) == "y":
+        shutil.rmtree(dest, ignore_errors=True)
+    return name
+
+
+def community_gguf(repo):
+    """Offer ready-made GGUF conversions of a non-GGUF repo. -> model name or None."""
+    found, seen = [], {repo.lower()}
+    base = repo.split("/", 1)[1]
+    for kw in (
+        {"filt": f"base_model:quantized:{repo}"},
+        {"query": UNSUPPORTED_QUANT_RE.sub("", base) + " gguf", "gguf_only": True},
+    ):
+        try:
+            for rid, dl, tags in hf_search(kw.get("query", ""), gguf_only=kw.get("gguf_only", False), filt=kw.get("filt"), limit=8):
+                if rid.lower() not in seen and "gguf" in [t.lower() for t in tags]:
+                    seen.add(rid.lower())
+                    found.append((rid, dl))
+        except Exception:
+            pass
+    if not found:
+        return None
+    console.print("[green]Ready-made GGUF versions of this model exist:[/]")
+    for i, (rid, dl) in enumerate(found[:8], 1):
+        console.print(f"  {i}. {escape(rid)}  [dim]{dl:,} downloads[/]")
+    pick = Prompt.ask(
+        "Pick a number, or Enter to import the original weights instead",
+        console=console, default="", show_default=False,
+    ).strip()
+    if not pick.isdigit() or not 1 <= int(pick) <= len(found[:8]):
+        return None
+    return install_hf_model(found[int(pick) - 1][0], "", depth=1, allow_import=False)
+
+
+def install_hf_model(repo, quant="", depth=0, allow_import=True):
+    """Get any Hugging Face model into Ollama. Returns the Ollama model name, or None."""
+    try:
+        files = hf_repo_files(repo)
+    except Exception as e:
+        files = None
+        console.print(f"[yellow]Could not read the repo's file list ({escape(str(e))}); trying a direct pull.[/]")
+    fm = repo_formats(files) if files is not None else None
+
+    if fm is None or fm["gguf"]:
+        if files is not None and not quant:
+            quants = gguf_quants(files)
+            if quants:
+                console.print(f"[dim]Available quantizations: {', '.join(quants)}[/]")
+            quant = Prompt.ask(
+                "Quantization, e.g. Q4_K_M (Enter = Ollama's default)",
+                console=console, default="", show_default=False,
+            ).strip()
+        name = f"hf.co/{repo}" + (f":{quant}" if quant else "")
+        console.print(f"[bold]Downloading[/] {escape(name)} ...")
+        if pull_model(name):
+            return name
+        if fm is not None:
+            return None
+        if "gguf" not in LAST_PULL_ERROR.lower() and "llama.cpp" not in LAST_PULL_ERROR.lower():
+            return None
+        try:  # the direct pull said "not GGUF": now we can inspect the repo properly
+            files = hf_repo_files(repo)
+        except Exception as e:
+            console.print(f"[red]Could not read the repo:[/] {escape(str(e))}")
+            return None
+
+    console.print(f"[yellow]{escape(repo)} is not a GGUF repo[/] - Ollama can't pull it directly.")
+    if allow_import:
+        name = community_gguf(repo)
+        if name:
+            return name
+        return import_weights(repo, files, depth)
+    return None
+
+
+def hf_label(tags):
+    low = [t.lower() for t in tags]
+    kinds = [k for k in ("gguf", "safetensors") if k in low]
+    return "/".join(k.upper() if k == "gguf" else k for k in kinds)
 
 
 def set_model(name):
@@ -1504,8 +1877,9 @@ def add_model_flow():
     console.print(
         Panel(
             "Paste a Hugging Face repo (user/name), a huggingface.co link,\n"
-            "or type some words to search GGUF models.\n"
-            "Optional quantization: user/name:Q4_K_M",
+            "an Ollama name (llama3.2:3b), or type some words to search.\n"
+            "Any format works: GGUF, safetensors, FP8 ... Kurt finds or builds a runnable model.\n"
+            "Optional GGUF quantization: user/name:Q4_K_M",
             title="Add a model",
             border_style="green",
             expand=False,
@@ -1514,36 +1888,42 @@ def add_model_flow():
     q = Prompt.ask("Model", console=console, default="", show_default=False).strip()
     if not q:
         return
-    ref = parse_hf_ref(q) if ("/" in q and " " not in q) else None
-    if ref is None:
+    if re.fullmatch(r"[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+)?", q) and ":" in q:
+        console.print(f"[bold]Downloading[/] {escape(q)} from the Ollama library ...")
+        name = q if pull_model(q) else None
+    else:
+        ref = parse_hf_ref(q) if ("/" in q and " " not in q) else None
+        if ref is None:
+            try:
+                results = hf_search(q)
+            except Exception as e:
+                console.print(f"[red]Search failed:[/] {escape(str(e))}")
+                return
+            if not results:
+                console.print("[yellow]No models found.[/]")
+                return
+            for i, (rid, dl, tags) in enumerate(results, 1):
+                label = hf_label(tags)
+                console.print(
+                    f"  {i}. {escape(rid)}  [dim]{dl:,} downloads"
+                    + (f" · {label}" if label else "") + "[/]"
+                )
+            pick = Prompt.ask(
+                "Pick a number (Enter to cancel)", console=console, default="", show_default=False
+            ).strip()
+            if not pick.isdigit() or not 1 <= int(pick) <= len(results):
+                return
+            ref = (results[int(pick) - 1][0], "")
+        repo, quant = ref
         try:
-            results = hf_search(q)
-        except Exception as e:
-            console.print(f"[red]Search failed:[/] {escape(str(e))}")
+            name = install_hf_model(repo, quant)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]cancelled (partial downloads can be resumed by running it again)[/]")
             return
-        if not results:
-            console.print("[yellow]No GGUF models found.[/]")
-            return
-        for i, (rid, dl) in enumerate(results, 1):
-            console.print(f"  {i}. {escape(rid)}  [dim]{dl:,} downloads[/]")
-        pick = Prompt.ask(
-            "Pick a number (Enter to cancel)", console=console, default="", show_default=False
-        ).strip()
-        if not pick.isdigit() or not 1 <= int(pick) <= len(results):
-            return
-        ref = (results[int(pick) - 1][0], "")
-    repo, quant = ref
-    if not quant:
-        quant = Prompt.ask(
-            "Quantization, e.g. Q4_K_M (Enter = Ollama's default)",
-            console=console, default="", show_default=False,
-        ).strip()
-    name = f"hf.co/{repo}" + (f":{quant}" if quant else "")
-    console.print(f"[bold]Downloading[/] {escape(name)} ...")
-    if not pull_model(name):
-        console.print("[red]Download failed.[/] Check the name and your connection.")
+    if not name:
+        console.print("[red]Could not add that model.[/] Check the name, your connection, and the messages above.")
         return
-    console.print("[green]✔ downloaded[/]")
+    console.print("[green]✔ ready[/]")
     if Prompt.ask("Use it as the main model now?", choices=["y", "n"], default="y", console=console) == "y":
         set_model(name)
 
@@ -1613,28 +1993,9 @@ def models_menu():
         console.print("[red]not an option[/]")
 
 
-# ------------------------------------------------------------------ /btw ---
-def add_btw(note):
-    PENDING_BTW.append(note)
-
-
-def drain_btw(messages):
-    """Fold pending /btw notes into the last user message before the next model call."""
-    if not PENDING_BTW or not messages or messages[-1]["role"] != "user":
-        return
-    notes = PENDING_BTW[:]
-    del PENDING_BTW[: len(notes)]
-    messages[-1]["content"] += (
-        "\n\n[btw - extra info from the user, sent while you were working. "
-        "Take it into account; do not start over unless it changes the task]\n"
-        + "\n".join(f"- {n}" for n in notes)
-    )
-    console.print(f"[dim]📝 passing {len(notes)} btw note(s) to Kurt[/]")
-
-
-
-class BtwListener:
-    """While Kurt works, keep keyboard input in the bottom box and accept `/btw <note>`."""
+# ------------------------------------------------------- busy-time input ---
+class BusyListener:
+    """While Kurt works, keep the bottom box alive so Esc / Ctrl+C can stop generation."""
 
     def __init__(self):
         self._stop = threading.Event()
@@ -1661,20 +2022,12 @@ class BtwListener:
         return False
 
     def _handle(self, line):
-        line = line.strip()
-        if not line:
+        if not line.strip():
             return
-        cmd, _, arg = line.partition(" ")
-        if cmd.lower() == "/btw" and arg.strip():
-            add_btw(arg.strip())
-            if TERMINAL_UI and TERMINAL_UI.enabled:
-                TERMINAL_UI.set_notice(f"btw queued ({len(PENDING_BTW)})")
-            else:
-                console.print("[dim]📝 btw noted - Kurt will see it at the next step[/]")
-        elif TERMINAL_UI and TERMINAL_UI.enabled:
-            TERMINAL_UI.set_notice("K is busy · use /btw <note>")
+        if TERMINAL_UI and TERMINAL_UI.enabled:
+            TERMINAL_UI.set_notice("K is busy · Esc stops it")
         else:
-            console.print("[dim]Kurt is busy - only '/btw <note>' works right now (Ctrl+C stops it).[/]")
+            console.print("[dim]Kurt is busy (Ctrl+C stops it).[/]")
 
     def _run_ui(self):
         import _thread
@@ -2156,7 +2509,6 @@ def early_stop_point(full, state):
 
 def run_turn(messages):
     for _ in range(MAX_ROUNDS):
-        drain_btw(messages)
         trim(messages)
         full, interrupted = "", False
         thinking_started = False
@@ -2173,7 +2525,7 @@ def run_turn(messages):
         printer = StreamPrinter()
         stop_state = {}
         try:
-            with BtwListener(), contextlib.closing(stream_chat(messages)) as stream:
+            with BusyListener(), contextlib.closing(stream_chat(messages)) as stream:
                 for kind, chunk in stream:
                     if kind == "stats":
                         meter.tokens = chunk.get("eval_count") or meter.tokens
@@ -2227,14 +2579,10 @@ def run_turn(messages):
         print_summary(meter)
         messages.append({"role": "assistant", "content": full})
         if interrupted:
-            if PENDING_BTW:
-                console.print("[dim]📝 btw notes saved - Kurt will get them with your next message[/]")
             return
         feedback = handle_actions(full)
         if not feedback:
-            if not PENDING_BTW:
-                return
-            feedback = "[tool results]\nNo pending actions."
+            return
         messages.append({"role": "user", "content": feedback})
     console.print("[yellow]Stopped after several automatic steps. Say 'continue' to go on.[/]")
 
@@ -2243,7 +2591,6 @@ HELP = """[bold]Commands[/]
   /help           show this help
   /models         list models, switch the main model, add a model from Hugging Face,
                   and turn agents on or off
-  /btw <note>     add info for Kurt while it is working, without interrupting it
   /speed          show the detected hardware and the speed settings in use
                   (/speed refresh re-detects it)
   /think [on|off] turn thinking on or off (off is much faster on computers without a GPU)
@@ -2270,12 +2617,6 @@ def handle_command(line, messages):
         console.print(HELP)
     elif cmd == "/models":
         models_menu()
-    elif cmd == "/btw":
-        if not arg.strip():
-            console.print("usage: /btw <note>", markup=False)
-        else:
-            add_btw(arg.strip())
-            console.print("[dim]📝 btw noted - Kurt will get it with your next message[/]")
     elif cmd == "/speed":
         speed_report(refresh=arg.strip().lower() == "refresh")
     elif cmd == "/fast":
@@ -2340,7 +2681,7 @@ def read_input():
     """Read from Kurt's fixed bottom input box when the terminal supports it."""
     if TERMINAL_UI and TERMINAL_UI.enabled:
         return TERMINAL_UI.read_line()
-    return console.input("[bold bright_green]kurt >[/] [dim]/help · /models · /btw <note> · @file[/] ")
+    return console.input("[bold bright_green]kurt >[/] [dim]/help · /models · @file[/] ")
 
 
 def _cfg_is_first_scan():
@@ -2394,14 +2735,13 @@ def main():
     ui = TerminalUI()
     if ui.enabled:
         console.print(
-            "[dim]Ask in plain English. Use @file to attach a file. While Kurt works, "
-            "type /btw <note> in the bottom box to add context without interrupting "
-            "(Esc stops it).[/]"
+            "[dim]Ask in plain English. Use @file to attach a file. "
+            "Esc stops Kurt while it works.[/]"
         )
     else:
         console.print(
             "[dim]Ask for changes in plain English. /help for commands, /models to switch models "
-            "or turn agents on, /btw to add info while Kurt works. Use @file to attach a file.[/]\n"
+            "or turn agents on. Use @file to attach a file.[/]\n"
         )
     if ui.start():
         TERMINAL_UI = ui
@@ -2430,7 +2770,7 @@ def main():
                 try:
                     if TERMINAL_UI and TERMINAL_UI.enabled:
                         TERMINAL_UI.set_busy(True)
-                    with BtwListener():
+                    with BusyListener():
                         extra = run_agents(line)
                 except KeyboardInterrupt:
                     console.print("\n[yellow]⏹ interrupted[/]")
