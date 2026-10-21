@@ -42,6 +42,7 @@ DEFAULT_MODEL = "hf.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M"
 CONFIG_DIR = Path.home() / ".kurt"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 HW_CACHE_FILE = CONFIG_DIR / "hardware.json"
+FAST_MODEL = "qwen2.5-coder:3b"  # ~2 GB: several times faster than a 9B model on a CPU
 
 
 def load_config():
@@ -150,6 +151,8 @@ class Meter:
         self.end = None
         self.tokens = 0
         self.label = label
+        self.gen_secs = 0.0  # time spent actually generating (from Ollama)
+        self.wait_secs = 0.0  # model load + prompt reading time
 
     def stop(self):
         if self.end is None:
@@ -839,8 +842,12 @@ def print_summary(meter):
     parts = [f"Done in {fmt_elapsed(meter.elapsed)}"]
     if meter.tokens:
         parts.append(f"↓ {meter.tokens:,} tokens")
-        if meter.elapsed >= 1:
-            parts.append(f"{meter.tokens / meter.elapsed:.0f} tok/s")
+        if meter.gen_secs >= 0.5:
+            parts.append(f"{meter.tokens / meter.gen_secs:.1f} tok/s")
+            if meter.wait_secs >= 2:
+                parts.append(f"{fmt_elapsed(meter.wait_secs)} loading/reading prompt")
+        elif meter.elapsed >= 1:
+            parts.append(f"{meter.tokens / meter.elapsed:.1f} tok/s")
     console.print(Text("✻ " + " · ".join(parts), style="dim green"))
 
 
@@ -1250,8 +1257,9 @@ def speed_report(refresh=False):
         notes.append("No usable GPU: thinking is off and the context is kept short because CPUs "
                      "are slow at reading long prompts. /think on turns thinking back on.")
         if hw["os"] == "mac":
-            notes.append("Intel Macs cannot use the GPU in Ollama. A smaller model (/models) is "
-                         "the biggest remaining speed-up.")
+            notes.append("Intel Macs cannot use the GPU in Ollama.")
+        notes.append(f"Each token reads the whole model from RAM, so speed is set by model size. "
+                     f"Type /fast to switch to {FAST_MODEL} (roughly 3x faster than a 9B model).")
     if hw["rosetta"]:
         notes.append("Python is running under Rosetta. Installing a native arm64 Python makes Kurt itself faster.")
     for n in notes:
@@ -1427,6 +1435,9 @@ def stream_chat(messages):
                 yield "stats", {
                     "eval_count": d.get("eval_count"),
                     "prompt_eval_count": d.get("prompt_eval_count"),
+                    "eval_duration": d.get("eval_duration"),
+                    "load_duration": d.get("load_duration"),
+                    "prompt_eval_duration": d.get("prompt_eval_duration"),
                 }
                 break
 
@@ -2166,6 +2177,11 @@ def run_turn(messages):
                 for kind, chunk in stream:
                     if kind == "stats":
                         meter.tokens = chunk.get("eval_count") or meter.tokens
+                        meter.gen_secs = (chunk.get("eval_duration") or 0) / 1e9
+                        meter.wait_secs = (
+                            (chunk.get("load_duration") or 0)
+                            + (chunk.get("prompt_eval_duration") or 0)
+                        ) / 1e9
                         continue
                     meter.tokens += 1  # live estimate: one streamed chunk is about one token
                     if kind == "thinking":
@@ -2231,6 +2247,7 @@ HELP = """[bold]Commands[/]
   /speed          show the detected hardware and the speed settings in use
                   (/speed refresh re-detects it)
   /think [on|off] turn thinking on or off (off is much faster on computers without a GPU)
+  /fast [model]   switch to a small, much faster model (default qwen2.5-coder:3b)
   /files          list project files
   /add <path>     put a file's contents into the conversation (or use @path in a message)
   /auto           toggle auto-accept for file edits (commands always ask)
@@ -2261,6 +2278,15 @@ def handle_command(line, messages):
             console.print("[dim]📝 btw noted - Kurt will get it with your next message[/]")
     elif cmd == "/speed":
         speed_report(refresh=arg.strip().lower() == "refresh")
+    elif cmd == "/fast":
+        name = arg.strip() or FAST_MODEL
+        if not any(same_model(m["name"], name) for m in installed_models()):
+            console.print(f"[bold]Downloading[/] {escape(name)} (small, one time) ...")
+            if not pull_model(name):
+                console.print("[red]Download failed.[/] Check the name and your connection.")
+                return None
+        set_model(name)
+        console.print("[dim]Use /models to go back to the bigger model.[/]")
     elif cmd == "/think":
         a = arg.strip().lower()
         if a in ("on", "off"):
@@ -2348,6 +2374,8 @@ def main():
         sys.exit(1)
     retune()
     console.print(Text(tune_summary(), style="dim green"))
+    if get_hardware()["accel"] == "cpu" and TUNE.get("model_gb", 0) > 3.5:
+        console.print("[dim]Slow on this computer? Type /fast for a small model that is several times faster.[/]")
     # load the model in the background so you can start typing right away
     threading.Thread(target=warm_model, kwargs={"quiet": True}, daemon=True).start()
     if SERVER_EXTERNAL and not TIP_SHOWN:
