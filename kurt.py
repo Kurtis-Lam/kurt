@@ -1039,15 +1039,28 @@ MASCOT_STYLE = "rgb(61,214,110)"
 
 
 def print_brand():
-    heading = Text.assemble(
-        ("Kurt", "bold " + MASCOT_STYLE),
-        (f"  v{__version__}", "dim"),
-        ("  ·  ", "dim"),
-        (short_model(MODEL, 34), "green"),
+    mascot = Text("\n".join(MASCOT), style=MASCOT_STYLE, no_wrap=True)
+    path_limit = max(16, console.width - len(MASCOT[0]) - 14)
+    details = Group(
+        Text("Kurt", style="bold " + MASCOT_STYLE),
+        Text("Your local coding companion", style="bold"),
+        Text(short_model(MODEL), style="green"),
+        Text(short_path(Path.cwd(), path_limit), style="dim", no_wrap=True),
     )
-    location = Text(short_path(Path.cwd(), max(24, console.width - 4)), style="dim", no_wrap=True)
-    console.print(heading)
-    console.print(location)
+    grid = Table.grid(padding=(0, 3))
+    grid.add_column(no_wrap=True)
+    grid.add_column()
+    grid.add_row(mascot, details)
+    console.print(
+        Panel(
+            grid,
+            title=f"Kurt v{__version__}",
+            title_align="left",
+            border_style=MASCOT_STYLE,
+            padding=(1, 2),
+            expand=False,
+        )
+    )
 
 
 def print_summary(meter):
