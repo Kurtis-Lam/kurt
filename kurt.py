@@ -61,6 +61,8 @@ if _env_agents is not None:
 else:
     AGENTS = bool(_cfg.get("agents", False))
 WORKERS = [w for w in _cfg.get("workers", []) if isinstance(w, str)]
+MODEL_SORT = _cfg.get("model_sort") if _cfg.get("model_sort") in ("name", "size", "params", "quant", "family", "date") else "date"
+MODEL_SORT_DESC = bool(_cfg.get("model_sort_desc", True))
 MAX_AGENTS = max(1, int(os.environ.get("KURT_MAX_AGENTS", "4")))
 
 
@@ -905,6 +907,7 @@ def save_config():
                 {
                     "model": SAVED_MODEL, "agents": AGENTS, "workers": WORKERS,
                     "think": THINK, "tip_shown": TIP_SHOWN,
+                    "model_sort": MODEL_SORT, "model_sort_desc": MODEL_SORT_DESC,
                 },
                 indent=2,
             ),
@@ -1325,11 +1328,69 @@ def installed_models():
         data = http_json("/api/tags")
     except Exception:
         return []
-    return [
-        {"name": m.get("name", ""), "size": m.get("size", 0)}
-        for m in data.get("models", [])
-        if m.get("name")
-    ]
+    out = []
+    for m in data.get("models", []):
+        if not m.get("name"):
+            continue
+        d = m.get("details") or {}
+        out.append({
+            "name": m.get("name", ""),
+            "size": m.get("size", 0),
+            "params": d.get("parameter_size") or "",
+            "quant": d.get("quantization_level") or "",
+            "family": d.get("family") or "",
+            "modified": m.get("modified_at") or "",
+        })
+    return out
+
+
+def params_to_num(text):
+    """'7.6B' -> 7.6e9, '270M' -> 2.7e8, '' -> None."""
+    m = re.fullmatch(r"\s*([\d.]+)\s*([KMBT]?)\s*", str(text or ""), re.I)
+    if not m:
+        return None
+    try:
+        return float(m.group(1)) * {"": 1, "K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}[m.group(2).upper()]
+    except (ValueError, KeyError):
+        return None
+
+
+SORT_KEYS = {
+    "name": ("Name", False),
+    "size": ("Size", True),
+    "params": ("Parameters", True),
+    "quant": ("Quant", False),
+    "family": ("Family", False),
+    "date": ("Modified", True),
+}
+SORT_ALIASES = {
+    "n": "name", "name": "name",
+    "s": "size", "size": "size", "disk": "size",
+    "p": "params", "param": "params", "params": "params", "parameters": "params", "parameter": "params",
+    "q": "quant", "quant": "quant", "quantization": "quant",
+    "f": "family", "family": "family", "arch": "family",
+    "d": "date", "date": "date", "modified": "date", "recent": "date", "time": "date",
+}
+
+
+def sort_models(models, key, desc):
+    """Sort by key; models with no value for that key always go last."""
+    def val(m):
+        if key == "name":
+            return m["name"].lower()
+        if key == "size":
+            return m["size"] or None
+        if key == "params":
+            return params_to_num(m["params"])
+        if key == "quant":
+            return m["quant"].lower() or None
+        if key == "family":
+            return m["family"].lower() or None
+        return m["modified"] or None
+    have = [m for m in models if val(m) is not None]
+    missing = [m for m in models if val(m) is None]
+    have.sort(key=lambda m: (val(m), m["name"].lower()), reverse=desc)
+    return have + missing
 
 
 def model_installed():
@@ -1359,8 +1420,21 @@ def fmt_bytes(n):
         n /= 1000
 
 
-def pull_model(name):
-    """Pull a model through Ollama's HTTP API (clean progress + readable errors)."""
+def pull_model(name, retries=3):
+    """Pull a model, retrying transient network errors (Ollama resumes partial layers)."""
+    for attempt in range(retries + 1):
+        if _pull_once(name):
+            return True
+        err = LAST_PULL_ERROR.lower()
+        transient = any(t in err for t in ("eof", "max retries", "connection reset", "timed out", "timeout", "unexpected"))
+        if not transient or attempt == retries:
+            return False
+        console.print(f"[yellow]Network hiccup, resuming ({attempt + 1}/{retries}) ...[/]")
+        time.sleep(2 + attempt * 2)
+    return False
+
+
+def _pull_once(name):
     global LAST_PULL_ERROR
     LAST_PULL_ERROR = ""
     req = urllib.request.Request(
@@ -1616,6 +1690,19 @@ def local_model_name(repo, quant=""):
     return f"{slug}:{quant.lower()}" if quant else slug
 
 
+OLLAMA_NATIVE_QUANTS = ("int4", "int8", "nvfp4", "mxfp4", "mxfp8")
+
+
+def native_quant(q):
+    """GGUF-style name (q4_K_M, q8_0 ...) -> what `ollama create --quantize` accepts for safetensors."""
+    low = (q or "").strip().lower()
+    if not low or low in OLLAMA_NATIVE_QUANTS:
+        return low
+    if low.startswith("q8") or low in ("f8", "fp8"):
+        return "int8"
+    return "int4"
+
+
 def find_llama_converter():
     """Look for llama.cpp's convert_hf_to_gguf.py (optional)."""
     dirs = [os.environ.get("KURT_LLAMA_CPP")]
@@ -1757,17 +1844,22 @@ def import_weights(repo, files, depth=0):
         return None
 
     source = str(dest)
-    quantize_arg = quant
-    if conv and (quantized_src or not fm["safetensors"]):
+    quantize_arg = native_quant(quant)  # safetensors import only knows int4/int8/...
+    gguf_style = bool(quant) and quant.lower() not in OLLAMA_NATIVE_QUANTS
+    if conv and (quantized_src or not fm["safetensors"] or gguf_style):
         out = dest / "model.gguf"
         outtype = "q8_0" if quant.lower() == "q8_0" else "f16"
         console.print(f"[bold]Converting to GGUF with llama.cpp ({outtype}) ...[/]")
-        if not _run([sys.executable, conv, str(dest), "--outfile", str(out), "--outtype", outtype]):
+        if _run([sys.executable, conv, str(dest), "--outfile", str(out), "--outtype", outtype]):
+            source = str(out)
+            quantize_arg = "" if outtype == "q8_0" else quant  # GGUF source: q4_K_M etc. work
+        elif quantized_src or not fm["safetensors"]:
             console.print("[red]Conversion failed.[/] The converter needs: pip install torch transformers gguf")
             return None
-        source = str(out)
-        if outtype == "q8_0":
-            quantize_arg = ""
+        else:
+            console.print("[yellow]Conversion failed; importing the safetensors directly instead.[/]")
+    if quantize_arg and source == str(dest) and quantize_arg != quant.lower():
+        console.print(f"[dim]Ollama quantizes safetensors as {quantize_arg} ({quant} is a GGUF-only name).[/]")
     name = local_model_name(repo, quant)
     modelfile = dest / "Modelfile"
     modelfile.write_text(f"FROM {source}\n", encoding="utf-8")
@@ -1929,31 +2021,68 @@ def add_model_flow():
 
 
 def models_menu():
-    global AGENTS, WORKERS
+    global AGENTS, WORKERS, MODEL_SORT, MODEL_SORT_DESC
     while True:
-        models = installed_models()
-        table = Table(box=None, header_style="bold", padding=(0, 2))
-        table.add_column("#", justify="right")
-        table.add_column("Model")
-        table.add_column("Size")
-        table.add_column("Role")
+        models = sort_models(installed_models(), MODEL_SORT, MODEL_SORT_DESC)
+        arrow = " ▼" if MODEL_SORT_DESC else " ▲"
+        def head(key, label):
+            return label + (arrow if MODEL_SORT == key else "")
+        table = Table(box=None, header_style="bold", padding=(0, 1))
+        table.add_column("#", justify="right", no_wrap=True)
+        table.add_column(head("name", "Model"), overflow="fold")
+        table.add_column(head("params", "Params"), justify="right", no_wrap=True)
+        table.add_column(head("size", "Size"), justify="right", no_wrap=True)
+        table.add_column(head("quant", "Quant"), no_wrap=True)
+        table.add_column(head("family", "Family"), no_wrap=True)
+        table.add_column(head("date", "Modified"), no_wrap=True)
+        table.add_column("Role", no_wrap=True)
         for i, m in enumerate(models, 1):
             role = []
             if same_model(m["name"], MODEL):
                 role.append("● main")
             if any(same_model(m["name"], w) for w in WORKERS):
                 role.append("agent worker")
-            table.add_row(str(i), Text(m["name"]), fmt_size(m["size"]), ", ".join(role))
-        table.add_row("+", "[green]Add a new model (download from Hugging Face)[/]", "", "")
-        table.add_row("g", f"Agents: [bold]{'ON' if AGENTS else 'OFF'}[/]  (toggle)", "", "")
-        console.print(Panel(table, title="Models", border_style="magenta", expand=False))
+            table.add_row(
+                str(i), Text(m["name"]), m["params"] or "-", fmt_size(m["size"]) or "-",
+                m["quant"] or "-", m["family"] or "-", m["modified"][:10] or "-", ", ".join(role),
+            )
+        extras = Text.from_markup(
+            "\n[green]+[/]  Add a new model (download from Hugging Face)\n"
+            f"[bold]g[/]  Agents: [bold]{'ON' if AGENTS else 'OFF'}[/] (toggle)"
+        )
+        console.print(Panel(Group(table, extras), title="Models", border_style="magenta", expand=False))
         console.print(
             "[dim]number = use as main model · + = add a model · g = toggle agents · "
-            "w <number> = toggle a model as agent worker · Enter = close[/]"
+            "w <number> = toggle a model as agent worker · Enter = close\n"
+            "s <size|params|name|quant|family|date> \\[asc|desc] = sort "
+            "(same key again flips the direction)[/]"
         )
         choice = Prompt.ask("›", console=console, default="", show_default=False).strip().lower()
         if not choice:
             return
+        ms = re.fullmatch(r"(?:s|sort)(?:\s+(\S+))?(?:\s+(\S+))?", choice)
+        if ms:
+            words = [w for w in (ms.group(1), ms.group(2)) if w]
+            key, direction = None, None
+            for w in words:
+                if w in ("asc", "ascending", "up", "low", "small"):
+                    direction = False
+                elif w in ("desc", "descending", "down", "high", "big", "large"):
+                    direction = True
+                elif w in SORT_ALIASES:
+                    key = SORT_ALIASES[w]
+                else:
+                    key = False
+            if not words or key is False or (key is None and direction is None):
+                console.print("usage: s <size|params|name|quant|family|date> [asc|desc]", markup=False)
+                continue
+            if key is None:
+                key = MODEL_SORT
+            if direction is None:
+                direction = (not MODEL_SORT_DESC) if key == MODEL_SORT else SORT_KEYS[key][1]
+            MODEL_SORT, MODEL_SORT_DESC = key, direction
+            save_config()
+            continue
         if choice in ("+", "a", "add"):
             add_model_flow()
             continue
@@ -2762,8 +2891,11 @@ def main():
                     Text.assemble(("> ", "bold bright_green"), (TERMINAL_UI.last_display.strip(), "bold"))
                 )
             if line.startswith("/"):
-                if handle_command(line, messages) == "exit":
-                    break
+                try:
+                    if handle_command(line, messages) == "exit":
+                        break
+                except (KeyboardInterrupt, EOFError):
+                    console.print("\n[yellow]cancelled[/]")
                 continue
             messages.append({"role": "user", "content": attach_mentions(line)})
             if AGENTS:
@@ -2789,4 +2921,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()
+        sys.exit(130)
