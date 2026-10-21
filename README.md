@@ -80,7 +80,7 @@ On start, Kurt will:
 2. Load Qwythos into memory (the first load can take a little while)
 3. Show a green K mascot and a bottom-pinned `kurt` input box
 
-Now just talk to it. The green K mascot appears at startup. The input box stays pinned to the bottom of the terminal, with `/help`, `/models`, `/btw <note>`, and `@file` hints inside the box. While Kurt works, thinking text and responses appear above it; type `/btw <note>` in the same box to add context without interrupting generation.
+Now just talk to it. The green K mascot appears at startup. The input box stays pinned to the bottom of the terminal, with `/help`, `/models`, and `@file` hints inside the box. While Kurt works, thinking text and responses appear above it; press Esc (or Ctrl+C) to stop generation.
 
 Examples:
 
@@ -241,3 +241,19 @@ This removes Kurt only. Remove the model with `ollama rm hf.co/empero-ai/Qwythos
 
 Kurt is a small local model and can be wrong. Read every diff before pressing `y`, and read every
 shell command before running it. Don't use `a` (accept all) on code you can't easily restore.
+
+---
+
+## Adding models (any format)
+
+`/models` then `+` accepts a Hugging Face repo, a link, an Ollama name (`llama3.2:3b`), or search words.
+Ollama only runs GGUF, so for other formats Kurt works through these steps automatically:
+
+1. **GGUF repo** - pulled directly (`user/name:Q4_K_M` picks a quantization).
+2. **Not GGUF (safetensors, FP8, ...)** - Kurt looks for a ready-made GGUF conversion and offers it.
+3. **No conversion available** - Kurt downloads the original weights (resumable) and imports them with
+   `ollama create`, quantizing to Q4_K_M by default.
+   - Pre-quantized repos (FP8 / AWQ / GPTQ) can't be imported by Ollama directly. Kurt offers the
+     full-precision original instead, or converts them if llama.cpp is available
+     (`export KURT_LLAMA_CPP=~/llama.cpp`, needs `pip install torch transformers gguf`).
+   - Gated repos: accept the terms on huggingface.co and set `HF_TOKEN`.
