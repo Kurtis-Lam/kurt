@@ -11,8 +11,18 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+  echo "❌ Python 3.9 or newer is required (found: $(python3 --version 2>&1))."
+  echo "   Install a newer Python from https://www.python.org/downloads/ and re-run."
+  exit 1
+fi
+
 echo "→ Creating private environment in $KHOME/venv"
-python3 -m venv "$KHOME/venv"
+if ! python3 -m venv "$KHOME/venv"; then
+  echo "❌ Could not create a virtual environment."
+  echo "   On Debian/Ubuntu run: sudo apt install python3-venv   then re-run this installer."
+  exit 1
+fi
 "$KHOME/venv/bin/python" -m pip install --upgrade pip -q
 echo "→ Installing Kurt"
 "$KHOME/venv/bin/python" -m pip install "$DIR" -q
