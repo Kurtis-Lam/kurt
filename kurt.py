@@ -88,6 +88,7 @@ _host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 if not _host.startswith("http"):
     _host = "http://" + _host
 HOST = _host.replace("0.0.0.0", "127.0.0.1").rstrip("/")
+CONTEXT_PCT = 0  # how full the context window is, shown in the footer
 CTX = int(os.environ.get("KURT_CTX", "16384"))  # context window sent to Ollama (auto-tuned at startup)
 NUM_THREAD = None  # CPU threads for inference (auto-tuned)
 NUM_BATCH = None  # prompt batch size (auto-tuned)
@@ -637,7 +638,8 @@ class TerminalUI:
             target = self._default_context_file() or Path.cwd().name or "project"
             activity = self._activity_for(text)
 
-        return f"in {short_path(target, max(12, min(42, w_safe_width(self.width))))}  ·  {activity}"
+        meter = f"  ·  ctx {CONTEXT_PCT}%" if CONTEXT_PCT else ""
+        return f"in {short_path(target, max(12, min(42, w_safe_width(self.width))))}  ·  {activity}{meter}"
 
     @staticmethod
     def _activity_for(text):
@@ -1088,6 +1090,10 @@ Read a file:
 @@@ READ relative/path.py
 @@@ END
 
+Read only part of a long file (1-based, inclusive line numbers):
+@@@ READ relative/path.py:120-220
+@@@ END
+
 Edit an existing file (SEARCH must match the file EXACTLY, including whitespace;
 keep it small but unique; several SEARCH/REPLACE pairs are allowed):
 @@@ EDIT relative/path.py
@@ -1109,11 +1115,13 @@ Run a shell command (use it to look around, e.g. ls or grep; risky commands need
 
 Rules:
 - READ a file before editing it. Never guess file contents.
+- If a READ result says it was truncated, read the missing part with a line range before touching it.
 - Use paths relative to the project directory.
 - Make minimal, focused edits. Prefer EDIT over WRITE for existing files.
 - Briefly explain what you are doing, then emit the blocks. Do not wrap blocks in code fences.
 - Do not claim a change is applied until the tool result says so.
-- If a tool result reports an error, fix your block and try again.
+- If a tool result reports an error or a WARNING (for example a syntax error), fix it and try again.
+- If the user rejected a change, do not propose the same change again; ask what they prefer.
 - A "[Helper agent reports ...]" section holds findings from helper agents that ran in
   parallel. Use them, double-check against the files, and make any changes yourself.
 """
@@ -2003,7 +2011,8 @@ def hf_download_repo(repo, files, dest):
     return True
 
 
-def _run(cmd, **kw):
+def _run_visible(cmd, **kw):
+    """Run a long helper command with its output shown; True when it exits 0."""
     try:
         return subprocess.run(cmd, **kw).returncode == 0
     except OSError as e:
@@ -2076,7 +2085,7 @@ def import_weights(repo, files, depth=0):
         out = dest / "model.gguf"
         outtype = "q8_0" if quant.lower() == "q8_0" else "f16"
         console.print(f"[bold]Converting to GGUF with llama.cpp ({outtype}) ...[/]")
-        if _run([sys.executable, conv, str(dest), "--outfile", str(out), "--outtype", outtype]):
+        if _run_visible([sys.executable, conv, str(dest), "--outfile", str(out), "--outtype", outtype]):
             source = str(out)
             quantize_arg = "" if outtype == "q8_0" else quant  # GGUF source: q4_K_M etc. work
         elif quantized_src or not fm["safetensors"]:
@@ -2094,7 +2103,7 @@ def import_weights(repo, files, depth=0):
     if quantize_arg:
         cmd += ["--quantize", quantize_arg]
     console.print(f"[bold]Importing into Ollama as[/] {escape(name)} ...")
-    if not _run(cmd):
+    if not _run_visible(cmd):
         console.print(
             "[red]ollama create failed.[/] The architecture may not be supported by your Ollama version "
             "(update Ollama, or use a GGUF conversion)."
@@ -2247,6 +2256,7 @@ def add_model_flow():
 
 
 MENU_SORT_ORDER = ("name", "size", "params")
+SORT_LABELS = {"name": "Model", "size": "Size", "params": "Params"}
 
 
 def read_menu_key():
@@ -2318,7 +2328,7 @@ def models_menu():
         keys.add_row("+", "add a model")
         keys.add_row("g", f"toggle agents (now {'ON' if AGENTS else 'OFF'})")
         keys.add_row("w + number + Enter", "toggle a model as agent worker")
-        keys.add_row("s  or  ← →", f"sort by Model / Size / Params (now {({"name": "Model", "size": "Size", "params": "Params"})[MODEL_SORT]})")
+        keys.add_row("s  or  ← →", f"sort by Model / Size / Params (now {SORT_LABELS[MODEL_SORT]})")
         keys.add_row("r  or  ↑ ↓", "reverse the sort order")
         keys.add_row("Enter / q", "close")
 
@@ -2691,8 +2701,18 @@ def write_file(path, text, crlf=False):
     path.parent.mkdir(parents=True, exist_ok=True)
     if crlf:
         text = text.replace("\n", "\r\n")
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(text)
+    tmp = path.with_name(path.name + ".kurt-tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        if path.exists():
+            shutil.copymode(path, tmp)
+        os.replace(tmp, path)  # a crash mid-write can no longer leave a half-written file
+    except OSError:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
 
 
 def project_tree(limit=150):
@@ -2713,6 +2733,155 @@ def project_tree(limit=150):
 def file_cap():
     """Max characters of one file sent to the model; smaller contexts get smaller files."""
     return max(6000, min(30000, int(CTX * 2)))
+
+
+def clip_text(text, name, cap):
+    """Cut text to `cap` characters at a line boundary and say how to read the rest."""
+    if len(text) <= cap:
+        return text
+    cut = text[:cap].rsplit("\n", 1)[0]
+    shown = cut.count("\n") + 1
+    total = text.count("\n") + 1
+    return (cut + f"\n... [truncated: showing lines 1-{shown} of {total}. "
+            f"Use READ {name}:{shown + 1}-{min(total, shown + 200)} to read more]")
+
+
+def looks_binary(text):
+    return "\x00" in text[:8000]
+
+
+def project_notes():
+    """Optional KURT.md in the project root: standing instructions for this project."""
+    p = Path.cwd() / "KURT.md"
+    try:
+        if p.is_file():
+            text, _ = read_file(p)
+            return text.strip()[:4000]
+    except OSError:
+        pass
+    return ""
+
+
+def context_budget():
+    return int(CTX * 3)
+
+
+def context_chars(messages):
+    return sum(len(m["content"]) for m in messages)
+
+
+def context_percent(messages):
+    return min(999, int(100 * context_chars(messages) / max(1, context_budget())))
+
+
+def check_syntax(path, text):
+    """Return a short error message when a .py or .json file does not parse, else ''."""
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".py":
+            compile(text, str(path), "exec")
+        elif suffix == ".json":
+            json.loads(text)
+    except SyntaxError as e:
+        return f"{e.msg} (line {e.lineno})"
+    except ValueError as e:
+        return str(e)
+    return ""
+
+
+def _indent_of(line):
+    return line[: len(line) - len(line.lstrip())]
+
+
+def find_span(text, search):
+    """Locate `search` in `text`, tolerating the small whitespace slips small models make.
+
+    Returns (start, end, how, indent_fix) or (None, None, 'none'|'many', None). `indent_fix` maps
+    each indentation used in `search` to the file's indentation when the match ignored indentation."""
+    n = text.count(search)
+    if n == 1:
+        i = text.index(search)
+        return i, i + len(search), "exact", None
+    if n > 1:
+        return None, None, "many", None
+    trimmed = search.strip("\n")
+    if trimmed and trimmed != search:
+        n = text.count(trimmed)
+        if n == 1:
+            i = text.index(trimmed)
+            return i, i + len(trimmed), "trimmed", None
+        if n > 1:
+            return None, None, "many", None
+    slines = trimmed.split("\n") if trimmed else []
+    if not slines:
+        return None, None, "none", None
+    tlines = text.split("\n")
+    starts, pos = [], 0
+    for ln in tlines:
+        starts.append(pos)
+        pos += len(ln) + 1
+    k = len(slines)
+    for how, key in (("trailing whitespace", str.rstrip), ("indentation", str.strip)):
+        want = [key(s) for s in slines]
+        hits = [
+            i for i in range(len(tlines) - k + 1)
+            if all(key(tlines[i + j]) == want[j] for j in range(k))
+        ]
+        if len(hits) > 1:
+            return None, None, "many", None
+        if hits:
+            i = hits[0]
+            fix = None
+            if how == "indentation":
+                fix = {}
+                for j, s in enumerate(slines):
+                    if s.strip():
+                        fix.setdefault(_indent_of(s), _indent_of(tlines[i + j]))
+            return starts[i], starts[i + k - 1] + len(tlines[i + k - 1]), how, fix
+    return None, None, "none", None
+
+
+def reindent(block, fix):
+    """Rewrite the indentation of a replacement the way the matched file text is indented."""
+    if not fix or all(k == v for k, v in fix.items()):
+        return block
+    out = []
+    for ln in block.split("\n"):
+        if not ln.strip():
+            out.append(ln)
+            continue
+        ind = _indent_of(ln)
+        keys = [k for k in fix if ind.startswith(k)]
+        if not keys:
+            out.append(ln)
+            continue
+        key = max(keys, key=len)
+        out.append(fix[key] + ind[len(key):] + ln[len(ind):])
+    return "\n".join(out)
+
+
+def closest_snippet(text, search, limit=14):
+    """The part of the file that looks most like a SEARCH block that failed to match."""
+    import difflib
+
+    tlines = text.split("\n")
+    slines = [s for s in search.split("\n") if s.strip()]
+    if not slines or len(tlines) > 6000:
+        return ""
+    probe = slines[0].strip()
+    best, best_i = 0.0, -1
+    for i, ln in enumerate(tlines):
+        if not ln.strip():
+            continue
+        r = difflib.SequenceMatcher(None, probe, ln.strip()).ratio()
+        if r > best:
+            best, best_i = r, i
+    if best < 0.6:
+        return ""
+    end = min(len(tlines), best_i + max(len(slines), 3) + 1)
+    end = min(end, best_i + limit)
+    snippet = "\n".join(tlines[best_i:end])
+    return f"\nClosest text in the file (lines {best_i + 1}-{end}):\n{snippet}"
 
 
 def diff_panel(old, new, name, title):
@@ -2783,6 +2952,19 @@ SAFE_GIT = {"status", "log", "diff", "show", "ls-files", "blame", "rev-parse", "
 VERSION_FLAGS = {"--version", "-v", "-V", "version"}
 
 
+def _escapes_project(tok):
+    """True when an argument names a path outside the project folder."""
+    if tok.startswith("-") or not any(c in tok for c in ("/", "\\", "~")) and ".." not in tok:
+        return False
+    try:
+        p = Path(os.path.expanduser(tok))
+        full = (p if p.is_absolute() else Path.cwd() / p).resolve()
+        full.relative_to(Path.cwd().resolve())
+        return False
+    except Exception:
+        return True
+
+
 def is_safe_command(cmd):
     """True for commands that only look at things (or create empty files/folders)."""
     import shlex
@@ -2800,8 +2982,24 @@ def is_safe_command(cmd):
         if name.endswith(".exe"):
             name = name[:-4]
         args = toks[1:]
+        if name in SAFE_VIEW_COMMANDS or name == "git":
+            if any(_escapes_project(x) for x in args):
+                return False
         if name in SAFE_VIEW_COMMANDS:
-            if name == "find" and any(x in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf") for x in args):
+            if name == "find" and any(
+                x in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls") or x.startswith("-fprint")
+                for x in args
+            ):
+                return False
+            if name == "tree" and any(x == "-o" for x in args):
+                return False
+            if name in ("rg", "grep", "egrep", "fgrep") and any(
+                x.startswith(("--pre", "--hostname-bin")) for x in args
+            ):
+                return False
+            if name == "uniq" and len([x for x in args if not x.startswith("-")]) > 1:
+                return False
+            if name == "date" and any(x == "-s" or x.startswith("--set") for x in args):
                 return False
             if name == "sort" and any(x == "-o" or x.startswith("--output") for x in args):
                 return False
@@ -2810,6 +3008,8 @@ def is_safe_command(cmd):
             continue
         if name == "git":
             sub = [x for x in args if not x.startswith("-")]
+            if any(x.startswith("--output") for x in args):
+                return False
             if sub and sub[0] in SAFE_GIT:
                 continue
             return False
@@ -2833,15 +3033,27 @@ def confirm(question):
 
 # ---------------------------------------------------------------- Actions ---
 def do_read(arg):
-    p = safe_path(arg)
+    rng = re.fullmatch(r"(.+?):(\d+)-(\d+)", arg)
+    name = rng.group(1) if rng else arg
+    p = safe_path(name)
     if not p or not p.is_file():
         return f"READ {arg}: ERROR file not found (or outside project)."
     text, _ = read_file(p)
-    console.print(f"[dim]📖 read {arg} ({len(text)} chars)[/]")
+    if looks_binary(text):
+        return f"READ {arg}: ERROR this looks like a binary file, so it was not read."
     cap = file_cap()
-    if len(text) > cap:
-        text = text[:cap] + "\n... [truncated]"
-    return f"READ {arg}:\n{text}"
+    if rng:
+        lines = text.split("\n")
+        a = max(1, int(rng.group(2)))
+        b = min(len(lines), max(a, int(rng.group(3))))
+        chunk = "\n".join(lines[a - 1:b])
+        if len(chunk) > cap:
+            chunk = chunk[:cap].rsplit("\n", 1)[0]
+            b = a + chunk.count("\n")
+        console.print(f"[dim]📖 read {name} lines {a}-{b} of {len(lines)}[/]")
+        return f"READ {name} (lines {a}-{b} of {len(lines)}):\n{chunk}"
+    console.print(f"[dim]📖 read {name} ({len(text)} chars)[/]")
+    return f"READ {name}:\n{clip_text(text, name, cap)}"
 
 
 def do_edit(arg, body):
@@ -2853,19 +3065,33 @@ def do_edit(arg, body):
         return f"EDIT {arg}: ERROR no valid SEARCH/REPLACE pairs found."
     old, crlf = read_file(p)
     new = old
+    loose = set()
     for i, (s, r) in enumerate(pairs, 1):
-        n = new.count(s)
-        if n == 0:
-            return f"EDIT {arg}: ERROR SEARCH #{i} not found. It must match the file exactly. Re-READ the file."
-        if n > 1:
-            return f"EDIT {arg}: ERROR SEARCH #{i} matches {n} places. Include more context to make it unique."
-        new = new.replace(s, r, 1)
+        start, end, how, fix = find_span(new, s)
+        if start is None and how == "many":
+            return f"EDIT {arg}: ERROR SEARCH #{i} matches several places. Include more context to make it unique."
+        if start is None:
+            return (f"EDIT {arg}: ERROR SEARCH #{i} not found. It must match the file exactly. "
+                    "Re-READ the file." + closest_snippet(new, s))
+        if how not in ("exact", "trimmed"):
+            loose.add(how)
+            r = reindent(r, fix)
+        new = new[:start] + r + new[end:]
+    if new == old:
+        return f"EDIT {arg}: ERROR the replacement is identical to the existing code, nothing to change."
+    if loose:
+        console.print(f"[dim]≈ matched ignoring differences in {' and '.join(sorted(loose))}[/]")
     console.print(diff_panel(old, new, arg, "Edit"))
     if not confirm("Apply this change? (y=yes, n=no, a=yes to all)"):
-        return f"EDIT {arg}: REJECTED by user."
+        return f"EDIT {arg}: REJECTED by user. Do not propose this change again; ask what they would prefer."
+    broken_before = check_syntax(p, old)
     UNDO.append((p, old, crlf))
     write_file(p, new, crlf)
     console.print(f"[green]✔ edited {arg}[/]")
+    err = "" if broken_before else check_syntax(p, new)
+    if err:
+        console.print(f"[yellow]⚠ {escape(arg)} no longer parses: {escape(err)}[/]")
+        return f"EDIT {arg}: applied, but WARNING: the file now has a syntax error: {err}. Fix it."
     return f"EDIT {arg}: applied."
 
 
@@ -2873,18 +3099,25 @@ def do_write(arg, body):
     p = safe_path(arg)
     if not p:
         return f"WRITE {arg}: ERROR path outside project."
+    if p.is_dir():
+        return f"WRITE {arg}: ERROR that path is a folder."
     exists = p.is_file()
     old, crlf = read_file(p) if exists else ("", False)
     new = body if body.endswith("\n") else body + "\n"
     if exists:
         console.print(diff_panel(old, new, arg, "Overwrite"))
         if not confirm("Overwrite this file? (y=yes, n=no, a=yes to all)"):
-            return f"WRITE {arg}: REJECTED by user."
+            return f"WRITE {arg}: REJECTED by user. Do not propose this change again; ask what they would prefer."
     else:
         console.print(new_file_panel(arg, new))
+    broken_before = check_syntax(p, old) if exists else ""
     UNDO.append((p, old if exists else None, crlf))
     write_file(p, new, crlf)
     console.print(f"[green]✔ {'overwrote' if exists else 'created'} {escape(arg)}[/]")
+    err = "" if broken_before else check_syntax(p, new)
+    if err:
+        console.print(f"[yellow]⚠ {escape(arg)} does not parse: {escape(err)}[/]")
+        return f"WRITE {arg}: applied, but WARNING: the file has a syntax error: {err}. Fix it."
     return f"WRITE {arg}: applied."
 
 
@@ -2911,6 +3144,8 @@ def do_run(cmd):
         code = r.returncode
     except subprocess.TimeoutExpired:
         out, code = "timed out after 180s", -1
+    except KeyboardInterrupt:
+        out, code = "interrupted by the user", -2
     shown = out[:3000]
     if len(out) > 3000:
         shown += "\n… (output truncated)"
@@ -2924,28 +3159,45 @@ def do_run(cmd):
     return f"RUN {cmd}: exit code {code}\n{out}"
 
 
+PENDING_NOTES = []  # rejections the model has not heard about yet; sent with the next message
+
+
+def _outcome(result):
+    """Classify an EDIT/WRITE result: 'error', 'rejected', 'warning' or 'ok'."""
+    tail = result.split(": ", 1)[-1]
+    if tail.startswith("ERROR"):
+        return "error"
+    if tail.startswith("REJECTED"):
+        return "rejected"
+    return "warning" if "WARNING:" in tail else "ok"
+
+
 def handle_actions(text):
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
-    results = []
+    results, rejected = [], []
     for kind, arg, body in BLOCK_RE.findall(text):
         arg = arg.strip()
-        if kind == "READ":
-            results.append(do_read(arg))
-        elif kind == "EDIT":
-            r = do_edit(arg, body)
-            if "ERROR" in r:
-                console.print(f"[red]{r}[/]")
-                results.append(r)
-        elif kind == "WRITE":
-            r = do_write(arg, body)
-            if "ERROR" in r:
-                console.print(f"[red]{r}[/]")
-                results.append(r)
-        elif kind == "RUN":
-            results.append(do_run(arg or body))
+        try:
+            if kind == "READ":
+                results.append(do_read(arg))
+            elif kind in ("EDIT", "WRITE"):
+                r = do_edit(arg, body) if kind == "EDIT" else do_write(arg, body)
+                state = _outcome(r)
+                if state == "rejected":
+                    rejected.append(r)
+                elif state != "ok":
+                    if state == "error":
+                        console.print(f"[red]{escape(r)}[/]")
+                    results.append(r)
+            elif kind == "RUN":
+                results.append(do_run(arg or body))
+        except OSError as e:
+            results.append(f"{kind} {arg}: ERROR {e}")
+            console.print(f"[red]{escape(results[-1])}[/]")
     if not results:
+        PENDING_NOTES.extend(rejected)  # no follow-up needed now; the model hears it next turn
         return ""
-    return "[tool results]\n" + "\n\n".join(results)
+    return "[tool results]\n" + "\n\n".join(results + rejected)
 
 
 # ------------------------------------------------------------------- Chat ---
@@ -2955,8 +3207,8 @@ def trim(messages):
     When over budget, drop old messages down to 70% of it in ONE go. Ollama reuses its cached
     prompt as long as the start of the conversation is unchanged, so trimming rarely (instead of
     shaving one message every turn) avoids re-reading the whole prompt on every request."""
-    budget = int(CTX * 3)  # ~3 chars per token, leave headroom
-    total = sum(len(m["content"]) for m in messages)
+    budget = context_budget()  # ~3 chars per token, leave headroom
+    total = context_chars(messages)
     if total <= budget:
         return
     target = int(budget * 0.7)
@@ -2964,17 +3216,27 @@ def trim(messages):
     while total > target and len(messages) - (cut - 1) > 3:
         total -= len(messages[cut]["content"])
         cut += 1
+    dropped = cut - 1
     del messages[1:cut]
+    console.print(f"[dim]↻ dropped {dropped} old messages to fit the context window "
+                  "(/compact summarises instead of forgetting)[/]")
 
 
 def attach_mentions(text):
-    extra = []
+    extra, seen = [], set()
     cap = file_cap()
-    for m in set(re.findall(r"@([\w./\\-]+)", text)):
+    for m in re.findall(r"(?<!\S)@([\w./\\-]+)", text):
+        m = m.rstrip(".,;:")  # "see @auth.py." should still find auth.py
+        if m in seen:
+            continue
+        seen.add(m)
         p = safe_path(m)
         if p and p.is_file():
             content, _ = read_file(p)
-            extra.append(f"\n\n[Attached file {m}]\n{content[:cap]}")
+            if looks_binary(content):
+                console.print(f"[dim]skipped {m} (binary file)[/]")
+                continue
+            extra.append(f"\n\n[Attached file {m}]\n{clip_text(content, m, cap)}")
             console.print(f"[dim]📎 attached {m}[/]")
     return text + "".join(extra)
 
@@ -3157,12 +3419,77 @@ HELP = """[bold]Commands[/]
   /add <path>     put a file's contents into the conversation (or use @path in a message)
   /auto           toggle auto-accept for edits (new files and view-only commands never ask)
   /undo           revert the last applied change
+  /context        show how full the model's context window is
+  /compact        summarise the conversation so far to free up context
   /clear          forget the conversation
-  /exit           quit  (Ctrl+C while Kurt is typing stops generation)"""
+  /exit           quit  (Ctrl+C while Kurt is typing stops generation)
+
+[bold]Tip[/] put standing instructions for a project in a KURT.md file in its root folder."""
 
 
-def new_messages():
-    return [{"role": "system", "content": SYSTEM.replace("{cwd}", str(Path.cwd()))}]
+def new_messages(announce=False):
+    system = SYSTEM.replace("{cwd}", str(Path.cwd()))
+    notes = project_notes()
+    if notes:
+        system += "\nProject notes from KURT.md (the user wrote these; follow them):\n" + notes + "\n"
+        if announce:
+            console.print("[dim]📌 loaded project notes from KURT.md[/]")
+    return [{"role": "system", "content": system}]
+
+
+def context_report(messages):
+    used, budget = context_chars(messages), context_budget()
+    pct = context_percent(messages)
+    style = "green" if pct < 70 else "yellow" if pct < 90 else "red"
+    console.print(
+        f"context: [{style}]{pct}%[/] full · about {used // 3:,} of {budget // 3:,} tokens · "
+        f"{len(messages)} messages"
+    )
+    if pct >= 70:
+        console.print("[dim]Running low: /compact summarises the chat, /clear starts fresh.[/]")
+
+
+def compact_conversation(messages):
+    """Replace the middle of the conversation with a model-written summary."""
+    tail = 2 if len(messages) >= 4 and messages[-2]["role"] == "user" else 1
+    middle = messages[1:len(messages) - tail]
+    if len(middle) < 4:
+        console.print("[dim]nothing worth compacting yet[/]")
+        return
+    before = context_chars(messages)
+    parts = []
+    for m in middle:
+        who = "User" if m["role"] == "user" else "Kurt"
+        parts.append(f"{who}: {m['content'][:1500]}")
+    transcript = "\n\n".join(parts)[-max(6000, CTX * 2):]
+    prompt = (
+        "Summarise this coding session so the assistant can carry on without the full history. "
+        "List: the user's goals, files that were read or changed (and how), decisions made, "
+        "problems still open, and any facts worth remembering. Plain text, under 300 words. "
+        "Do not use @@@ blocks.\n\n" + transcript
+    )
+    try:
+        with console.status("Summarising the conversation..."):
+            summary = chat_once(MODEL, [{"role": "user", "content": prompt}], temperature=0.1,
+                                timeout=600, think=False)
+    except Exception as e:
+        console.print(f"[red]Could not summarise:[/] {escape(str(e))}")
+        return
+    summary = summary.replace("@@@", "@ @ @")
+    if not summary:
+        console.print("[red]The model returned an empty summary; nothing was changed.[/]")
+        return
+    head = messages[0]
+    rest = messages[len(messages) - tail:]
+    messages[:] = [
+        head,
+        {"role": "user", "content": f"[Summary of the earlier conversation]\n{summary}\n\n"
+                                    f"Files in this project:\n{project_tree()}"},
+        {"role": "assistant", "content": "Understood. I'll continue from that summary."},
+    ] + rest
+    after = context_chars(messages)
+    console.print(f"[green]✔ compacted[/] {before // 3:,} → {after // 3:,} tokens "
+                  f"({context_percent(messages)}% full)")
 
 
 def handle_command(line, messages):
@@ -3203,8 +3530,13 @@ def handle_command(line, messages):
                       + (" [dim](auto)[/]" if THINK is None else ""))
     elif cmd == "/files":
         console.print(project_tree(), markup=False)
+    elif cmd == "/context":
+        context_report(messages)
+    elif cmd == "/compact":
+        compact_conversation(messages)
     elif cmd == "/clear":
-        messages[:] = new_messages()
+        messages[:] = new_messages(announce=True)
+        PENDING_NOTES.clear()
         console.print("[dim]conversation cleared[/]")
     elif cmd == "/auto":
         AUTO = not AUTO
@@ -3215,7 +3547,10 @@ def handle_command(line, messages):
             console.print("[red]file not found[/]")
         else:
             text, _ = read_file(p)
-            messages.append({"role": "user", "content": f"[File {arg}]\n{text[:file_cap()]}"})
+            if looks_binary(text):
+                console.print("[red]that looks like a binary file[/]")
+                return None
+            messages.append({"role": "user", "content": f"[File {arg}]\n{clip_text(text, arg.strip(), file_cap())}"})
             messages.append({"role": "assistant", "content": f"Got it, I have {arg}."})
             console.print(f"[dim]added {arg}[/]")
     elif cmd == "/undo":
@@ -3247,7 +3582,7 @@ def _cfg_is_first_scan():
 
 
 def main():
-    global TERMINAL_UI, TIP_SHOWN
+    global TERMINAL_UI, TIP_SHOWN, CONTEXT_PCT
     if len(sys.argv) > 1 and sys.argv[1] in ("-v", "--version"):
         print(f"kurt {__version__}")
         return
@@ -3280,7 +3615,7 @@ def main():
         TIP_SHOWN = True
         save_config()
 
-    messages = new_messages()
+    messages = new_messages(announce=True)
     messages.append(
         {"role": "user", "content": f"Files in this project:\n{project_tree()}"}
     )
@@ -3297,6 +3632,7 @@ def main():
 
     try:
         while True:
+            CONTEXT_PCT = context_percent(messages)
             try:
                 line = read_input().strip()
             except (EOFError, KeyboardInterrupt):
@@ -3316,7 +3652,12 @@ def main():
                 except (KeyboardInterrupt, EOFError):
                     console.print("\n[yellow]cancelled[/]")
                 continue
-            messages.append({"role": "user", "content": attach_mentions(line)})
+            content = attach_mentions(line)
+            if PENDING_NOTES:
+                content = ("[Earlier changes the user rejected]\n" + "\n".join(PENDING_NOTES)
+                           + "\n\n" + content)
+                PENDING_NOTES.clear()
+            messages.append({"role": "user", "content": content})
             if AGENTS:
                 try:
                     if TERMINAL_UI and TERMINAL_UI.enabled:
@@ -3332,7 +3673,10 @@ def main():
                         TERMINAL_UI.set_busy(False)
                 if extra:
                     messages[-1]["content"] += extra
-            run_turn(messages)
+            try:
+                run_turn(messages)
+            except KeyboardInterrupt:
+                console.print("\n[yellow]⏹ interrupted[/]")
     finally:
         if TERMINAL_UI and TERMINAL_UI.enabled:
             TERMINAL_UI.stop()
