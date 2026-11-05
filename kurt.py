@@ -2143,6 +2143,90 @@ def community_gguf(repo):
     return install_hf_model(found[int(pick) - 1][0], "", depth=1, allow_import=False)
 
 
+GGUF_QUANT_RE = re.compile(r"(?:^|[-_.])((?:IQ|Q)\d(?:_[A-Z0-9]+)*|BF16|F16|F32)(?=[-_.]|$)", re.I)
+SHARD_RE = re.compile(r"-\d{5}-of-\d{5}\.gguf$", re.I)
+
+
+def short_local_name(repo, quant=""):
+    base = repo.split("/", 1)[-1].lower()
+    slug = re.sub(r"[^a-z0-9._-]+", "-", base).strip("-._")[:60].rstrip("-._") or "model"
+    return f"{slug}:{quant.lower()}" if quant else slug
+
+
+def pick_gguf_files(files, quant=""):
+    """Choose the GGUF file(s) for a quantization (default Q4_K_M, else the first one). -> (files, quant label)"""
+    cands = []
+    for n, sz in files:
+        base = n.rsplit("/", 1)[-1]
+        if not base.lower().endswith(".gguf") or "mmproj" in base.lower():
+            continue
+        m = GGUF_QUANT_RE.search(base[:-5])
+        if not m and "/" in n:
+            m = GGUF_QUANT_RE.search(n.rsplit("/", 2)[-2])
+        cands.append((n, sz, m.group(1).upper() if m else ""))
+    if quant:
+        label = quant.upper()
+    elif any(c[2] == "Q4_K_M" for c in cands):
+        label = "Q4_K_M"
+    else:
+        label = next((c[2] for c in cands if c[2]), "")
+    chosen = [c for c in cands if c[2] == label] if label else cands[:1]
+    return [(n, sz) for n, sz, _ in chosen], label
+
+
+def import_gguf_direct(repo, files, quant=""):
+    """Download one GGUF file from the repo and import it under a short local name. -> model name or None."""
+    if files is None:
+        try:
+            files = hf_repo_files(repo)
+        except Exception as e:
+            console.print(f"[red]Could not read the repo:[/] {escape(str(e))}")
+            return None
+    chosen, label = pick_gguf_files(files, quant)
+    if not chosen:
+        avail = gguf_quants(files)
+        console.print(
+            f"[red]No GGUF file matches {escape(quant or 'the default quantization')}.[/]"
+            + (f" Available: {', '.join(avail)}" if avail else "")
+        )
+        return None
+    if len(chosen) > 1 or SHARD_RE.search(chosen[0][0]):
+        console.print(
+            "[red]This quantization is split into several files,[/] which Ollama can't import directly. "
+            "Merge them with llama.cpp's llama-gguf-split --merge, or pick another quantization."
+        )
+        return None
+    total = chosen[0][1]
+    dest = MODELS_DIR / re.sub(r"[^A-Za-z0-9._-]+", "__", repo)
+    dest.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(dest).free
+    console.print(
+        f"[yellow]Ollama rejects this repo's long name,[/] so Kurt will download "
+        f"{escape(chosen[0][0])} ([bold]{fmt_bytes(total)}[/]) to {escape(str(dest))} "
+        f"and import it under a short name ([dim]{fmt_bytes(free)} free[/])."
+    )
+    if total * 1.1 > free:
+        console.print("[yellow]Warning: that looks like more than your free disk space.[/]")
+    if Prompt.ask("Continue?", choices=["y", "n"], default="y", console=console) != "y":
+        return None
+    if not hf_download_repo(repo, chosen, dest):
+        return None
+    name = short_local_name(repo, label)
+    modelfile = dest / "Modelfile"
+    modelfile.write_text(f"FROM {dest / chosen[0][0]}\n", encoding="utf-8")
+    exe = shutil.which("ollama") or "ollama"
+    console.print(f"[bold]Importing into Ollama as[/] {escape(name)} ...")
+    if not _run_visible([exe, "create", name, "-f", str(modelfile)]):
+        console.print(
+            "[red]ollama create failed.[/] The architecture may not be supported by your Ollama version "
+            "(update Ollama, or try another quantization)."
+        )
+        return None
+    if Prompt.ask("Delete the downloaded file to free disk space?", choices=["y", "n"], default="y", console=console) == "y":
+        shutil.rmtree(dest, ignore_errors=True)
+    return name
+
+
 def install_hf_model(repo, quant="", depth=0, allow_import=True):
     """Get any Hugging Face model into Ollama. Returns the Ollama model name, or None."""
     try:
@@ -2165,6 +2249,8 @@ def install_hf_model(repo, quant="", depth=0, allow_import=True):
         console.print(f"[bold]Downloading[/] {escape(name)} ...")
         if pull_model(name):
             return name
+        if "invalid model name" in LAST_PULL_ERROR.lower():
+            return import_gguf_direct(repo, files, quant)
         if fm is not None:
             return None
         if "gguf" not in LAST_PULL_ERROR.lower() and "llama.cpp" not in LAST_PULL_ERROR.lower():
