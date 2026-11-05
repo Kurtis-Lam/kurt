@@ -5,6 +5,7 @@ Run `kurt` in any project folder. Kurt can read your files and propose
 edits / new files / shell commands. Nothing is changed without your OK.
 """
 import contextlib
+import http.client
 import json
 import os
 import platform
@@ -1957,13 +1958,17 @@ def hf_download_repo(repo, files, dest):
     for idx, (name, size) in enumerate(files, 1):
         path = dest / name
         path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + ".part")
+        if path.exists() and size and path.stat().st_size < size:
+            path.replace(part)
         if path.exists() and (not size or path.stat().st_size == size):
             done_before += size
             continue
-        part = path.with_name(path.name + ".part")
         url = f"{HF_BASE}/{repo}/resolve/main/{urllib.parse.quote(name)}"
-        for attempt in range(6):
+        fails = 0
+        while True:
             pos = part.stat().st_size if part.exists() else 0
+            start_pos = pos
             hdrs = {"Range": f"bytes={pos}-"} if pos else {}
             try:
                 req = urllib.request.Request(url, headers=_hf_headers(hdrs))
@@ -1985,6 +1990,8 @@ def hf_download_repo(repo, files, dest):
                                 f"  [{idx}/{len(files)}] {name[:34]:<34} {pct:5.1f}%  "
                                 f"{fmt_bytes(have)} / {fmt_bytes(total)}  {fmt_bytes(rate)}/s"
                             )
+                if size and part.stat().st_size < size:
+                    raise OSError("connection closed before the download finished")
                 part.replace(path)
                 break
             except urllib.error.HTTPError as e:
@@ -2000,12 +2007,14 @@ def hf_download_repo(repo, files, dest):
                 else:
                     console.print(f"[red]Download error:[/] HTTP {e.code} on {escape(name)}")
                 return False
-            except (urllib.error.URLError, OSError, TimeoutError) as e:
-                if attempt == 5:
+            except (urllib.error.URLError, OSError, TimeoutError, http.client.HTTPException) as e:
+                grew = part.exists() and part.stat().st_size > start_pos
+                fails = 0 if grew else fails + 1
+                if fails >= 6:
                     _progress_end()
                     console.print(f"[red]Download failed:[/] {escape(str(e))} (run again to resume)")
                     return False
-                time.sleep(2 + attempt * 2)
+                time.sleep(2 + min(fails, 5) * 2)
         done_before += size
     _progress_end()
     return True
@@ -2210,6 +2219,13 @@ def import_gguf_direct(repo, files, quant=""):
     if Prompt.ask("Continue?", choices=["y", "n"], default="y", console=console) != "y":
         return None
     if not hf_download_repo(repo, chosen, dest):
+        return None
+    got = (dest / chosen[0][0]).stat().st_size
+    if total and got != total:
+        console.print(
+            f"[red]Downloaded file is incomplete[/] ({fmt_bytes(got)} of {fmt_bytes(total)}). "
+            "Run it again to resume."
+        )
         return None
     name = short_local_name(repo, label)
     modelfile = dest / "Modelfile"
