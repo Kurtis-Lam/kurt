@@ -80,16 +80,20 @@ KURT WEB WORKSPACE RULES:
 
 KURT_IDENTITY_INSTRUCTIONS = r"""
 KURT IDENTITY AND SELF-CONFIGURATION:
-You are Kurt. You are allowed to discuss and help revise the Kurt-specific system prompt
-that configures this local application. The user can inspect it in Settings and can apply
-your proposed replacement through a review card. Distinguish this editable Kurt prompt
-from any hidden instructions belonging to other platforms. Never disclose credentials.
+You are Kurt, the assistant configured by this local application. The user owns this local
+instance and may inspect, quote, review, and revise the Kurt-controlled prompt. If asked for
+your system prompt, provide the exact Kurt-controlled prompt supplied by the application;
+the /system-prompt command returns the complete active prompt directly. Do not claim that
+Kurt's own prompt is confidential. Clearly distinguish it from provider-owned model or
+platform instructions, which are not available to this application. Never disclose API keys,
+credentials, or other secrets. Summarize decisions, assumptions, alternatives, and verification
+in user-facing rationale; do not reveal private chain-of-thought or hidden scratchpad tokens.
 """
 
 EFFORT_INSTRUCTIONS = {
     "flash": "FLASH EFFORT: prioritize speed and concise answers; request no reasoning where the provider supports disabling it. Some reasoning models enforce internal reasoning regardless of client settings.",
-    "thinking": "THINKING EFFORT: request medium reasoning where the provider supports effort controls; show only concise progress updates in the work log, never private chain-of-thought.",
-    "expert": "EXPERT EFFORT: request high/deep reasoning where the provider supports effort controls and perform careful verification; show progress and validation evidence, never private chain-of-thought.",
+    "thinking": "THINKING EFFORT: request medium reasoning where the provider supports effort controls. Include a useful user-facing rationale summary covering key observations, decisions, assumptions, and checks. Never expose private chain-of-thought or hidden scratchpad tokens.",
+    "expert": "EXPERT EFFORT: request high/deep reasoning where the provider supports effort controls and perform careful verification. Include a detailed user-facing rationale summary covering key observations, decisions, assumptions, alternatives, verification evidence, and remaining uncertainty. Never expose private chain-of-thought or hidden scratchpad tokens.",
 }
 
 NORMAL_MODE_INSTRUCTIONS = r"""
@@ -116,6 +120,10 @@ SYSTEM_PROMPT_ACTION_RE = re.compile(r"@@@\s*SYSTEM_PROMPT\s*\n(.*?)\n?@@@\s*END
 WEB_ACTION_RE = re.compile(
     r"@@@\s*(?:RUN|SEARCH|SYSTEM_PROMPT)\b[^\n]*\n[\s\S]*?@@@\s*END", re.I
 )
+SYSTEM_PROMPT_REQUEST_RE = re.compile(
+    r"^\s*(?:/system-prompt|(?:what\s+is|what's)\s+(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt|(?:show|share|reveal|print|display|quote|give)\s+(?:me\s+)?(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt)\s*[?!.\s]*$",
+    re.I,
+)
 
 
 HTML_PAGE = r'''<!doctype html>
@@ -129,8 +137,8 @@ HTML_PAGE = r'''<!doctype html>
 :root{color-scheme:dark;--bg:#0e1511;--side:#0a100d;--panel:#141e19;--raise:#1c2922;--line:#22302a;--line2:#33463c;--text:#e6efe9;--muted:#8d9e94;--green:#3dd66e;--green-ink:#05200e;--green-soft:rgba(61,214,110,.12);--danger:#ff8d8d;--code:#0a110d;--shadow:0 18px 50px rgba(0,0,0,.4);--sans:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--serif:"Iowan Old Style","Palatino Linotype",Palatino,Charter,Georgia,"Times New Roman",serif;--mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace}
 :root[data-theme=light]{color-scheme:light;--bg:#f6f9f6;--side:#ebf1ec;--panel:#fff;--raise:#e4ece5;--line:#d8e2da;--line2:#bfcec3;--text:#16231b;--muted:#5b6c61;--green:#157f3c;--green-ink:#fff;--green-soft:rgba(21,127,60,.1);--danger:#b3261e;--code:#eff4ef;--shadow:0 16px 40px rgba(22,35,27,.14)}
 *{box-sizing:border-box;scrollbar-color:var(--line2) transparent}
-html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--text);font:14.5px/1.55 var(--sans);overflow:hidden;-webkit-font-smoothing:antialiased}
+html{min-height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:14.5px/1.55 var(--sans);overflow-x:hidden;overflow-y:auto;-webkit-font-smoothing:antialiased}
 button,input,textarea,select{font:inherit;color:inherit}
 button{cursor:pointer;border:1px solid var(--line2);background:var(--raise);border-radius:8px;padding:7px 12px;transition:background .15s,border-color .15s,color .15s,filter .15s}
 button:hover{border-color:var(--green)}
@@ -150,8 +158,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .logo svg{width:18px;height:14.4px;display:block}
 .mark{width:18px;height:14.4px;color:var(--green);display:block;flex:none}
 .mark.xl{width:48px;height:38.4px;margin:0 auto 16px}
-.app{height:100vh;height:100dvh;display:grid;grid-template-columns:268px minmax(0,1fr)}
-.sidebar{background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;padding:12px 10px;gap:2px}
+.app{min-height:100vh;min-height:100dvh;display:grid;grid-template-columns:268px minmax(0,1fr)}
+.sidebar{position:sticky;top:0;height:100vh;height:100dvh;align-self:start;background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;padding:12px 10px;gap:2px}
 .brand{display:flex;align-items:center;gap:10px;padding:4px 8px 14px}
 .brand b{font-size:17px;letter-spacing:-.01em;font-weight:650}
 .nav-btn{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:transparent;border:0;border-radius:9px;padding:8px 10px;color:var(--text)}
@@ -178,7 +186,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .side-bottom{border-top:1px solid var(--line);padding-top:8px;display:grid;gap:2px}
 .local-note{font-size:12px;color:var(--muted);padding:6px 10px 0}
 .status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:var(--green);margin-right:7px}
-.stage{display:grid;grid-template-rows:auto 2px minmax(0,1fr);min-width:0;min-height:0}
+.stage{display:grid;grid-template-rows:auto 2px auto;align-content:start;min-width:0;min-height:100vh;min-height:100dvh}
 .topbar{display:flex;align-items:center;gap:6px;padding:8px 16px;min-height:52px;background:var(--bg)}
 .titles{flex:1;min-width:0;padding-left:4px}
 .chat-title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -190,8 +198,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .download-fill{height:100%;width:0;background:var(--green);transition:width .25s}
 .download-caption{position:absolute;right:20px;top:9px;z-index:6;font-size:12px;background:var(--panel);border:1px solid var(--line2);border-radius:999px;padding:3px 11px;box-shadow:var(--shadow)}
 .download-caption:empty{display:none}
-.main{min-width:0;min-height:0;display:flex;flex-direction:column}
-.messages{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:24px max(20px,calc((100% - 760px)/2)) 12px}
+.main{min-width:0;min-height:calc(100vh - 54px);min-height:calc(100dvh - 54px);display:flex;flex-direction:column}
+.messages{flex:0 0 auto;overflow:visible;overscroll-behavior:contain;padding:24px max(20px,calc((100% - 760px)/2)) 12px}
 .main.empty{justify-content:center;padding-bottom:7vh}
 .main.empty .messages{flex:0 0 auto;overflow:visible;padding:0 20px}
 .welcome{text-align:center;padding-bottom:22px}
@@ -235,7 +243,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 @keyframes shimmer{from{background-position:100% 0}to{background-position:-100% 0}}
 .codebox{background:var(--code);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:12px 0}
 .codehead{display:flex;justify-content:space-between;align-items:center;padding:5px 6px 5px 12px;border-bottom:1px solid var(--line);color:var(--muted);font:12px var(--mono)}
-.codebox pre{margin:0;padding:14px;overflow:auto;max-height:480px;white-space:pre;font:13px/1.6 var(--mono)}
+.codebox pre{margin:0;padding:14px;overflow-x:auto;overflow-y:visible;max-height:none;white-space:pre;font:13px/1.6 var(--mono)}
 .copy-mini{font-size:12px;padding:3px 8px;background:transparent;border-color:transparent;color:var(--muted)}
 .copy-mini:hover{color:var(--text)}
 .artifact{margin:14px 0;border:1px solid var(--line2);background:var(--panel);border-radius:12px;overflow:hidden;font-family:var(--sans)}
@@ -266,18 +274,21 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .mode-pill{max-width:112px;min-width:84px;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:9px;padding:5px 7px;font-size:12px}
 .mode-pill:hover{color:var(--text);border-color:var(--green)}
 .mode-pill option{background:var(--panel);color:var(--text)}
-.work-log{margin:0 0 10px;border:1px solid var(--line);border-radius:9px;background:var(--bg);overflow:hidden}
+.work-log{margin:0 0 12px;border:1px solid var(--line);border-radius:9px;background:var(--bg);overflow:visible}
 .work-log[hidden]{display:none}
 .work-log-head{display:flex;align-items:center;gap:7px;width:100%;padding:7px 10px;border:0;border-radius:0;background:transparent;color:var(--muted);text-align:left;font-size:12.5px}
 .work-log-head:hover{color:var(--text);background:var(--raise)}
-.work-log-head .chev{width:14px;height:14px;transition:transform .15s;transform:rotate(-90deg)}
-.work-log.open .work-log-head .chev{transform:rotate(0)}
-.work-log-body{display:none;padding:3px 12px 9px 31px;color:var(--muted);font:12px/1.6 var(--sans);white-space:pre-wrap;overflow-wrap:anywhere;max-height:210px;overflow:auto}
-.work-log.open .work-log-body{display:block}
-.work-step{padding:3px 0;border-top:1px solid var(--line)}
+.work-log-head .chev{width:14px;height:14px;transition:transform .15s}
+.work-log:not(.open) .work-log-head .chev{transform:rotate(-90deg)}
+.work-log-body{display:block;padding:3px 12px 9px 31px;color:var(--muted);font:12.5px/1.65 var(--sans);white-space:pre-wrap;overflow-wrap:anywhere}
+.work-log:not(.open) .work-log-body{display:none}
+.work-step{padding:6px 0;border-top:1px solid var(--line);color:var(--muted)}
 .work-step:first-child{border-top:0}
-.work-step.ok{color:var(--green)}
-.work-step.fail{color:var(--danger)}
+.work-step summary{cursor:pointer;color:var(--text);font-weight:550}
+.work-step summary::marker{color:var(--muted)}
+.work-step.ok summary{color:var(--green)}
+.work-step.fail summary{color:var(--danger)}
+.work-detail{padding:5px 0 2px 17px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere;font-weight:400}
 .send{width:34px;height:34px;padding:0;border-radius:50%;display:grid;place-items:center;background:var(--green);color:var(--green-ink);border-color:var(--green);margin-left:2px}
 .send:hover{filter:brightness(1.08);border-color:var(--green)}
 .send:disabled{background:var(--raise);color:var(--muted);border-color:var(--line2);opacity:.7;filter:none}
@@ -379,6 +390,56 @@ body.nav-open .scrim{display:block;position:fixed;inset:0;background:rgba(4,10,7
 .settings-panel-area{padding:17px 15px 22px}
 }
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+
+body.compact-scroll{height:100vh;height:100dvh;overflow:hidden}
+body.compact-scroll .app{height:100vh;height:100dvh;min-height:0}
+body.compact-scroll .sidebar{height:100vh;height:100dvh}
+body.compact-scroll .stage{height:100vh;height:100dvh;min-height:0;grid-template-rows:auto 2px minmax(0,1fr);align-content:stretch}
+body.compact-scroll .main{min-height:0;overflow:hidden}
+body.compact-scroll .messages{min-height:0;flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain}
+body.compact-scroll .main.empty{min-height:0}
+body.compact-scroll .main.empty .messages{flex:0 0 auto;overflow:visible}
+body.compact-scroll .composer-wrap{flex-shrink:0}
+
+/* Chat + artifact split view */
+.main{display:flex;flex-direction:row;align-items:stretch;justify-content:flex-start;min-height:calc(100vh - 54px);min-height:calc(100dvh - 54px);padding-bottom:0}
+.chat-area{display:flex;flex:1 1 100%;flex-direction:column;min-width:0;min-height:calc(100vh - 54px);min-height:calc(100dvh - 54px)}
+.main.has-artifacts .chat-area{flex:0 0 50%;width:50%;max-width:50%}
+.artifact-pane{display:none;flex:1 1 50%;min-width:0;max-width:50%;min-height:calc(100vh - 54px);min-height:calc(100dvh - 54px);overflow-y:auto;overscroll-behavior:contain;padding:14px 18px 24px;background:var(--side);border-left:1px solid var(--line)}
+.main.has-artifacts .artifact-pane{display:flex;flex-direction:column}
+.artifact-pane-head{position:sticky;top:-14px;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:10px;margin:-14px -18px 14px;padding:15px 18px 12px;background:var(--side);border-bottom:1px solid var(--line)}
+.artifact-pane-head>div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.artifact-pane-head strong{font-size:13px;font-weight:650}
+.artifact-pane-count{color:var(--muted);font-size:11.5px}
+.artifact-pane-content{display:grid;align-content:start;gap:13px;min-width:0}
+.artifact-pane .artifact{margin:0;min-width:0}
+.artifact-pane .artifact-top{width:100%;text-align:left;color:var(--text);background:transparent;border:0;border-radius:0}
+.artifact-pane .artifact-body .codebox pre{max-height:48vh;overflow:auto}
+.main.has-artifacts .messages{padding:24px 20px 12px}
+.main.has-artifacts .message{max-width:100%}
+.main.has-artifacts .composer-wrap{padding-left:18px;padding-right:18px}
+.main.has-artifacts .composer,.main.has-artifacts .compose-hint,.main.has-artifacts .chips{max-width:100%}
+.main.empty{justify-content:flex-start;padding-bottom:0}
+.main.empty .chat-area{justify-content:flex-start}
+.main.empty .messages{display:flex;flex:1 1 auto;min-height:0;align-items:center;justify-content:center;overflow:visible;padding:0 20px}
+.main.empty .welcome{padding-bottom:0}
+.main.empty .chips{order:2;flex:0 0 auto;margin-top:8px;margin-bottom:4px}
+.main.empty .composer-wrap{order:3;flex:0 0 auto;margin-top:0}
+.main.empty .to-bottom{display:none}
+body.compact-scroll .main{min-height:0;height:100%;overflow:hidden}
+body.compact-scroll .chat-area{min-height:0;height:100%;overflow:hidden}
+body.compact-scroll .messages{min-height:0;flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain}
+body.compact-scroll .main.empty .messages{flex:1 1 auto;overflow-y:auto}
+body.compact-scroll .artifact-pane{min-height:0;height:100%;overflow-y:auto}
+@media(max-width:900px){.main.has-artifacts .messages{padding-left:14px;padding-right:14px}.artifact-pane{padding-left:12px;padding-right:12px}.artifact-pane-head{margin-left:-12px;margin-right:-12px;padding-left:12px;padding-right:12px}}
+@media(max-width:700px){
+.main.has-artifacts{flex-direction:column}
+.main.has-artifacts .chat-area{flex:1 1 auto;width:100%;max-width:none}
+.main.has-artifacts .artifact-pane{flex:0 0 auto;width:100%;max-width:none;min-height:45vh;max-height:70vh;border-left:0;border-top:1px solid var(--line)}
+.artifact-pane .artifact-body .codebox pre{max-height:42vh}
+body.compact-scroll .main.has-artifacts .chat-area{flex:1 1 60%;height:auto;min-height:0}
+body.compact-scroll .main.has-artifacts .artifact-pane{flex:0 0 40%;height:auto;min-height:0;max-height:none}
+}
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -395,6 +456,7 @@ body.nav-open .scrim{display:block;position:fixed;inset:0;background:rgba(4,10,7
 <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></symbol>
 <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
 <symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></symbol>
+<symbol id="i-scroll" viewBox="0 0 24 24"><path d="M8 4v16M5 7l3-3 3 3M5 17l3 3 3-3M16 6h4M16 12h4M16 18h4"/></symbol>
 </svg>
 <div class="scrim" id="scrim"></div>
 <div class="app">
@@ -413,12 +475,15 @@ body.nav-open .scrim{display:block;position:fixed;inset:0;background:rgba(4,10,7
 <header class="topbar">
 <button class="icon-btn menu-btn" id="menuBtn" aria-label="Open menu"><svg class="ic"><use href="#i-menu"/></svg></button>
 <div class="titles"><div id="chatTitle" class="chat-title">New chat</div><div id="chatMeta" class="chat-meta"></div></div>
+<button class="icon-btn" id="scrollModeBtn" title="Enable compact internal scrolling" aria-label="Enable compact internal scrolling" aria-pressed="false"><svg class="ic"><use href="#i-scroll"/></svg></button>
 <button class="icon-btn" id="clearChat" title="Clear conversation messages" aria-label="Clear conversation messages"><svg class="ic"><use href="#i-trash"/></svg></button>
 <button class="icon-btn" id="themeBtn" title="Switch colour theme" aria-label="Switch colour theme"><svg class="ic"><use href="#i-theme"/></svg></button>
 </header>
 <div class="download-strip" title="Background model download"><div id="downloadFill" class="download-fill"></div><div id="downloadCaption" class="download-caption"></div></div>
 <main class="main empty" id="main">
+<section class="chat-area" id="chatArea">
 <div id="messages" class="messages"></div>
+<div class="chips" id="chips"></div>
 <div class="composer-wrap">
 <button class="to-bottom" id="toBottom" aria-label="Scroll to latest message" title="Scroll to latest"><svg class="ic"><use href="#i-down"/></svg></button>
 <div class="composer">
@@ -434,7 +499,11 @@ body.nav-open .scrim{display:block;position:fixed;inset:0;background:rgba(4,10,7
 </div>
 <div class="compose-hint" id="composeHint">Kurt can make mistakes. Files are staged in this chat’s isolated workspace. Project files stay unchanged unless you explicitly enable and apply changes.</div>
 </div>
-<div class="chips" id="chips"></div>
+</section>
+<aside class="artifact-pane" id="artifactPane" aria-label="Generated files and review cards">
+<div class="artifact-pane-head"><div><strong>Generated files &amp; cards</strong><span class="artifact-pane-count" id="artifactCount">0 items</span></div></div>
+<div class="artifact-pane-content" id="artifactPaneContent"></div>
+</aside>
 </main>
 </div></div>
 <div class="modal-backdrop" id="settingsModal"><div class="modal settings-modal"><div class="modal-head"><h2>Kurt settings</h2><button class="ghost" data-close="settingsModal">Close</button></div><div class="modal-body settings-body">
@@ -450,7 +519,7 @@ body.nav-open .scrim{display:block;position:fixed;inset:0;background:rgba(4,10,7
 <h3>General</h3><div class="inline-note">Choose the model Kurt uses by default and configure the project workspace.</div>
 <div class="settings-grid"><div class="field"><label>Active model</label><select id="settingsModel"></select></div><div class="field"><label>Project directory (read-only by default)</label><input id="projectRoot" placeholder="/Users/you/project"></div></div>
 <label class="check-row"><input id="allowProjectWrites" type="checkbox"> Allow applying generated files to the project (each file still requires confirmation)</label>
-<div class="field"><label>System prompt</label><textarea id="systemPrompt" style="min-height:180px"></textarea><div class="inline-note">Kurt can review and propose edits to this prompt in chat. Proposed prompt changes appear as a review card and require your approval before saving.</div></div>
+<div class="field"><label>System prompt</label><textarea id="systemPrompt" style="min-height:180px"></textarea><div class="inline-note">Kurt can review and propose edits to this prompt in chat. Proposed prompt changes appear as a review card and require your approval before saving. Type /system-prompt in chat to display the exact active Kurt prompt for the selected mode.</div></div>
 <div class="row"><button class="primary" id="saveSettings">Save settings</button><button id="reloadSettings">Reload from disk</button></div>
 </section>
 <section class="settings-panel" id="localModelsSection" data-settings-panel="local-models">
@@ -475,6 +544,7 @@ body.nav-open .scrim{display:block;position:fixed;inset:0;background:rgba(4,10,7
 const TOKEN='__TOKEN__';const HINT='Kurt can make mistakes. Attachments are copied into an isolated chat workspace; the project stays unchanged unless you explicitly apply a file.';let state={models:[],providers:[],keys:[],remoteModels:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',effort:'thinking',mode:'normal'};
 const $=id=>document.getElementById(id);const api=async(path,body)=>{const res=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:body?JSON.stringify(body):undefined});const data=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(data.error||res.statusText);return data};
 function toast(msg){const el=$('toast');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600)}
+function setScrollMode(enabled){const compact=!!enabled;document.body.classList.toggle('compact-scroll',compact);const b=$('scrollModeBtn');if(b){b.setAttribute('aria-pressed',String(compact));b.title=compact?'Use normal page scrolling':'Enable compact internal scrolling';b.setAttribute('aria-label',b.title)}try{localStorage.setItem('kurt-compact-scroll',compact?'1':'0')}catch(e){}}
 function modelLabel(m){return `${m.label||m.name||m.model} · ${m.provider}${m.current?' · active':''}`}
 function fillModels(){const html=state.models.map(m=>`<option value="${esc(m.ref)}">${esc(modelLabel(m))}</option>`).join('');$('topModel').innerHTML=html||'<option>No models configured</option>';$('settingsModel').innerHTML=html||'<option>No models configured</option>';if(state.settings.model){$('topModel').value=state.settings.model;$('settingsModel').value=state.settings.model}renderLocalModels()}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -489,12 +559,12 @@ function renderMarkdown(src){src=String(src||'');return src.split(/(```[^\n]*\n[
 function splitThink(raw,streaming){let think='',answer='',open=false;const closer=/<\/think(?:ing)?>/i.exec(raw),opener=/<think(?:ing)?>/i.exec(raw);if(closer&&(!opener||closer.index<opener.index)){think+=raw.slice(0,closer.index)+'\n';raw=raw.slice(closer.index+closer[0].length)}while(raw.length){const m=/<think(?:ing)?>/i.exec(raw);if(!m){answer+=raw;break}answer+=raw.slice(0,m.index);const after=raw.slice(m.index+m[0].length);const c=/<\/think(?:ing)?>/i.exec(after);if(!c){think+=after;open=true;break}think+=after.slice(0,c.index)+'\n';raw=after.slice(c.index+c[0].length)}answer=answer.replace(/^\s+/,'');if(streaming)answer=answer.replace(/<\/?(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?$/i,'');return{think:think.trim(),answer,open}}
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
 function bindCopy(root){root.querySelectorAll('[data-copy-code]').forEach(b=>b.onclick=()=>{const code=b.closest('.codebox').querySelector('code');navigator.clipboard.writeText(code?code.textContent:'').then(()=>toast('Code copied'))})}
-function thinkBlock(){const d=document.createElement('div');d.className='think work-log';d.hidden=true;d.innerHTML='<button class="work-log-head" type="button" aria-expanded="false"><svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Thinking & progress</span></button><div class="work-log-body"></div>';d.querySelector('.work-log-head').onclick=()=>{const open=d.classList.toggle('open');d.querySelector('.work-log-head').setAttribute('aria-expanded',String(open))};return d}
-function setThink(node,entries){const t=node.querySelector('.work-log');if(!t)return;const items=Array.isArray(entries)?entries:[];if(!items.length){t.hidden=true;return}t.hidden=false;const body=t.querySelector('.work-log-body');body.innerHTML='';items.forEach(item=>{const row=document.createElement('div');row.className='work-step'+(item.ok===true?' ok':item.ok===false?' fail':'');row.textContent=typeof item==='string'?item:(item.text||'');body.appendChild(row)});t.querySelector('.think-label').textContent='Thinking & progress · '+items.length+' step(s)'}
-function pushWorkStep(node,text,ok){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok)return;entries.push({text,ok});if(entries.length>40)entries.shift();setThink(node,entries)}
+function thinkBlock(){const d=document.createElement('div');d.className='think work-log open';d.hidden=true;d.innerHTML='<button class="work-log-head" type="button" aria-expanded="true"><svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Reasoning summaries & execution trace</span></button><div class="work-log-body"></div>';d.querySelector('.work-log-head').onclick=()=>{const open=d.classList.toggle('open');d.querySelector('.work-log-head').setAttribute('aria-expanded',String(open))};return d}
+function setThink(node,entries){const t=node.querySelector('.work-log');if(!t)return;const items=Array.isArray(entries)?entries:[];if(!items.length){t.hidden=true;return}t.hidden=false;const head=t.querySelector('.work-log-head');const body=t.querySelector('.work-log-body');const initialized=t.dataset.initialized==='1';const parentOpen=initialized?t.classList.contains('open'):true;const childStates=new Map(Array.from(body.querySelectorAll('details.work-step')).map(row=>[row.querySelector('summary')?.textContent,row.open]));if(!initialized)t.dataset.initialized='1';t.classList.toggle('open',parentOpen);head.setAttribute('aria-expanded',String(parentOpen));body.innerHTML='';items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const summary=String(data.text||'Progress update');const detail=String(data.detail||'');if(detail&&detail!==summary){const row=document.createElement('details');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');row.open=childStates.has(summary)?childStates.get(summary):true;const label=document.createElement('summary');label.textContent=summary;const contents=document.createElement('div');contents.className='work-detail';contents.textContent=detail;row.append(label,contents);body.appendChild(row)}else{const row=document.createElement('div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');row.textContent=summary;body.appendChild(row)}});t.querySelector('.think-label').textContent='Reasoning summaries & execution trace · '+items.length+' step(s)'}
+function pushWorkStep(node,text,ok,detail){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok&&last.detail===detail)return;entries.push({text,ok,detail:detail||''});if(entries.length>60)entries.shift();setThink(node,entries)}
 function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const t=node.querySelector('.work-log');if(t)t.classList.remove('live')}
 let follow=true;
-function scrollEnd(force){const m=$('messages');if(force||follow)m.scrollTop=m.scrollHeight}
+function scrollEnd(force){if(!force&&!follow)return;if(document.body.classList.contains('compact-scroll')){const m=$('messages');m.scrollTop=m.scrollHeight}else{window.scrollTo({top:document.documentElement.scrollHeight,behavior:'auto'})}}
 function setEmpty(on){$('main').classList.toggle('empty',on);if(on)$('toBottom').classList.remove('show')}
 function setTitle(title,meta){$('chatTitle').textContent=title||'New chat';$('chatMeta').textContent=meta||''}
 function autosize(){const t=$('prompt');t.style.height='auto';t.style.height=Math.min(t.scrollHeight,220)+'px'}
@@ -502,10 +572,12 @@ function updateSend(){$('sendBtn').disabled=!state.busy&&!$('prompt').value.trim
 function hint(){const base=state.contextCount?state.contextCount+' item(s) in this chat’s isolated workspace':HINT;$('composeHint').textContent=state.mode==='code'?base+' Code mode can run approved developer checks in a per-chat Python venv; a venv is not a full operating-system sandbox.':base}
 function setBusy(b){state.busy=b;const btn=$('sendBtn');btn.querySelector('use').setAttribute('href',b?'#i-stop':'#i-up');btn.title=b?'Stop response':'Send message';btn.setAttribute('aria-label',btn.title);updateSend()}
 function cancelRun(){if(state.abort)state.abort.abort();state.abort=null;state.run++;setBusy(false)}
-function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<think)/i.test(String(content||''))){safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.'}wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user'){bubble.textContent=content}else{bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button></div>');bubble.querySelector('.content').innerHTML=renderMarkdown(safeContent);bindCopy(wrap);setThink(wrap,extra?.worklog||[]);wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];const slot=bubble.querySelector('.artifacts');(artifacts||[]).forEach(a=>slot.appendChild(artifactCard(a)));bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
-function artifactCard(a){const promptCard=a.kind==='system_prompt';const card=document.createElement('div');card.className='artifact'+(a.validation?.ok?'':' bad');card.innerHTML=`<div class="artifact-top"><div class="file-icon"><svg class="ic"><use href="#i-file"/></svg></div><div class="file-name">${esc(a.path)}</div><div class="file-check">${esc(a.validation?.message||'Saved in temporary workspace')}</div><span class="artifact-chev"><svg class="ic"><use href="#i-chev"/></svg></span></div><div class="artifact-body"><div class="codebox"><div class="codehead"><span>${promptCard?'SYSTEM PROMPT':esc((a.path.split('.').pop()||'FILE').toUpperCase())}</span><button class="copy-mini copy-artifact">Copy</button></div><pre><code></code></pre></div><div class="artifact-actions"><button class="copy-artifact">Copy</button>${promptCard?'<button class="primary apply-prompt">Apply prompt to Kurt</button>':'<button class="download-artifact">Download file</button><button class="primary apply-artifact">Apply to project</button>'}</div></div>`;card.querySelector('code').textContent=a.content;card.querySelector('.artifact-top').onclick=()=>card.classList.toggle('open');card.querySelectorAll('.copy-artifact').forEach(b=>b.onclick=()=>navigator.clipboard.writeText(a.content).then(()=>toast('Content copied')));if(promptCard){card.querySelector('.apply-prompt').onclick=async()=>{if(!confirm('Replace Kurt’s editable system prompt with this proposed version?'))return;try{await api('/api/settings',{system_prompt:a.content});await refreshBootstrap();toast('Kurt system prompt updated')}catch(e){toast(e.message)}}}else{card.querySelector('.download-artifact').onclick=()=>{const blob=new Blob([a.content],{type:'application/octet-stream'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=a.path.split('/').pop();link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};card.querySelector('.apply-artifact').onclick=async()=>{if(!a.validation?.ok){toast('Fix validation errors before applying');return}if(!state.settings.allow_project_writes){toast('Enable project writes in Settings first');return}const overwrite=confirm(`Apply ${a.path} to ${state.projectRoot}?${a.exists?'\nThis will overwrite the existing project file.':''}\n\nThe isolated workspace copy will remain unchanged.`);if(!overwrite)return;try{const r=await api('/api/file/write',{path:a.path,content:a.content,overwrite,authorized:true});toast(r.message||'Applied to project')}catch(e){toast(e.message)}}}return card}
+function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<think)/i.test(String(content||''))){safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.'}wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user'){bubble.textContent=content}else{bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button></div>');bubble.querySelector('.content').innerHTML=renderMarkdown(safeContent);bindCopy(wrap);setThink(wrap,extra?.worklog||[]);wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];(artifacts||[]).forEach(a=>addArtifactToPane(a));bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
+function clearArtifactPane(){const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';const main=$('main');if(main)main.classList.remove('has-artifacts');const count=$('artifactCount');if(count)count.textContent='0 items'}
+function addArtifactToPane(a){const pane=$('artifactPaneContent');if(!pane)return;pane.appendChild(artifactCard(a));$('main').classList.add('has-artifacts');const count=pane.children.length;$('artifactCount').textContent=count+' item'+(count===1?'':'s');const side=$('artifactPane');side.scrollTop=side.scrollHeight}
+function artifactCard(a){const promptCard=a.kind==='system_prompt';const card=document.createElement('div');card.className='artifact open'+(a.validation?.ok?'':' bad');card.innerHTML=`<div class="artifact-top"><div class="file-icon"><svg class="ic"><use href="#i-file"/></svg></div><div class="file-name">${esc(a.path)}</div><div class="file-check">${esc(a.validation?.message||'Saved in temporary workspace')}</div><span class="artifact-chev"><svg class="ic"><use href="#i-chev"/></svg></span></div><div class="artifact-body"><div class="codebox"><div class="codehead"><span>${promptCard?'SYSTEM PROMPT':esc((a.path.split('.').pop()||'FILE').toUpperCase())}</span><button class="copy-mini copy-artifact">Copy</button></div><pre><code></code></pre></div><div class="artifact-actions"><button class="copy-artifact">Copy</button>${promptCard?(a.preview_only?'':'<button class="primary apply-prompt">Apply prompt to Kurt</button>'):'<button class="download-artifact">Download file</button><button class="primary apply-artifact">Apply to project</button>'}</div></div>`;card.querySelector('code').textContent=a.content;card.querySelector('.artifact-top').onclick=()=>card.classList.toggle('open');card.querySelectorAll('.copy-artifact').forEach(b=>b.onclick=()=>navigator.clipboard.writeText(a.content).then(()=>toast('Content copied')));if(promptCard&&!a.preview_only){card.querySelector('.apply-prompt').onclick=async()=>{if(!confirm('Replace Kurt’s editable system prompt with this proposed version?'))return;try{await api('/api/settings',{system_prompt:a.content});await refreshBootstrap();toast('Kurt system prompt updated')}catch(e){toast(e.message)}}}else if(!promptCard){card.querySelector('.download-artifact').onclick=()=>{const blob=new Blob([a.content],{type:'application/octet-stream'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=a.path.split('/').pop();link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};card.querySelector('.apply-artifact').onclick=async()=>{if(!a.validation?.ok){toast('Fix validation errors before applying');return}if(!state.settings.allow_project_writes){toast('Enable project writes in Settings first');return}const overwrite=confirm(`Apply ${a.path} to ${state.projectRoot}?${a.exists?'\nThis will overwrite the existing project file.':''}\n\nThe isolated workspace copy will remain unchanged.`);if(!overwrite)return;try{const r=await api('/api/file/write',{path:a.path,content:a.content,overwrite,authorized:true});toast(r.message||'Applied to project')}catch(e){toast(e.message)}}}return card}
 const SUGGESTIONS=[['Understand my project','Inspect the current project structure and explain its architecture.'],['Build a feature','Help me plan and implement a new feature. Ask for any missing requirements first.'],['Generate a file','Write a small utility script and return it as a file card.'],['Debug code','Help me debug this issue. Start by asking for the relevant error and files.']];
-function showWelcome(){setEmpty(true);follow=true;$('messages').innerHTML='<div class="welcome"><svg class="mark xl" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><h1>What are we building?</h1></div>';$('chips').innerHTML=SUGGESTIONS.map(s=>'<button class="chip" data-prompt="'+esc(s[1])+'">'+esc(s[0])+'</button>').join('');document.querySelectorAll('#chips [data-prompt]').forEach(b=>b.onclick=()=>{$('prompt').value=b.dataset.prompt;autosize();updateSend();$('prompt').focus()})}
+function showWelcome(){clearArtifactPane();setEmpty(true);follow=true;$('messages').innerHTML='<div class="welcome"><svg class="mark xl" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><h1>What are we building?</h1></div>';$('chips').innerHTML=SUGGESTIONS.map(s=>'<button class="chip" data-prompt="'+esc(s[1])+'">'+esc(s[0])+'</button>').join('');document.querySelectorAll('#chips [data-prompt]').forEach(b=>b.onclick=()=>{$('prompt').value=b.dataset.prompt;autosize();updateSend();$('prompt').focus()})}
 function renderChats(){const el=$('chatList');el.innerHTML='';const chats=state.chats.slice().sort((a,b)=>{if(!!a.pinned!==!!b.pinned)return a.pinned?-1:1;return state.sort==='oldest'?(a.updated||0)-(b.updated||0):(b.updated||0)-(a.updated||0)});chats.forEach(c=>{const row=document.createElement('div');row.className='chat-row'+(c.id===state.chatId?' active':'');const title=document.createElement('button');title.type='button';title.className='chat-item';title.title=c.title||'New conversation';title.innerHTML=(c.pinned?'<span class="pin-indicator">◆</span>':'')+esc(c.title||'New conversation');title.onclick=()=>loadChat(c.id);const actions=document.createElement('div');actions.className='chat-actions';const pin=document.createElement('button');pin.className='chat-action';pin.title=c.pinned?'Unpin chat':'Pin chat';pin.setAttribute('aria-label',pin.title);pin.textContent=c.pinned?'◆':'◇';pin.onclick=e=>{e.stopPropagation();togglePinChat(c.id,!c.pinned)};const rename=document.createElement('button');rename.className='chat-action';rename.title='Rename chat';rename.setAttribute('aria-label','Rename chat');rename.textContent='✎';rename.onclick=e=>{e.stopPropagation();renameChat(c.id,c.title||'')};const del=document.createElement('button');del.className='chat-action danger';del.title='Delete chat';del.setAttribute('aria-label','Delete chat');del.textContent='×';del.onclick=e=>{e.stopPropagation();deleteChat(c.id)};actions.append(pin,rename,del);row.append(title,actions);el.appendChild(row)})}
 async function renameChat(id,current){const next=prompt('Rename chat:',current);if(next===null)return;const title=next.trim();if(!title){toast('Chat title cannot be empty');return}try{await api('/api/chats/'+encodeURIComponent(id),{rename:title});await refreshChats();if(id===state.chatId)setTitle(title,$('chatMeta').textContent)}catch(e){toast(e.message)}}
 async function togglePinChat(id,pinned){try{await api('/api/chats/'+encodeURIComponent(id),{pin:!!pinned});await refreshChats()}catch(e){toast(e.message)}}
@@ -519,14 +591,16 @@ function renderRemoteModels(){const el=$('remoteList');el.innerHTML='';state.rem
 async function refreshChats(){const d=await api('/api/chats');state.chats=d.chats||[];renderChats()}
 function resetComposer(){$('prompt').value='';autosize();state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads=[];state.contextCount=0;renderPendingUploads();hint();updateSend()}
 async function ensureChat(){if(!state.chatId){const d=await api('/api/chats',{create:true});state.chatId=d.id}return state.chatId}
-async function newChat(){cancelRun();state.chatId=null;resetComposer();showWelcome();setTitle('New chat','');renderChats();document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();const d=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=d.effort||'thinking';state.mode=d.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;try{const c=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=c.files||0}catch(e){}hint();$('messages').innerHTML='';const list=d.messages||[];if(list.length){setEmpty(false);list.forEach(m=>renderMessage(m.role,m.content,m.artifacts||[],{worklog:m.worklog||[]}));follow=true;scrollEnd(true)}else showWelcome();setTitle(d.title||'Conversation',[d.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
+async function newChat(){cancelRun();state.chatId=null;resetComposer();showWelcome();setTitle('New chat','');renderChats();follow=true;window.scrollTo({top:0,behavior:'auto'});document.body.classList.remove('nav-open');$('prompt').focus()}
+async function loadChat(id){cancelRun();clearArtifactPane();const d=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=d.effort||'thinking';state.mode=d.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;try{const c=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=c.files||0}catch(e){}hint();$('messages').innerHTML='';const list=d.messages||[];if(list.length){setEmpty(false);list.forEach(m=>renderMessage(m.role,m.content,m.artifacts||[],{worklog:m.worklog||[]}));follow=true;scrollEnd(true)}else showWelcome();setTitle(d.title||'Conversation',[d.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
 async function send(){const text=$('prompt').value.trim();if(!text||state.busy)return;const run=++state.run;state.effort=$('effortSelect').value;state.mode=$('operationMode').value;setBusy(true);try{await ensureChat()}catch(e){if(run===state.run)setBusy(false);toast(e.message);return}if(run!==state.run)return;$('prompt').value='';autosize();hint();if($('main').classList.contains('empty')){setEmpty(false);$('messages').innerHTML=''}follow=true;renderMessage('user',text);const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Preparing…';scrollEnd(true);$('chatMeta').textContent=state.effort+' · '+state.mode+' · Generating…';const contentEl=node.querySelector('.content');let raw='',pending=false;const controller=new AbortController();state.abort=controller;
 const paint=()=>{pending=false;if(run!==state.run)return;const safeAnswer=stripUnsupportedActions(raw);contentEl.innerHTML=safeAnswer?renderMarkdown(safeAnswer):'';if(safeAnswer)bindCopy(node);node.dataset.raw=safeAnswer;scrollEnd()};
 const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
-try{const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,model:$('topModel').value,effort:state.effort,mode:state.mode}),signal:controller.signal});if(!res.ok){const x=await res.json().catch(()=>({}));throw new Error(x.error||res.statusText)}const reader=res.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;if(run!==state.run)return;buffer+=decoder.decode(value,{stream:true});let sep;while((sep=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,sep);buffer=buffer.slice(sep+2);const dataLine=frame.split('\n').find(x=>x.startsWith('data:'));if(!dataLine)continue;const event=JSON.parse(dataLine.slice(5).trim());if(event.type==='phase'){pushWorkStep(node,event.text,event.ok);node.querySelector('.assistant-status').textContent=event.status||'Working…';queue()}else if(event.type==='token'){raw+=event.text;node.querySelector('.assistant-status').textContent='Writing…';queue()}else if(event.type==='done'){pending=false;raw=event.content||'';const safeFinal=stripUnsupportedActions(raw);contentEl.innerHTML=safeFinal?renderMarkdown(safeFinal):'';bindCopy(node);node.dataset.raw=safeFinal;setThink(node,event.worklog||node.__worklog||[]);const slot=node.querySelector('.artifacts');(event.artifacts||[]).forEach(a=>slot.appendChild(artifactCard(a)));setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats()}else if(event.type==='error')throw new Error(event.message)}}}catch(e){if(run===state.run){if(e.name==='AbortError'){paint();refreshChats().catch(()=>{})}else{contentEl.classList.add('err');contentEl.textContent='Error: '+e.message;toast(e.message)}}}finally{node.classList.remove('live');endThink(node);if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent.includes('Generating…'))meta.textContent=[state.effort,state.mode,'Ready'].join(' · ')}}}
-$('messages').addEventListener('scroll',()=>{const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});
+try{const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,model:$('topModel').value,effort:state.effort,mode:state.mode}),signal:controller.signal});if(!res.ok){const x=await res.json().catch(()=>({}));throw new Error(x.error||res.statusText)}const reader=res.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;if(run!==state.run)return;buffer+=decoder.decode(value,{stream:true});let sep;while((sep=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,sep);buffer=buffer.slice(sep+2);const dataLine=frame.split('\n').find(x=>x.startsWith('data:'));if(!dataLine)continue;const event=JSON.parse(dataLine.slice(5).trim());if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail);node.querySelector('.assistant-status').textContent=event.status||'Working…';queue()}else if(event.type==='token'){raw+=event.text;node.querySelector('.assistant-status').textContent='Writing…';queue()}else if(event.type==='done'){pending=false;raw=event.content||'';const safeFinal=stripUnsupportedActions(raw);contentEl.innerHTML=safeFinal?renderMarkdown(safeFinal):'';bindCopy(node);node.dataset.raw=safeFinal;setThink(node,event.worklog||node.__worklog||[]);(event.artifacts||[]).forEach(a=>addArtifactToPane(a));setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats()}else if(event.type==='error')throw new Error(event.message)}}}catch(e){if(run===state.run){if(e.name==='AbortError'){paint();refreshChats().catch(()=>{})}else{contentEl.classList.add('err');contentEl.textContent='Error: '+e.message;toast(e.message)}}}finally{node.classList.remove('live');endThink(node);if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent.includes('Generating…'))meta.textContent=[state.effort,state.mode,'Ready'].join(' · ')}}}
+$('messages').addEventListener('scroll',()=>{if(!document.body.classList.contains('compact-scroll'))return;const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});
+window.addEventListener('scroll',()=>{if(document.body.classList.contains('compact-scroll'))return;follow=window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))},{passive:true});
 $('toBottom').onclick=()=>{follow=true;scrollEnd(true);$('toBottom').classList.remove('show')};
+$('scrollModeBtn').onclick=()=>{setScrollMode(!document.body.classList.contains('compact-scroll'));follow=true;scrollEnd(true)};
 $('sendBtn').onclick=()=>{if(state.busy){if(state.abort)state.abort.abort()}else send()};
 $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!state.busy)send()}});
 $('prompt').addEventListener('input',()=>{autosize();updateSend()});
@@ -544,6 +618,7 @@ async function startDownload(){const model=$('downloadModel').value.trim();if(!m
 async function pollDownload(){try{const d=await api('/api/download/status');const job=d.job;if(!job)return;const percent=job.total?job.completed/job.total*100:0;$('downloadFill').style.width=(job.state==='done'?100:percent)+'%';$('downloadCaption').textContent=job.state==='running'?`${job.model} · ${percent.toFixed(1)}% · ${job.human}`:`${job.model} · ${job.state}${job.error?' · '+job.error:''}`;if(job.state==='done'){await refreshBootstrap();$('localDownloadStatus').textContent=job.model+' installed successfully.';toast('Model download complete')}else if(job.state==='error'){$('localDownloadStatus').textContent=job.error||'Download failed';toast(job.error||'Download failed')}else{$('localDownloadStatus').textContent=job.model+' · '+percent.toFixed(1)+'% · '+job.human;setTimeout(pollDownload,1000)}}catch(e){console.error(e)}}
 $('sidebarSettings').onclick=openSettings;$('openFiles').onclick=$('contextBtn').onclick=()=>{$('filesModal').classList.add('show');renderPendingUploads();browseFiles()};$('topModel').onchange=async()=>{try{await api('/api/settings',{model:$('topModel').value});$('settingsModel').value=$('topModel').value;await refreshBootstrap();toast('Active model changed')}catch(e){toast(e.message)}};$('settingsModel').onchange=async()=>{const model=$('settingsModel').value;$('topModel').value=model;try{await api('/api/settings',{model});await refreshBootstrap();toast('Active model changed')}catch(e){toast(e.message)}};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=refreshBootstrap;$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:$('keyGroup').value,label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')};$('addRemote').onclick=async()=>{const d=await api('/api/settings',{model_action:'add',provider:$('remoteProvider').value,model:$('remoteModelId').value,label:$('remoteLabel').value,key_group:$('remoteGroup').value,base_url:$('remoteBase').value});await refreshBootstrap();toast(d.message||'Model added')};$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;$('clearChat').onclick=async()=>{if(!state.chatId)return;if(!confirm('Clear this conversation?'))return;cancelRun();await api('/api/chats/'+encodeURIComponent(state.chatId),{clear:true});state.contextCount=0;hint();showWelcome();$('chatTitle').textContent='New conversation';await refreshChats()};document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$(b.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(m=>m.onclick=e=>{if(e.target===m)m.classList.remove('show')});
 $('menuBtn').onclick=()=>document.body.classList.toggle('nav-open');$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',e=>{if(e.target.closest('.chat-item,#newChat,#openFiles,#sidebarSettings'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const t=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=t;try{localStorage.setItem('kurt-theme',t)}catch(e){}};
+try{setScrollMode(localStorage.getItem('kurt-compact-scroll')==='1')}catch(e){setScrollMode(false)}
 (async()=>{try{await refreshBootstrap();await refreshChats();showWelcome();pollDownload()}catch(e){toast(e.message)}})();
 </script></body></html>'''
 
@@ -1704,12 +1779,12 @@ class Handler(BaseHTTPRequestHandler):
         use_thinking = effort in ("thinking", "expert")
         reasoning_effort = {"flash": "none", "thinking": "medium", "expert": "high"}[effort]
 
-        def log_step(text, ok=None, status="Working…"):
-            item = {"text": str(text), "ok": ok}
+        def log_step(text, ok=None, status="Working…", detail=None):
+            item = {"text": str(text), "ok": ok, "detail": str(detail or "")[:12000]}
             worklog.append(item)
-            if len(worklog) > 40:
-                del worklog[:-40]
-            emit({"type": "phase", "text": item["text"], "ok": ok, "status": status})
+            if len(worklog) > 60:
+                del worklog[:-60]
+            emit({"type": "phase", "text": item["text"], "ok": ok, "detail": item["detail"], "status": status})
 
         def generate_response():
             chunks = []
@@ -1722,15 +1797,12 @@ class Handler(BaseHTTPRequestHandler):
                 reasoning_effort=reasoning_effort,
             )
             try:
-                reasoning_notice = False
                 for kind, chunk in stream:
                     if not chunk:
                         continue
                     if kind in THINKING_KINDS:
-                        if use_thinking and not reasoning_notice:
-                            log_step("Reasoning mode active; the work log shows progress and verification, not private chain-of-thought.", status="Thinking…")
-                            reasoning_notice = True
-                    elif kind == "content":
+                        continue
+                    if kind == "content":
                         chunks.append(chunk)
             finally:
                 close = getattr(stream, "close", None)
@@ -1752,14 +1824,39 @@ class Handler(BaseHTTPRequestHandler):
             return "\n\n".join(lines)
 
         try:
-            log_step("Starting {} mode with {} effort.".format(mode.title(), effort.title()), status="Preparing…")
+            log_step("Starting {} mode with {} effort.".format(mode.title(), effort.title()), status="Preparing…", detail="Operating mode: {}. Effort: {}. The selected mode determines whether developer commands are permitted; the effort setting controls supported provider reasoning parameters. No file has been modified at this stage.".format(mode.title(), effort.title()))
             final_raw = ""
             validation_errors = []
             max_rounds = 4
             for round_index in range(max_rounds):
+                if round_index == 0 and SYSTEM_PROMPT_REQUEST_RE.fullmatch(user_text):
+                    active_prompt = self.app.chat_system_prompt(chat_id, mode=mode, effort=effort)
+                    for key_entry in K.PROVIDER_KEYS:
+                        secret = str(key_entry.get("value") or "")
+                        if len(secret) >= 8:
+                            active_prompt = active_prompt.replace(secret, "[REDACTED API KEY]")
+                    raw = (
+                        "The exact Kurt-controlled system prompt for this chat is displayed in the expanded, read-only prompt card below. "
+                        "Provider-owned internal instructions are not available to Kurt."
+                    )
+                    artifacts_by_path["Active Kurt system prompt"] = {
+                        "path": "Active Kurt system prompt",
+                        "kind": "system_prompt",
+                        "content": active_prompt,
+                        "preview_only": True,
+                        "validation": {"ok": True, "checked": True, "message": "Active prompt · read-only preview"},
+                    }
+                    log_step(
+                        "Retrieved the exact active Kurt system prompt.", True,
+                        status="Prompt ready…",
+                        detail="The prompt below is the first system message assembled by Kurt for this chat, including the selected mode and effort rules. API-key values are redacted. Conversation history and attached-file context are separate messages and are not included.",
+                    )
+                    final_raw = raw
+                    break
                 log_step(
                     "Reviewing the request and available workspace files." if round_index == 0 else "Continuing with tool results and verification feedback.",
                     status="Thinking…" if use_thinking else "Working…",
+                    detail=("Kurt is matching the request against the selected conversation history and readable workspace files. No edits or terminal commands have been accepted yet." if round_index == 0 else "Kurt is incorporating the actual results from the previous action round and deciding whether another targeted action or a final response is needed."),
                 )
                 raw = generate_response()
                 if not raw:
@@ -1785,21 +1882,20 @@ class Handler(BaseHTTPRequestHandler):
                                 elif not argument:
                                     result = {"ok": False, "returncode": -1, "output": "RUN action did not include a command."}
                                 else:
-                                    log_step("Running command: " + argument, status="Running checks…")
+                                    log_step("Running command: " + argument, status="Running checks…", detail="The command is being run in this chat’s isolated workspace using its dedicated Python virtual environment. It is not run against the original project directory.")
                                     result = self.app.run_command(chat_id, argument)
                                 label = "PASSED" if result.get("ok") else "FAILED"
-                                log_step("{}: {}".format(label, argument or "(empty command)"), result.get("ok"), status="Reviewing results…")
                                 command_output = str(result.get("output", ""))
-                                if command_output:
-                                    log_step("Command output:\n" + command_output[:2500], result.get("ok"), status="Reviewing results…")
+                                log_step("{}: {}".format(label, argument or "(empty command)"), result.get("ok"), status="Reviewing results…", detail="Exit code: {}\n\n{}".format(result.get("returncode"), command_output[:9000] or "(The command produced no output.)"))
                                 results.append("[Terminal result]\nCommand: {}\nExit code: {}\n{}".format(
                                     argument, result.get("returncode"), command_output
                                 ))
                             else:
-                                log_step("Searching the web: " + argument, status="Searching the web…")
+                                log_step("Searching the web: " + argument, status="Searching the web…", detail="Search query: " + argument)
                                 result = self.app.search_web(argument)
-                                log_step(result.get("message", "Web search completed."), result.get("ok"), status="Reviewing sources…")
-                                results.append("[Web search result]\n" + search_result_text(argument, result))
+                                search_details = search_result_text(argument, result)
+                                log_step(result.get("message", "Web search completed."), result.get("ok"), status="Reviewing sources…", detail=search_details[:10000])
+                                results.append("[Web search result]\n" + search_details)
                         messages.append({"role": "assistant", "content": raw})
                         messages.append({
                             "role": "user",
@@ -1810,9 +1906,11 @@ class Handler(BaseHTTPRequestHandler):
                 first_edit = re.search(r"@@@\s*(?:WRITE|EDIT|SYSTEM_PROMPT)\b", raw, re.I)
                 if first_edit:
                     preamble = raw[:first_edit.start()]
+                    if preamble.strip():
+                        log_step("Reviewed Kurt’s proposed Change summary.", True, status="Reviewing changes…", detail=preamble.strip()[:10000])
                     has_summary = re.search(r"(?i)change\s+summary|planned\s+changes|changes\s+to\s+make", preamble)
                     if not has_summary and round_index < max_rounds - 1:
-                        log_step("Requesting the required file-by-file change summary before accepting edits.", False, status="Preparing change summary…")
+                        log_step("Requesting the required file-by-file change summary before accepting edits.", False, status="Preparing change summary…", detail="Kurt proposed file actions without first explaining each file and its intended changes. The application has not accepted or written those changes; it is asking Kurt to provide the required summary and repeat the complete action blocks.")
                         messages.append({"role": "assistant", "content": raw})
                         messages.append({
                             "role": "user",
@@ -1824,24 +1922,24 @@ class Handler(BaseHTTPRequestHandler):
                         final_raw = "Kurt proposed file changes but did not provide the required file-by-file Change summary. No files from that response were accepted."
                         break
 
-                log_step("Checking generated file syntax before returning artifacts.", status="Validating files…")
+                log_step("Checking generated file syntax before returning artifacts.", status="Validating files…", detail="Each proposed file is checked with the validator appropriate to its file type where an available parser or compiler exists. Failed checks are sent back to Kurt for repair before the artifact is returned.")
                 new_artifacts, validation_errors = self.app.artifacts_from_answer(raw, chat_id)
                 for artifact in new_artifacts:
                     artifacts_by_path[artifact["path"]] = artifact
                     validation = artifact.get("validation") or {}
                     if artifact.get("kind") == "system_prompt":
-                        log_step("Prepared a Kurt system-prompt proposal for review; it has not been saved.", True, status="Ready for review…")
+                        log_step("Prepared a Kurt system-prompt proposal for review; it has not been saved.", True, status="Ready for review…", detail="The full replacement prompt is displayed in a review card. It will only become active after the user explicitly selects Apply prompt to Kurt.")
                     elif validation.get("checked"):
-                        log_step("Syntax validation passed: " + artifact["path"], True, status="Preparing response…")
+                        log_step("Syntax validation passed: " + artifact["path"], True, status="Preparing response…", detail=validation.get("message", "The file passed the configured syntax checks."))
                     else:
-                        log_step("Basic file validation passed: " + artifact["path"], True, status="Preparing response…")
+                        log_step("Basic file validation passed: " + artifact["path"], True, status="Preparing response…", detail=validation.get("message", "No language-specific compiler was available; basic parsing/structure checks completed where supported."))
                 if validation_errors:
                     for error in validation_errors:
                         target = error.split(":", 1)[0].strip()
                         artifacts_by_path.pop(target, None)
                 if validation_errors and round_index < max_rounds - 1:
                     details = "\n".join("- " + item for item in validation_errors)
-                    log_step("A generated file did not pass validation. Asking Kurt to repair it.", False, status="Repairing files…")
+                    log_step("A generated file did not pass validation. Asking Kurt to repair it.", False, status="Repairing files…", detail=details[:10000])
                     messages.append({"role": "assistant", "content": raw})
                     messages.append({
                         "role": "user",
@@ -1853,7 +1951,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if validation_errors:
                 for error in validation_errors:
-                    log_step("Validation warning: " + error, False, status="Finishing with warnings…")
+                    log_step("Validation warning: " + error, False, status="Finishing with warnings…", detail="This artifact did not pass the configured check and is withheld from the accepted artifact list.")
 
             artifacts = list(artifacts_by_path.values())
             _inline_thinking, reply = split_thinking(final_raw)
