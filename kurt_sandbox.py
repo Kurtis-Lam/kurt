@@ -8,6 +8,7 @@ executes arbitrary generated application code automatically.
 import ast
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -125,3 +126,127 @@ def validate_content(filename, content):
             }
     except Exception as exc:
         return {"ok": False, "checked": True, "message": "Could not validate source: {}".format(exc)}
+
+
+def run_workspace_command(workspace, env_dir, command, timeout=90):
+    """Run one non-shell validation command inside a chat's Python virtual environment.
+
+    A venv isolates Python packages but is not an OS security boundary. Commands are
+    therefore parsed without a shell, restricted to known developer tools, and always
+    run with the conversation workspace as their working directory.
+    """
+    import shlex
+    import subprocess
+    import sys
+    import time
+
+    root = Path(workspace).resolve()
+    env_root = Path(env_dir).resolve()
+    raw = str(command or "").strip()
+    if not raw or len(raw) > 600:
+        return {"ok": False, "returncode": -1, "output": "Command is empty or too long."}
+    if any(ch in raw for ch in ("\n", "\r", ";", "|", "&", "<", ">", "`", "$")):
+        return {"ok": False, "returncode": -1, "output": "Shell operators and multi-line commands are not allowed. Run one command at a time."}
+    try:
+        args = shlex.split(raw, posix=(os.name != "nt"))
+    except ValueError as exc:
+        return {"ok": False, "returncode": -1, "output": "Could not parse command: " + str(exc)}
+    if not args or len(args) > 32:
+        return {"ok": False, "returncode": -1, "output": "Command has too many arguments."}
+
+    if os.name == "nt":
+        scripts = env_root / "Scripts"
+        python = scripts / "python.exe"
+        bin_dir = scripts
+    else:
+        bin_dir = env_root / "bin"
+        python = bin_dir / "python"
+    if not python.is_file():
+        try:
+            venv.EnvBuilder(with_pip=True, clear=False).create(env_root)
+        except Exception as exc:
+            return {"ok": False, "returncode": -1, "output": "Could not prepare chat virtual environment: " + str(exc)}
+        if not python.is_file():
+            return {"ok": False, "returncode": -1, "output": "The chat virtual environment was not created correctly."}
+
+    executable = Path(args[0]).name.lower()
+    command_args = args[1:]
+    if executable in ("python", "python3", "python.exe"):
+        executable_path = str(python)
+    elif executable in ("pytest", "pytest.exe", "ruff", "ruff.exe", "mypy", "mypy.exe"):
+        executable_path = str(bin_dir / (executable + (".exe" if os.name == "nt" else "")))
+        if not Path(executable_path).is_file():
+            return {
+                "ok": False, "returncode": -1,
+                "output": "{} is not installed in this chat's venv. Ask Kurt to install it with `python -m pip install {}` first.".format(executable, executable),
+            }
+    elif executable in ("node", "node.exe"):
+        if not command_args or command_args[0] != "--check":
+            return {"ok": False, "returncode": -1, "output": "Node is only enabled for syntax checks (`node --check relative/file.js`)."}
+        executable_path = shutil.which("node")
+        if not executable_path:
+            return {"ok": False, "returncode": -1, "output": "Node.js is not installed on this computer."}
+    elif executable in ("bash", "bash.exe"):
+        if not command_args or command_args[0] != "-n":
+            return {"ok": False, "returncode": -1, "output": "Bash is only enabled for syntax checks (`bash -n relative/file.sh`)."}
+        executable_path = shutil.which("bash")
+        if not executable_path:
+            return {"ok": False, "returncode": -1, "output": "Bash is not installed on this computer."}
+    else:
+        return {
+            "ok": False, "returncode": -1,
+            "output": "Command is not permitted. Use python, pytest, ruff, mypy, node --check, or bash -n.",
+        }
+
+    if executable in ("python", "python3", "python.exe"):
+        if command_args[:2] and command_args[0] == "-m":
+            module = command_args[1] if len(command_args) > 1 else ""
+            if module not in {"py_compile", "compileall", "pytest", "unittest", "pip"}:
+                return {"ok": False, "returncode": -1, "output": "Python modules are limited to py_compile, compileall, pytest, unittest, and pip."}
+        elif command_args and command_args[0] in ("-c", "-", "-m"):
+            return {"ok": False, "returncode": -1, "output": "Inline Python and stdin execution are not allowed. Use a workspace file or an approved -m tool."}
+
+    for token in command_args:
+        if token.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:[\\/]", token) or token.startswith("~"):
+            return {"ok": False, "returncode": -1, "output": "Use relative paths inside the chat workspace, not absolute paths."}
+        if ".." in re.split(r"[\\/]", token):
+            return {"ok": False, "returncode": -1, "output": "Path traversal outside the chat workspace is not allowed."}
+
+    final_args = [executable_path] + command_args
+    env = {
+        "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
+        "HOME": str(root),
+        "USERPROFILE": str(root),
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "VIRTUAL_ENV": str(env_root),
+        "KURT_CHAT_WORKSPACE": str(root),
+    }
+    for name in ("SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "LANG", "LC_ALL"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    started = time.time()
+    try:
+        result = subprocess.run(
+            final_args,
+            cwd=str(root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=max(1, min(int(timeout), 120)),
+            check=False,
+            shell=False,
+        )
+        output = ((result.stdout or "") + (result.stderr or "")).strip()
+        if len(output) > 12000:
+            output = output[:12000] + "\n[Output truncated]"
+        return {
+            "ok": result.returncode == 0,
+            "returncode": result.returncode,
+            "output": output or ("Command completed successfully." if result.returncode == 0 else "Command exited without output."),
+            "elapsed": round(time.time() - started, 2),
+        }
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "returncode": -1, "output": "Command timed out after {} seconds.".format(min(int(timeout), 120))}
+    except OSError as exc:
+        return {"ok": False, "returncode": -1, "output": "Could not start command: " + str(exc)}

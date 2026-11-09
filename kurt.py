@@ -1835,15 +1835,24 @@ def _chat_payload(model, messages, stream, temperature, think, stop=None):
     return payload
 
 
-def stream_chat(messages, model=None):
+def stream_chat(messages, model=None, think=None, temperature=0.2, max_tokens=None, reasoning_effort=None):
+    """Stream a response with explicit per-request reasoning and output controls."""
     selected_model = model or MODEL
+    if think is None:
+        think = think_enabled()
     remote = get_remote_model(selected_model)
     if remote:
-        yield from PROVIDER_CLIENT.stream_chat(remote, messages, PROVIDER_KEYS)
+        yield from PROVIDER_CLIENT.stream_chat(
+            remote, messages, PROVIDER_KEYS,
+            temperature=temperature, max_tokens=max_tokens or 8192,
+            reasoning_effort=reasoning_effort,
+        )
         return
     payload = _chat_payload(
-        selected_model, messages, True, 0.2, think_enabled(), stop=STOP_SEQUENCES
+        selected_model, messages, True, temperature, think, stop=STOP_SEQUENCES
     )
+    if max_tokens is not None:
+        payload.setdefault("options", {})["num_predict"] = max(256, min(int(max_tokens), 32768))
     with _open_chat(payload, 900) as r:
         for line in r:
             if not line.strip():

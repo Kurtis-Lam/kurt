@@ -1,6 +1,7 @@
 """Remote model providers and grouped API-key rotation for Kurt."""
 
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -210,7 +211,7 @@ class ProviderClient:
         skipped = len(rotated) - len(available)
         return pool_id, available, skipped, matching
 
-    def _headers_and_payload(self, model_config, key, messages, stream, temperature, max_tokens):
+    def _headers_and_payload(self, model_config, key, messages, stream, temperature, max_tokens, reasoning_effort=None):
         mode, url, _base = _endpoint(model_config)
         provider = str(model_config.get("provider", "")).lower()
         model = str(model_config.get("model", "")).strip()
@@ -227,6 +228,23 @@ class ProviderClient:
             }
             if system:
                 payload["system"] = system
+            model_lower = model.lower()
+            effort = str(reasoning_effort or "").lower()
+            if effort in ("low", "medium", "high"):
+                adaptive_model = bool(
+                    re.search(r"claude-(?:(?:opus|sonnet|haiku)-4-(?:6|7|8|9)|(?:mythos|fable)-5)", model_lower)
+                )
+                legacy_thinking_model = bool(
+                    re.search(r"claude-(?:(?:sonnet|opus)-4-5|3-7)", model_lower)
+                )
+                if adaptive_model:
+                    payload["thinking"] = {"type": "adaptive"}
+                    payload["output_config"] = {"effort": effort}
+                    payload.pop("temperature", None)
+                elif legacy_thinking_model:
+                    budget = min(max(1024, int((max_tokens or 4096) * (0.5 if effort == "medium" else 0.65))), max(1024, (max_tokens or 4096) - 1))
+                    payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+                    payload.pop("temperature", None)
             headers = {
                 "Authorization": "Bearer " + key,
                 "anthropic-version": "2026-10-21",
@@ -241,10 +259,17 @@ class ProviderClient:
                 "stream": stream,
             }
             model_lower = model.lower()
-            if provider in ("openai",) and (model_lower.startswith("gpt-5") or re_model_reasoning(model_lower)):
+            if provider in ("openai",) and (model_lower.startswith(("gpt-5", "gpt-6")) or re_model_reasoning(model_lower)):
                 payload["max_completion_tokens"] = payload.pop("max_tokens")
                 if model_lower.startswith(("o1", "o3", "o4")):
                     payload.pop("temperature", None)
+                effort = str(reasoning_effort or "").lower()
+                if effort in ("low", "medium", "high"):
+                    payload["reasoning_effort"] = effort
+            if provider == "openrouter":
+                effort = str(reasoning_effort or "").lower()
+                if effort in ("none", "minimal", "low", "medium", "high", "xhigh"):
+                    payload["reasoning_effort"] = effort
             if stream and provider in ("openai", "openrouter"):
                 payload["stream_options"] = {"include_usage": True}
             headers = {
@@ -256,7 +281,7 @@ class ProviderClient:
                 headers["X-Title"] = "Kurt"
         return url, headers, payload, mode
 
-    def stream_chat(self, model_config, messages, keys, timeout=900, temperature=0.2, max_tokens=8192):
+    def stream_chat(self, model_config, messages, keys, timeout=900, temperature=0.2, max_tokens=8192, reasoning_effort=None):
         pool_id, ordered, skipped, matching = self._ordered_keys(model_config, keys)
         if not ordered:
             raise ProviderError("Every API key in this group has exhausted its OpenRouter free-model quota.")
@@ -265,7 +290,7 @@ class ProviderClient:
             key = str(key_entry["value"])
             try:
                 url, headers, payload, mode = self._headers_and_payload(
-                    model_config, key, messages, True, temperature, max_tokens
+                    model_config, key, messages, True, temperature, max_tokens, reasoning_effort
                 )
                 response = _request(url, payload, headers, timeout, stream=True)
             except ProviderError as exc:
