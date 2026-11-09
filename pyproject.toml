@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kurt"
-version = "0.3.0"
-description = "Terminal coding assistant powered by local models via Ollama"
+version = "0.4.0"
+description = "Terminal coding assistant with local Ollama and remote model providers"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
@@ -15,4 +15,4 @@ dependencies = ["rich>=13"]
 kurt = "kurt:main"
 
 [tool.setuptools]
-py-modules = ["kurt"]
+py-modules = ["kurt", "providers"]
