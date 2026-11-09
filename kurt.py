@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""kurt - a terminal coding assistant powered by local models (via Ollama).
+"""kurt - a terminal coding assistant powered by local models (Ollama) and remote provider APIs.
 
 Run `kurt` in any project folder. Kurt can read your files and propose
 edits / new files / shell commands. Nothing is changed without your OK.
@@ -18,7 +18,13 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
+
+from providers import (
+    PROVIDER_SPECS, ProviderClient, ProviderError, default_base_url,
+    mask_key, provider_label,
+)
 
 from rich.cells import cell_len
 from rich.console import Console, Group
@@ -37,7 +43,7 @@ class KurtConsole(Console):
             return super().print(*objects, **kwargs)
 
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 DEFAULT_MODEL = "hf.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M"
 CONFIG_DIR = Path.home() / ".kurt"
@@ -48,6 +54,13 @@ FAST_MODEL = "qwen2.5-coder:3b"  # ~2 GB: several times faster than a 9B model o
 
 def load_config():
     try:
+        if CONFIG_DIR.exists():
+            try:
+                CONFIG_DIR.chmod(0o700)
+                if CONFIG_FILE.exists():
+                    CONFIG_FILE.chmod(0o600)
+            except OSError:
+                pass
         return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     except Exception:
         return {}
@@ -62,6 +75,15 @@ if _env_agents is not None:
 else:
     AGENTS = bool(_cfg.get("agents", False))
 WORKERS = [w for w in _cfg.get("workers", []) if isinstance(w, str)]
+PROVIDER_KEYS = [
+    dict(item) for item in _cfg.get("provider_keys", [])
+    if isinstance(item, dict) and item.get("provider") and item.get("value")
+]
+REMOTE_MODELS = [
+    dict(item) for item in _cfg.get("remote_models", [])
+    if isinstance(item, dict) and item.get("id") and item.get("provider") and item.get("model")
+]
+PROVIDER_CLIENT = ProviderClient()
 MODEL_SORT = _cfg.get("model_sort") if _cfg.get("model_sort") in ("name", "size", "params") else "size"
 MODEL_SORT_DESC = bool(_cfg.get("model_sort_desc", True))
 MAX_AGENTS = max(1, int(os.environ.get("KURT_MAX_AGENTS", "4")))
@@ -508,7 +530,7 @@ class TerminalUI:
     REV = "\x1b[7m"
     NOREV = "\x1b[27m"
     RESET = "\x1b[0m"
-    HINTS = "/help · /models · @ files"
+    HINTS = "/help · /models · /keys · @ files"
     HINTS_BUSY = "Esc to interrupt"
     PLACEHOLDER = "Message Kurt…"
     PLACEHOLDER_BUSY = "Working… press Esc to interrupt"
@@ -1135,25 +1157,51 @@ PAIR_RE = re.compile(
 
 # ----------------------------------------------------------------- Config ---
 def save_config():
+    """Persist user-wide settings and provider credentials outside project folders."""
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        CONFIG_FILE.write_text(
-            json.dumps(
-                {
-                    "model": SAVED_MODEL, "agents": AGENTS, "workers": WORKERS,
-                    "think": THINK, "tip_shown": TIP_SHOWN,
-                    "model_sort": MODEL_SORT, "model_sort_desc": MODEL_SORT_DESC,
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
+        try:
+            CONFIG_DIR.chmod(0o700)
+        except OSError:
+            pass
+        data = {
+            "model": SAVED_MODEL, "agents": AGENTS, "workers": WORKERS,
+            "think": THINK, "tip_shown": TIP_SHOWN,
+            "model_sort": MODEL_SORT, "model_sort_desc": MODEL_SORT_DESC,
+            "provider_keys": PROVIDER_KEYS, "remote_models": REMOTE_MODELS,
+        }
+        temporary = CONFIG_FILE.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        try:
+            temporary.chmod(0o600)
+        except OSError:
+            pass
+        os.replace(temporary, CONFIG_FILE)
+        try:
+            CONFIG_FILE.chmod(0o600)
+        except OSError:
+            pass
+    except Exception as exc:
+        console.print(f"[red]Could not save Kurt settings:[/] {escape(str(exc))}")
+
+
+def get_remote_model(reference):
+    if not isinstance(reference, str) or not reference.startswith("remote:"):
+        return None
+    model_id = reference.split(":", 1)[1]
+    return next((item for item in REMOTE_MODELS if str(item.get("id")) == model_id), None)
+
+
+def remote_model_ref(item):
+    return "remote:" + str(item["id"])
 
 
 def short_model(name, limit=44):
-    name = name[6:] if name.startswith("hf.co/") else name
+    remote = get_remote_model(name)
+    if remote:
+        name = f"{provider_label(remote.get('provider'))} / {remote.get('label') or remote.get('model')}"
+    else:
+        name = name[6:] if name.startswith("hf.co/") else name
     return name if len(name) <= limit else name[: limit - 1] + "…"
 
 
@@ -1629,6 +1677,8 @@ def sort_models(models, key, desc):
 
 
 def model_installed():
+    if get_remote_model(MODEL):
+        return True
     return any(same_model(m["name"], MODEL) for m in installed_models())
 
 
@@ -1715,6 +1765,8 @@ def _pull_once(name):
 
 
 def ensure_model():
+    if get_remote_model(MODEL):
+        return True
     if model_installed():
         return True
     console.print(f"[yellow]Model not found locally:[/] {escape(MODEL)}")
@@ -1724,7 +1776,9 @@ def ensure_model():
 
 
 def warm_model(quiet=False):
-    """Load the model into memory with the exact runner options later requests will use."""
+    """Load a local Ollama model with the exact runner options later requests will use."""
+    if get_remote_model(MODEL):
+        return
     payload = {"model": MODEL, "keep_alive": KEEP_ALIVE, "options": runner_options()}
     if quiet:
         try:
@@ -1782,6 +1836,10 @@ def _chat_payload(model, messages, stream, temperature, think, stop=None):
 
 
 def stream_chat(messages):
+    remote = get_remote_model(MODEL)
+    if remote:
+        yield from PROVIDER_CLIENT.stream_chat(remote, messages, PROVIDER_KEYS)
+        return
     payload = _chat_payload(
         MODEL, messages, True, 0.2, think_enabled(), stop=STOP_SEQUENCES
     )
@@ -1809,6 +1867,11 @@ def stream_chat(messages):
 
 
 def chat_once(model, messages, temperature=0.2, timeout=900, think=None):
+    remote = get_remote_model(model)
+    if remote:
+        return PROVIDER_CLIENT.chat_once(
+            remote, messages, PROVIDER_KEYS, timeout=timeout, temperature=temperature
+        )
     if think is None:
         think = think_enabled()
     payload = _chat_payload(model, messages, False, temperature, think)
@@ -2294,15 +2357,23 @@ def hf_label(tags):
 
 def set_model(name):
     global MODEL, SAVED_MODEL
-    MODEL = name
-    SAVED_MODEL = name
+    if get_remote_model(name):
+        MODEL = SAVED_MODEL = name
+        save_config()
+        console.print(f"[green]✔ main model:[/] {escape(short_model(name, 70))}")
+        return
+    if not ensure_ollama():
+        return
+    MODEL = SAVED_MODEL = name
     save_config()
-    retune()  # a different model needs a different context size
+    retune()
     warm_model()
     console.print(f"[green]✔ main model:[/] {escape(name)}")
 
 
 def add_model_flow():
+    if not ensure_ollama():
+        return
     console.print(
         Panel(
             "Paste a Hugging Face repo (user/name), a huggingface.co link,\n"
@@ -2395,13 +2466,330 @@ def read_menu_key():
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def models_menu():
-    global AGENTS, WORKERS, MODEL_SORT, MODEL_SORT_DESC
+def _provider_choice():
+    providers = list(PROVIDER_SPECS)
+    console.print("\n[bold]Providers[/]")
+    for i, provider in enumerate(providers, 1):
+        console.print(f"  {i}. {provider_label(provider)}  [dim]({provider})[/]")
+    raw = Prompt.ask("Provider number or name", console=console, default="").strip().lower()
+    aliases = {"claude": "anthropic", "grok": "xai", "gemini": "google", "open-ai": "openai"}
+    raw = aliases.get(raw, raw)
+    if raw.isdigit() and 1 <= int(raw) <= len(providers):
+        return providers[int(raw) - 1]
+    if raw in PROVIDER_SPECS:
+        return raw
+    console.print("[red]Unknown provider.[/]")
+    return None
+
+
+def _provider_groups(provider):
+    return sorted({
+        str(item.get("group") or "default")
+        for item in PROVIDER_KEYS
+        if str(item.get("provider", "")).lower() == provider
+    })
+
+
+def add_provider_key_flow():
+    provider = _provider_choice()
+    if not provider:
+        return
+    group = Prompt.ask("Key group / pool", console=console, default="default").strip() or "default"
+    if len(group) > 50:
+        console.print("[red]Group names must be 50 characters or fewer.[/]")
+        return
+    label = Prompt.ask("Account label", console=console, default=f"{provider_label(provider)} account").strip()
+    value = Prompt.ask("API key (input hidden)", console=console, password=True).strip()
+    if len(value) < 10 or any(ch.isspace() for ch in value):
+        console.print("[red]That doesn't look like a valid API key.[/]")
+        return
+    if any(item.get("value") == value for item in PROVIDER_KEYS):
+        console.print("[yellow]That API key is already saved.[/]")
+        return
+    PROVIDER_KEYS.append({
+        "id": uuid.uuid4().hex[:12], "provider": provider,
+        "group": group, "label": label or "Account", "value": value,
+    })
+    save_config()
+    pool_count = sum(
+        1 for item in PROVIDER_KEYS
+        if item.get("provider") == provider and (item.get("group") or "default") == group
+    )
+    console.print(
+        f"[green]✔ saved[/] {provider_label(provider)} key in pool [bold]{escape(group)}[/]. "
+        f"Keys in this pool: {pool_count}"
+    )
+
+
+def edit_provider_key_flow(index):
+    if not 1 <= index <= len(PROVIDER_KEYS):
+        console.print("[red]No such key number.[/]")
+        return
+    item = PROVIDER_KEYS[index - 1]
+    provider = str(item.get("provider", "")).lower()
+    old_group = str(item.get("group") or "default")
+    old_label = str(item.get("label") or "Account")
+    console.print(
+        f"Editing {provider_label(provider)} · {escape(old_label)} · pool {escape(old_group)} · "
+        f"{mask_key(item.get('value'))}"
+    )
+    label = Prompt.ask("Account label (Enter keeps current)", console=console, default=old_label).strip() or old_label
+    group = Prompt.ask("Key group / pool (Enter keeps current)", console=console, default=old_group).strip() or old_group
+    if len(group) > 50:
+        console.print("[red]Group names must be 50 characters or fewer.[/]")
+        return
+    value = Prompt.ask("New API key (leave blank to keep current; input hidden)", console=console, password=True).strip()
+    if value and (len(value) < 10 or any(ch.isspace() for ch in value)):
+        console.print("[red]That doesn't look like a valid API key.[/]")
+        return
+    if value and any(k.get("value") == value and k.get("id") != item.get("id") for k in PROVIDER_KEYS):
+        console.print("[yellow]That API key is already saved.[/]")
+        return
+    item["label"] = label
+    item["group"] = group
+    if value:
+        item["value"] = value
+    if group != old_group:
+        affected = sum(
+            1 for model in REMOTE_MODELS
+            if model.get("provider") == provider and (model.get("key_group") or "default") == old_group
+        )
+        if affected:
+            console.print(
+                f"[yellow]Note:[/] {affected} model(s) still use pool '{old_group}'. "
+                "Edit those models or keep another key in that pool."
+            )
+    save_config()
+    console.print("[green]✔ API key settings updated.[/]")
+
+
+def delete_provider_key_flow(index):
+    if not 1 <= index <= len(PROVIDER_KEYS):
+        console.print("[red]No such key number.[/]")
+        return
+    item = PROVIDER_KEYS[index - 1]
+    provider = str(item.get("provider", "")).lower()
+    group = str(item.get("group") or "default")
+    label = str(item.get("label") or "Account")
+    if Prompt.ask(
+        f"Remove {provider_label(provider)} key '{label}' from pool '{group}'?",
+        choices=["y", "n"], default="n", console=console,
+    ) != "y":
+        return
+    del PROVIDER_KEYS[index - 1]
+    remaining = sum(
+        1 for key in PROVIDER_KEYS
+        if key.get("provider") == provider and (key.get("group") or "default") == group
+    )
+    save_config()
+    console.print(f"[green]✔ key removed[/] · {remaining} key(s) remain in this pool")
+    if remaining == 0:
+        console.print("[yellow]Models assigned to this pool can no longer make API requests until a key is added.[/]")
+
+
+def provider_keys_menu():
     buf = ""
     note = ""
     prev_lines = 0
     while True:
-        models = sort_models(installed_models(), MODEL_SORT, MODEL_SORT_DESC)
+        table = Table(box=None, header_style="bold", padding=(0, 2))
+        table.add_column("#", justify="right", no_wrap=True)
+        table.add_column("Provider", no_wrap=True)
+        table.add_column("Pool", no_wrap=True)
+        table.add_column("Account", overflow="fold")
+        table.add_column("Saved key", no_wrap=True)
+        if not PROVIDER_KEYS:
+            table.add_row("—", "No API keys configured", "", "", "")
+        for i, item in enumerate(PROVIDER_KEYS, 1):
+            table.add_row(
+                str(i), provider_label(item.get("provider")),
+                str(item.get("group") or "default"),
+                str(item.get("label") or "Account"), mask_key(item.get("value")),
+            )
+        actions = Table.grid(padding=(0, 2))
+        actions.add_column(style="bold", no_wrap=True)
+        actions.add_column()
+        actions.add_row("+", "add a provider API key (hidden input)")
+        actions.add_row("e + number", "edit the account label, pool, or key")
+        actions.add_row("d + number", "remove a key from its pool")
+        actions.add_row("Enter / q", "close")
+        try:
+            interactive = sys.stdin.isatty()
+        except Exception:
+            interactive = False
+        with console.capture() as cap:
+            console.print(Panel(table, title="API keys · local storage", border_style="cyan", expand=False))
+            console.print(actions)
+            if note:
+                console.print(f"[dim]{note}[/]")
+        frame = cap.get()
+        note = ""
+        if interactive and prev_lines:
+            sys.stdout.write(f"\x1b[{prev_lines}A\r\x1b[J")
+        console.file.write(frame)
+        console.file.flush()
+        if not interactive:
+            return
+        console.print(f"[bold]›[/] {escape(buf)}", end="")
+        prev_lines = frame.count("\n") + 1
+        key = read_menu_key()
+        console.print()
+        if key is None or key == "ctrl-c":
+            return
+        if key == "enter":
+            cmd, buf = buf.lower(), ""
+            match = re.fullmatch(r"([ed])\s*(\d+)", cmd)
+            if match:
+                idx = int(match.group(2))
+                prev_lines = 0
+                if match.group(1) == "e":
+                    edit_provider_key_flow(idx)
+                else:
+                    delete_provider_key_flow(idx)
+            elif not cmd:
+                return
+            else:
+                note = "Use +, e<number>, or d<number>."
+            continue
+        if key == "backspace":
+            buf = buf[:-1]
+        elif key == "esc":
+            if buf:
+                buf = ""
+            else:
+                return
+        elif key == "+" and not buf:
+            prev_lines = 0
+            add_provider_key_flow()
+        elif isinstance(key, str) and len(key) == 1 and key.isalnum():
+            if not buf and key.lower() == "q":
+                return
+            buf += key.lower()
+
+
+def add_remote_model_flow():
+    provider = _provider_choice()
+    if not provider:
+        return
+    model_id = Prompt.ask("API model ID (exact provider model name)", console=console, default="").strip()
+    if not model_id:
+        return
+    label = Prompt.ask("Display name", console=console, default=model_id).strip() or model_id
+    groups = _provider_groups(provider)
+    default_group = groups[0] if groups else "default"
+    if groups:
+        console.print("Available key pools: " + ", ".join(groups))
+    group = Prompt.ask("Key pool for this model", console=console, default=default_group).strip() or "default"
+    base_url = default_base_url(provider)
+    if provider == "custom":
+        base_url = Prompt.ask("OpenAI-compatible API base URL", console=console, default="").strip().rstrip("/")
+        if not base_url.startswith(("https://", "http://")):
+            console.print("[red]Enter a valid http:// or https:// API base URL.[/]")
+            return
+    if not any(k.get("provider") == provider and (k.get("group") or "default") == group for k in PROVIDER_KEYS):
+        console.print(
+            f"[yellow]No key is currently saved for {provider_label(provider)} pool '{group}'. "
+            "Add one with /keys before making a request.[/]"
+        )
+    item = {
+        "id": uuid.uuid4().hex[:12], "provider": provider, "model": model_id,
+        "label": label, "key_group": group, "base_url": base_url,
+    }
+    REMOTE_MODELS.append(item)
+    save_config()
+    console.print(f"[green]✔ added[/] {provider_label(provider)} model {escape(label)}")
+    if Prompt.ask("Use it as the main model now?", choices=["y", "n"], default="y", console=console) == "y":
+        set_model(remote_model_ref(item))
+
+
+def edit_remote_model_flow(entry):
+    if not entry.get("remote"):
+        return "Only API models have editable provider settings."
+    model = next((item for item in REMOTE_MODELS if item.get("id") == entry["item"].get("id")), None)
+    if model is None:
+        return "That API model no longer exists."
+    old_id = str(model.get("model", ""))
+    old_label = str(model.get("label") or old_id)
+    old_group = str(model.get("key_group") or "default")
+    new_id = Prompt.ask("API model ID (Enter keeps current)", console=console, default=old_id).strip() or old_id
+    new_label = Prompt.ask("Display name (Enter keeps current)", console=console, default=old_label).strip() or old_label
+    groups = _provider_groups(str(model.get("provider", "")).lower())
+    if groups:
+        console.print("Available key pools: " + ", ".join(groups))
+    new_group = Prompt.ask("Key pool (Enter keeps current)", console=console, default=old_group).strip() or old_group
+    old_base = str(model.get("base_url") or default_base_url(model.get("provider")) or "")
+    new_base = Prompt.ask("API base URL (Enter keeps current)", console=console, default=old_base).strip().rstrip("/") or old_base
+    if not new_base.startswith(("https://", "http://")):
+        return "Enter a valid http:// or https:// API base URL."
+    model.update({"model": new_id, "label": new_label, "key_group": new_group, "base_url": new_base})
+    save_config()
+    if not any(
+        key.get("provider") == model.get("provider")
+        and (key.get("group") or "default") == new_group
+        for key in PROVIDER_KEYS
+    ):
+        return f"Updated {new_label}, but no API key is saved in pool '{new_group}'. Add one with /keys."
+    return f"Updated API model: {provider_label(model.get('provider'))} · {new_label}."
+
+
+def remove_model_entry(entry):
+    global MODEL, SAVED_MODEL
+    reference = entry["ref"]
+    if entry["remote"]:
+        model = entry["item"]
+        label = model.get("label") or model.get("model")
+        if Prompt.ask(f"Remove API model '{label}' from Kurt?", choices=["y", "n"], default="n", console=console) != "y":
+            return "Model removal cancelled."
+        REMOTE_MODELS[:] = [item for item in REMOTE_MODELS if item.get("id") != model.get("id")]
+    else:
+        name = entry["name"]
+        if Prompt.ask(
+            f"Uninstall local Ollama model '{name}'? This deletes its downloaded weights.",
+            choices=["y", "n"], default="n", console=console,
+        ) != "y":
+            return "Model removal cancelled."
+        exe = shutil.which("ollama")
+        if not exe:
+            return "Ollama is not installed or not on PATH."
+        if not ensure_ollama():
+            return "Could not start Ollama to uninstall that model."
+        result = subprocess.run([exe, "rm", name], capture_output=True, text=True)
+        if result.returncode:
+            return (result.stderr or result.stdout or "Ollama could not remove that model.").strip()
+    WORKERS[:] = [worker for worker in WORKERS if worker != reference]
+    save_config()
+    if MODEL == reference:
+        alternatives = [item["ref"] for item in entry.get("alternatives", [])]
+        if alternatives:
+            set_model(alternatives[0])
+        else:
+            MODEL = SAVED_MODEL = DEFAULT_MODEL
+            save_config()
+            return "Model removed. No alternative model is installed; add one before chatting."
+    return "Model removed."
+
+
+def models_menu():
+    global AGENTS, WORKERS, MODEL_SORT, MODEL_SORT_DESC
+    if shutil.which("ollama"):
+        ensure_ollama()
+    local_models = installed_models() if ollama_up() else []
+    buf = ""
+    note = ""
+    prev_lines = 0
+    while True:
+        local = sort_models(local_models, MODEL_SORT, MODEL_SORT_DESC)
+        entries = [
+            {"ref": item["name"], "name": item["name"], "provider": "Ollama", "params": item["params"],
+             "size": item["size"], "remote": False, "item": item}
+            for item in local
+        ]
+        for item in sorted(REMOTE_MODELS, key=lambda m: (m.get("provider", ""), m.get("label") or m.get("model", ""))):
+            entries.append({
+                "ref": remote_model_ref(item), "name": item.get("label") or item.get("model"),
+                "provider": provider_label(item.get("provider")), "params": "API", "size": 0,
+                "remote": True, "item": item,
+            })
         arrow = " ▼" if MODEL_SORT_DESC else " ▲"
 
         def head(key, label):
@@ -2410,36 +2798,41 @@ def models_menu():
         table = Table(box=None, header_style="bold", padding=(0, 2))
         table.add_column("#", justify="right", no_wrap=True)
         table.add_column(head("name", "Model"), overflow="fold")
-        table.add_column(head("params", "Params"), justify="right", no_wrap=True)
+        table.add_column("Provider", no_wrap=True)
+        table.add_column(head("params", "Type"), justify="right", no_wrap=True)
         table.add_column(head("size", "Size"), justify="right", no_wrap=True)
         table.add_column("Role", no_wrap=True)
-        for i, m in enumerate(models, 1):
+        for i, item in enumerate(entries, 1):
             role = []
-            if same_model(m["name"], MODEL):
+            if item["ref"] == MODEL:
                 role.append("● main")
-            if any(same_model(m["name"], w) for w in WORKERS):
+            if item["ref"] in WORKERS:
                 role.append("agent worker")
             table.add_row(
-                str(i), Text(m["name"]), m["params"] or "-", fmt_size(m["size"]) or "-", ", ".join(role),
+                str(i), Text(str(item["name"])), item["provider"], item["params"],
+                "API" if item["remote"] else (fmt_size(item["size"]) or "-"), ", ".join(role),
             )
 
         keys = Table.grid(padding=(0, 2))
         keys.add_column(style="bold", no_wrap=True)
         keys.add_column()
         keys.add_row("number + Enter", "use as main model")
-        keys.add_row("+", "add a model")
+        keys.add_row("+", "add a local model from Hugging Face / Ollama")
+        keys.add_row("m", "add a remote API model")
+        keys.add_row("e + number", "edit an API model's ID, name, key pool, or endpoint")
+        keys.add_row("d + number", "remove an API model or uninstall a local model")
+        keys.add_row("k", "manage provider API keys and key pools")
         keys.add_row("g", f"toggle agents (now {'ON' if AGENTS else 'OFF'})")
         keys.add_row("w + number + Enter", "toggle a model as agent worker")
-        keys.add_row("s  or  ← →", f"sort by Model / Size / Params (now {SORT_LABELS[MODEL_SORT]})")
-        keys.add_row("r  or  ↑ ↓", "reverse the sort order")
+        keys.add_row("s  or  ← →", f"sort local models (now {SORT_LABELS[MODEL_SORT]})")
+        keys.add_row("r  or  ↑ ↓", "reverse the local model sort order")
         keys.add_row("Enter / q", "close")
-
         try:
             interactive = sys.stdin.isatty()
         except Exception:
             interactive = False
         with console.capture() as cap:
-            console.print(Panel(table, title="Models", border_style="magenta", expand=False))
+            console.print(Panel(table, title="Models · local + API", border_style="magenta", expand=False))
             console.print(keys)
             if note:
                 console.print(f"[dim]{note}[/]")
@@ -2458,30 +2851,49 @@ def models_menu():
         if key is None or key == "ctrl-c":
             return
         if key == "enter":
-            if not buf:
-                return
-            cmd, buf = buf, ""
+            cmd, buf = buf.lower(), ""
             mw = re.fullmatch(r"w\s*(\d+)", cmd)
+            md = re.fullmatch(r"d\s*(\d+)", cmd)
+            me = re.fullmatch(r"e\s*(\d+)", cmd)
             if mw:
                 idx = int(mw.group(1))
-                if 1 <= idx <= len(models):
-                    name = models[idx - 1]["name"]
-                    if any(same_model(w, name) for w in WORKERS):
-                        WORKERS = [w for w in WORKERS if not same_model(w, name)]
-                        note = f"removed worker {escape(name)}"
+                if 1 <= idx <= len(entries):
+                    reference = entries[idx - 1]["ref"]
+                    if reference in WORKERS:
+                        WORKERS = [worker for worker in WORKERS if worker != reference]
+                        note = f"removed worker {escape(entries[idx - 1]['name'])}"
                     else:
-                        WORKERS.append(name)
-                        note = f"added worker {escape(name)}"
+                        WORKERS.append(reference)
+                        note = f"added worker {escape(entries[idx - 1]['name'])}"
                     save_config()
+                else:
+                    note = "[red]no such model number[/]"
+            elif md:
+                idx = int(md.group(1))
+                if 1 <= idx <= len(entries):
+                    entry = dict(entries[idx - 1])
+                    entry["alternatives"] = entries[:idx - 1] + entries[idx:]
+                    prev_lines = 0
+                    note = remove_model_entry(entry)
+                    local_models = installed_models() if ollama_up() else []
+                else:
+                    note = "[red]no such model number[/]"
+            elif me:
+                idx = int(me.group(1))
+                if 1 <= idx <= len(entries):
+                    prev_lines = 0
+                    note = edit_remote_model_flow(entries[idx - 1])
                 else:
                     note = "[red]no such model number[/]"
             elif cmd.isdigit():
                 idx = int(cmd)
-                if 1 <= idx <= len(models):
+                if 1 <= idx <= len(entries):
                     prev_lines = 0
-                    set_model(models[idx - 1]["name"])
+                    set_model(entries[idx - 1]["ref"])
                 else:
                     note = "[red]no such model number[/]"
+            elif not cmd:
+                return
             else:
                 note = "[red]not an option[/]"
             continue
@@ -2493,42 +2905,62 @@ def models_menu():
                 buf = ""
                 continue
             return
-        if len(key) != 1:
-            k = key
-            if buf:
-                continue
-        else:
-            k = key.lower()
-        if k.isdigit():
-            buf += k
-        elif k == "w" and not buf:
-            buf = "w"
-        elif buf:
+        if key in ("right", "left") and not buf:
+            i = MENU_SORT_ORDER.index(MODEL_SORT) if MODEL_SORT in MENU_SORT_ORDER else 0
+            MODEL_SORT = MENU_SORT_ORDER[(i + (1 if key == "right" else -1)) % len(MENU_SORT_ORDER)]
+            MODEL_SORT_DESC = SORT_KEYS[MODEL_SORT][1]
+            save_config()
             continue
-        elif k == "q":
-            return
-        elif k in ("s", "right"):
-            i = MENU_SORT_ORDER.index(MODEL_SORT) if MODEL_SORT in MENU_SORT_ORDER else 0
-            MODEL_SORT = MENU_SORT_ORDER[(i + 1) % len(MENU_SORT_ORDER)]
-            MODEL_SORT_DESC = SORT_KEYS[MODEL_SORT][1]
-            save_config()
-        elif k == "left":
-            i = MENU_SORT_ORDER.index(MODEL_SORT) if MODEL_SORT in MENU_SORT_ORDER else 0
-            MODEL_SORT = MENU_SORT_ORDER[(i - 1) % len(MENU_SORT_ORDER)]
-            MODEL_SORT_DESC = SORT_KEYS[MODEL_SORT][1]
-            save_config()
-        elif k in ("r", "up", "down"):
+        if key in ("up", "down") and not buf:
             MODEL_SORT_DESC = not MODEL_SORT_DESC
             save_config()
-        elif k in ("+", "a"):
+            continue
+        if isinstance(key, str) and len(key) == 1 and key.isalnum():
+            if not buf:
+                k = key.lower()
+                if k == "q":
+                    return
+                if k == "s":
+                    i = MENU_SORT_ORDER.index(MODEL_SORT) if MODEL_SORT in MENU_SORT_ORDER else 0
+                    MODEL_SORT = MENU_SORT_ORDER[(i + 1) % len(MENU_SORT_ORDER)]
+                    MODEL_SORT_DESC = SORT_KEYS[MODEL_SORT][1]
+                    save_config()
+                    continue
+                if k == "l":
+                    prev_lines = 0
+                    add_model_flow()
+                    local_models = installed_models() if ollama_up() else []
+                    continue
+                if k == "m":
+                    prev_lines = 0
+                    add_remote_model_flow()
+                    continue
+                if k == "k":
+                    prev_lines = 0
+                    provider_keys_menu()
+                    continue
+                if k == "g":
+                    AGENTS = not AGENTS
+                    save_config()
+                    note = f"agents: {'ON' if AGENTS else 'OFF'}"
+                    if AGENTS and not WORKERS:
+                        note += " · no worker models chosen, helpers use the main model"
+                    continue
+                if k == "r":
+                    MODEL_SORT_DESC = not MODEL_SORT_DESC
+                    save_config()
+                    continue
+                if k == "w":
+                    buf = "w"
+                    continue
+                if k == "d":
+                    buf = "d"
+                    continue
+            buf += key.lower()
+        elif key == "+" and not buf:
             prev_lines = 0
             add_model_flow()
-        elif k == "g":
-            AGENTS = not AGENTS
-            save_config()
-            note = f"agents: {'ON' if AGENTS else 'OFF'}"
-            if AGENTS and not WORKERS:
-                note += " · no worker models chosen, so helpers will use the main model (press w then a number)"
+            local_models = installed_models() if ollama_up() else []
 
 
 # ------------------------------------------------------- busy-time input ---
@@ -2699,7 +3131,8 @@ def plan_agents(request):
 
 
 def effective_workers():
-    names = [m["name"] for m in installed_models()]
+    names = [m["name"] for m in installed_models()] if ollama_up() else []
+    names.extend(remote_model_ref(item) for item in REMOTE_MODELS)
     ws = [w for w in WORKERS if any(same_model(w, n) for n in names)]
     return ws or [MODEL]
 
@@ -3486,7 +3919,7 @@ def run_turn(messages):
         except Exception as e:
             failed = True
             printer.flush()
-            console.print(f"\n[red]Error talking to Ollama:[/] {escape(str(e))}")
+            console.print(f"\n[red]Error talking to the model:[/] {escape(str(e))}")
         finally:
             printer.flush()
             meter.stop()
@@ -3511,8 +3944,8 @@ def run_turn(messages):
 
 HELP = """[bold]Commands[/]
   /help           show this help
-  /models         list models, switch the main model, add a model from Hugging Face,
-                  and turn agents on or off
+  /models         switch, add or remove local and API models; configure agents
+  /keys           add, edit, group, or remove provider API keys
   /speed          show the detected hardware and the speed settings in use
                   (/speed refresh re-detects it)
   /think [on|off] turn thinking on or off (off is much faster on computers without a GPU)
@@ -3604,6 +4037,8 @@ def handle_command(line, messages):
         console.print(HELP)
     elif cmd == "/models":
         models_menu()
+    elif cmd == "/keys":
+        provider_keys_menu()
     elif cmd == "/speed":
         speed_report(refresh=arg.strip().lower() == "refresh")
     elif cmd == "/fast":
@@ -3676,7 +4111,7 @@ def read_input():
     """Read from Kurt's fixed bottom input box when the terminal supports it."""
     if TERMINAL_UI and TERMINAL_UI.enabled:
         return TERMINAL_UI.read_line()
-    return console.input("[bold bright_green]kurt >[/] [dim]/help · /models · @file[/] ")
+    return console.input("[bold bright_green]kurt >[/] [dim]/help · /models · /keys · @file[/] ")
 
 
 def _cfg_is_first_scan():
@@ -3684,7 +4119,7 @@ def _cfg_is_first_scan():
 
 
 def main():
-    global TERMINAL_UI, TIP_SHOWN, CONTEXT_PCT
+    global TERMINAL_UI, TIP_SHOWN, CONTEXT_PCT, MODEL, SAVED_MODEL
     if len(sys.argv) > 1 and sys.argv[1] in ("-v", "--version"):
         print(f"kurt {__version__}")
         return
@@ -3701,17 +4136,23 @@ def main():
         os.system("")
 
     print_brand()
-    if _cfg_is_first_scan():
-        with console.status("Detecting your hardware (first run only)..."):
-            get_hardware()
+    if MODEL.startswith("remote:") and not get_remote_model(MODEL):
+        console.print("[yellow]The saved API model no longer exists. Choose another model with /models.[/]")
+        MODEL = SAVED_MODEL = DEFAULT_MODEL
+        save_config()
+    if get_remote_model(MODEL):
+        console.print(f"[dim green]☁ {escape(short_model(MODEL, 70))}[/]")
     else:
-        get_hardware()
-    if not ensure_ollama() or not ensure_model():
-        sys.exit(1)
-    retune()
-    console.print(Text(tune_summary(), style="dim green"))
-    # load the model in the background so you can start typing right away
-    threading.Thread(target=warm_model, kwargs={"quiet": True}, daemon=True).start()
+        if _cfg_is_first_scan():
+            with console.status("Detecting your hardware (first run only)..."):
+                get_hardware()
+        else:
+            get_hardware()
+        if not ensure_ollama() or not ensure_model():
+            sys.exit(1)
+        retune()
+        console.print(Text(tune_summary(), style="dim green"))
+        threading.Thread(target=warm_model, kwargs={"quiet": True}, daemon=True).start()
     if SERVER_EXTERNAL and not TIP_SHOWN:
         console.print("[dim]Tip: /speed shows Ollama settings that can make it even faster.[/]")
         TIP_SHOWN = True
@@ -3727,7 +4168,7 @@ def main():
 
     ui = TerminalUI()
     if not ui.enabled:
-        console.print("[dim]/help for commands · /models to switch models · @file to attach a file[/]")
+        console.print("[dim]/help · /models · /keys · @file[/]")
     if ui.start():
         TERMINAL_UI = ui
         ui.draw_footer(preserve_cursor=True)
