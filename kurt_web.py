@@ -32,6 +32,7 @@ from kurt_sandbox import is_code_file, validate_content
 CONFIG_DIR = K.CONFIG_DIR
 WEB_SETTINGS_FILE = CONFIG_DIR / "web_settings.json"
 CHATS_FILE = CONFIG_DIR / "chats.json"
+WEB_PORT = int(os.environ.get("KURT_WEB_PORT", "1277"))
 MAX_BODY = 32 * 1024 * 1024
 MAX_IMPORT_BYTES = 20 * 1024 * 1024
 MAX_WORKSPACE_CONTEXT = 1_400_000
@@ -50,11 +51,17 @@ WEB INTERFACE FILE OUTPUT RULES:
   @@@ END
 - For an existing file in the temporary workspace, use the supplied contents and emit a
   complete replacement with WRITE. Never invent unseen file contents.
-- Do not emit READ or RUN action blocks. Attached text files are included in context;
-  binary assets and archives are preserved in the temporary workspace.
-- Do not emit shell commands or claim to have inspected files that were not attached.
-- Keep paths relative to this conversation's temporary workspace. Never target paths
-  outside it or claim that the original project was changed.
+- This web chat does not execute shell commands, terminal commands, Python snippets, or
+  provider tool calls. Never attempt to call bash, shell, terminal, ls, find, cat, or any
+  other tool. Never emit tool-call markers such as <|tool_call_start|> or <|tool_call_end|>.
+- Never emit READ or RUN action blocks. The only supported file actions are complete
+  WRITE and EDIT blocks in the exact format described above.
+- Use the workspace tree and readable file contents already supplied in the system
+  messages. They are the source of truth for what is available. If the workspace is empty
+  or lacks the files needed, ask the user to add the project through Workspace files.
+- Do not claim to have inspected files that were not attached or whose contents were not
+  supplied. Keep paths relative to this conversation's temporary workspace. Never target
+  paths outside it or claim that the original project was changed.
 """
 
 HTML_PAGE = r'''<!doctype html>
@@ -124,8 +131,11 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .main.empty .messages{flex:0 0 auto;overflow:visible;padding:0 20px}
 .welcome{text-align:center;padding-bottom:22px}
 .welcome h1{font:400 34px/1.2 var(--serif);letter-spacing:-.01em;margin:0}
-.message{max-width:760px;margin:0 auto 26px}
-.message.user .bubble{display:inline-block;max-width:100%;background:var(--raise);border-radius:16px;padding:9px 15px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.6}
+.message{display:flex;width:100%;max-width:760px;margin:0 auto 26px}
+.message.user{justify-content:flex-end}
+.message.assistant{justify-content:flex-start}
+.message.user .bubble{display:inline-block;max-width:min(78%,680px);margin-left:auto;background:var(--raise);border-radius:16px;padding:9px 15px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.6}
+.message.assistant .bubble{width:100%;min-width:0}
 .bubble{min-width:0}
 .content{overflow-wrap:anywhere;font-family:var(--serif);font-size:16.5px;line-height:1.7}
 .content:empty{display:none}
@@ -202,6 +212,26 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .modal-head{position:sticky;top:0;z-index:2;background:var(--panel);padding:14px 20px;display:flex;align-items:center;border-bottom:1px solid var(--line)}
 .modal-head h2{font-size:17px;margin:0;flex:1}
 .modal-body{padding:18px 20px 24px}
+.modal.settings-modal{width:min(1020px,100%);height:min(760px,88vh);max-height:88vh;display:flex;flex-direction:column;overflow:hidden}
+.settings-modal .modal-head{flex:none}
+.settings-body{display:grid;grid-template-columns:205px minmax(0,1fr);flex:1;min-height:0;overflow:hidden;padding:0}
+.settings-nav{display:flex;flex-direction:column;gap:5px;padding:16px 12px;background:var(--side);border-right:1px solid var(--line);min-height:0}
+.settings-nav-caption{padding:2px 9px 8px;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase}
+.settings-nav-btn{width:100%;display:flex;align-items:center;text-align:left;background:transparent;border:1px solid transparent;border-radius:9px;padding:9px 10px;color:var(--muted);font-size:13.5px}
+.settings-nav-btn:hover{background:var(--raise);color:var(--text)}
+.settings-nav-btn.active{background:var(--green-soft);border-color:var(--line2);color:var(--text);font-weight:650}
+.settings-panel-area{min-width:0;min-height:0;overflow-y:auto;padding:22px 25px 28px}
+.settings-panel{display:none;max-width:760px}
+.settings-panel.active{display:block}
+.settings-panel>h3{font-size:18px;letter-spacing:-.01em;margin:0 0 5px}
+.settings-panel>.inline-note{margin:0 0 18px;line-height:1.55}
+.model-download-card{padding:14px;border:1px solid var(--line2);border-radius:11px;background:var(--bg);margin-top:16px}
+.model-download-card h4{font-size:13px;margin:0 0 5px}
+.model-download-card p{color:var(--muted);font-size:12px;margin:0 0 12px}
+.model-download-card .row{align-items:stretch}
+.model-download-card .row input{flex:1 1 240px;min-width:0;background:var(--panel);border:1px solid var(--line2);border-radius:8px;padding:8px 10px;outline:none}
+.model-download-card .row input:focus{border-color:var(--green)}
+.model-download-card .row button{flex:0 0 auto}
 .settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .field{display:grid;gap:5px;margin-bottom:13px}
 .field label{font-size:13px;color:var(--muted)}
@@ -251,6 +281,12 @@ body.nav-open .scrim{display:block;position:fixed;inset:0;background:rgba(4,10,7
 .composer-wrap{padding:6px 10px 10px}
 .welcome h1{font-size:28px}
 .settings-grid{grid-template-columns:1fr}
+.modal.settings-modal{width:100%;height:92vh;max-height:92vh}
+.settings-body{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
+.settings-nav{flex-direction:row;overflow-x:auto;overflow-y:hidden;gap:5px;padding:8px 10px;border-right:0;border-bottom:1px solid var(--line)}
+.settings-nav-caption{display:none}
+.settings-nav-btn{width:auto;flex:0 0 auto;white-space:nowrap;padding:8px 11px}
+.settings-panel-area{padding:17px 15px 22px}
 }
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 </style></head>
@@ -279,7 +315,6 @@ body.nav-open .scrim{display:block;position:fixed;inset:0;background:rgba(4,10,7
 <div class="side-title">Recents</div>
 <div id="chatList" class="chat-list"></div>
 <div class="side-bottom">
-<button class="nav-btn" id="sidebarDownload"><span class="ico"><svg class="ic"><use href="#i-download"/></svg></span>Download a model</button>
 <button class="nav-btn" id="sidebarSettings"><span class="ico"><svg class="ic"><use href="#i-sliders"/></svg></span>Settings</button>
 <div class="local-note"><span class="status-dot"></span>Running on localhost only</div>
 </div>
@@ -312,13 +347,37 @@ body.nav-open .scrim{display:block;position:fixed;inset:0;background:rgba(4,10,7
 <div class="chips" id="chips"></div>
 </main>
 </div></div>
-<div class="modal-backdrop" id="settingsModal"><div class="modal"><div class="modal-head"><h2>Kurt settings</h2><button class="ghost" data-close="settingsModal">Close</button></div><div class="modal-body">
+<div class="modal-backdrop" id="settingsModal"><div class="modal settings-modal"><div class="modal-head"><h2>Kurt settings</h2><button class="ghost" data-close="settingsModal">Close</button></div><div class="modal-body settings-body">
+<nav class="settings-nav" aria-label="Settings sections">
+<div class="settings-nav-caption">Preferences</div>
+<button class="settings-nav-btn active" type="button" data-settings-tab="general">General</button>
+<button class="settings-nav-btn" type="button" data-settings-tab="local-models">Local models</button>
+<button class="settings-nav-btn" type="button" data-settings-tab="api-keys">API key groups</button>
+<button class="settings-nav-btn" type="button" data-settings-tab="remote-models">Remote API models</button>
+</nav>
+<div class="settings-panel-area">
+<section class="settings-panel active" data-settings-panel="general">
+<h3>General</h3><div class="inline-note">Choose the model Kurt uses by default and configure the project workspace.</div>
 <div class="settings-grid"><div class="field"><label>Active model</label><select id="settingsModel"></select></div><div class="field"><label>Project directory (read-only by default)</label><input id="projectRoot" placeholder="/Users/you/project"></div></div>
 <label class="check-row"><input id="allowProjectWrites" type="checkbox"> Allow applying generated files to the project (each file still requires confirmation)</label>
-<div class="field"><label>System prompt</label><textarea id="systemPrompt" style="min-height:150px"></textarea></div><div class="row"><button class="primary" id="saveSettings">Save settings</button><button id="reloadSettings">Reload from disk</button></div>
-<div class="section" id="localModelsSection"><h3>Local models</h3><div class="inline-note">Installed Ollama models are listed here. Select one to make it the active model, or download another model below.</div><div id="localModelList"></div><div class="row"><input id="downloadModel" aria-label="Ollama model name" placeholder="Model ID, e.g. qwen2.5-coder:7b"><button id="startDownload" class="primary">Download model</button></div><div class="inline-note" id="localDownloadStatus">Downloads run in the background; progress appears at the top of the window.</div></div>
-<div class="section"><h3>API key groups</h3><div class="inline-note">Keys in the same provider + group form a rotation pool. Kurt retries another key for quota, rate-limit, authentication, server, and connection errors before response content starts.</div><div id="keysList"></div><div class="settings-grid"><div class="field"><label>Provider</label><select id="keyProvider"></select></div><div class="field"><label>Key group</label><input id="keyGroup" list="keyPoolOptions" value="default" placeholder="e.g. personal"></div><div class="field"><label>Account label</label><input id="keyLabel" placeholder="Personal account"></div><div class="field"><label>API key</label><input id="keyValue" type="password" placeholder="Paste key (stored locally)"></div></div><button id="addKey" class="primary">Add API key</button><datalist id="keyPoolOptions"></datalist></div>
-<div class="section"><h3>Remote API models</h3><div class="inline-note">Each model uses the provider and key group selected below.</div><div class="settings-grid"><div class="field"><label>Provider</label><select id="remoteProvider"></select></div><div class="field"><label>API model ID</label><input id="remoteModelId" placeholder="e.g. openrouter/free"></div><div class="field"><label>Display name</label><input id="remoteLabel" placeholder="Model name"></div><div class="field"><label>Key group</label><input id="remoteGroup" list="keyPoolOptions" value="default"></div><div class="field" style="grid-column:1/-1"><label>API base URL (optional for standard providers)</label><input id="remoteBase" placeholder="https://api.example.com/v1"></div></div><button id="addRemote" class="primary">Add remote model</button><div id="remoteList" style="margin-top:10px"></div></div>
+<div class="field"><label>System prompt</label><textarea id="systemPrompt" style="min-height:180px"></textarea></div>
+<div class="row"><button class="primary" id="saveSettings">Save settings</button><button id="reloadSettings">Reload from disk</button></div>
+</section>
+<section class="settings-panel" id="localModelsSection" data-settings-panel="local-models">
+<h3>Local models</h3><div class="inline-note">Manage models installed through Ollama. Choose an installed model to make it active, or download another model to this computer.</div>
+<div id="localModelList"></div>
+<div class="model-download-card"><h4>Download a model</h4><p>Enter an Ollama model ID, for example <code>qwen2.5-coder:7b</code>. Downloads run in the background and progress appears at the top of Kurt.</p><div class="row"><input id="downloadModel" aria-label="Ollama model name" placeholder="Model ID, e.g. qwen2.5-coder:7b"><button id="startDownload" class="primary">Download model</button></div><div class="inline-note" id="localDownloadStatus">No model download started.</div></div>
+</section>
+<section class="settings-panel" data-settings-panel="api-keys">
+<h3>API key groups</h3><div class="inline-note">Keys in the same provider and group form a rotation pool. Kurt retries another key for quota, rate-limit, authentication, server, and connection errors before response content starts.</div>
+<div id="keysList"></div>
+<div class="section"><h3>Add an API key</h3><div class="settings-grid"><div class="field"><label>Provider</label><select id="keyProvider"></select></div><div class="field"><label>Key group</label><input id="keyGroup" list="keyPoolOptions" value="default" placeholder="e.g. personal"></div><div class="field"><label>Account label</label><input id="keyLabel" placeholder="Personal account"></div><div class="field"><label>API key</label><input id="keyValue" type="password" placeholder="Paste key (stored locally)"></div></div><button id="addKey" class="primary">Add API key</button><datalist id="keyPoolOptions"></datalist></div>
+</section>
+<section class="settings-panel" data-settings-panel="remote-models">
+<h3>Remote API models</h3><div class="inline-note">Register models from Claude, OpenAI, Grok, OpenRouter, and other configured providers. Each model uses the provider and key group selected below.</div>
+<div class="section" style="border-top:0;margin-top:0;padding-top:0"><div class="settings-grid"><div class="field"><label>Provider</label><select id="remoteProvider"></select></div><div class="field"><label>API model ID</label><input id="remoteModelId" placeholder="e.g. openrouter/free"></div><div class="field"><label>Display name</label><input id="remoteLabel" placeholder="Model name"></div><div class="field"><label>Key group</label><input id="remoteGroup" list="keyPoolOptions" value="default"></div><div class="field" style="grid-column:1/-1"><label>API base URL (optional for standard providers)</label><input id="remoteBase" placeholder="https://api.example.com/v1"></div></div><button id="addRemote" class="primary">Add remote model</button></div>
+<div id="remoteList" style="margin-top:18px"></div>
+</section>
 </div></div></div>
 <div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files to this chat</h2><button class="ghost" data-close="filesModal">Close</button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Files and folders are copied into this conversation’s isolated temporary workspace. Folders and ZIP files are automatically archived and unpacked there. Readable text is included with requests to your selected AI provider; common secret files such as .env and private keys are skipped. Your original project is not edited.</p><div class="field"><label>Browse your configured project</label><div class="row"><input id="fileFolder" value="" placeholder="Project root"><button id="refreshFiles">Browse</button></div></div><div class="file-actions"><button id="selectCurrentFolder">Add this folder</button><button id="chooseLocalFiles">Choose files from computer</button><button id="chooseLocalFolder">Choose folder from computer</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList">No local files selected.</div><div class="inline-note">Use Open to navigate into a folder, or Add folder to include it recursively.</div><div class="file-picker" id="filePicker"></div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
 <div class="toast" id="toast"></div>
@@ -329,6 +388,11 @@ function toast(msg){const el=$('toast');el.textContent=msg;el.classList.add('sho
 function modelLabel(m){return `${m.label||m.name||m.model} · ${m.provider}${m.current?' · active':''}`}
 function fillModels(){const html=state.models.map(m=>`<option value="${esc(m.ref)}">${esc(modelLabel(m))}</option>`).join('');$('topModel').innerHTML=html||'<option>No models configured</option>';$('settingsModel').innerHTML=html||'<option>No models configured</option>';if(state.settings.model){$('topModel').value=state.settings.model;$('settingsModel').value=state.settings.model}renderLocalModels()}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function stripUnsupportedActions(src){return String(src||'')
+ .replace(/@@@\s*(?:RUN|READ|EXEC|BASH|SHELL)\b[\s\S]*?(?:@@@\s*END\b|$)/gi,'')
+ .replace(/<\|tool_call_start\|>[\s\S]*?(?:<\|tool_call_end\|>|$)/gi,'')
+ .replace(/<\|tool_call_(?:start|end)\|>/gi,'')
+ .trim()}
 function inline(s){const spans=[];s=s.replace(/`([^`\n]+)`/g,(_,c)=>{spans.push('<code>'+c+'</code>');return '\u0001'+(spans.length-1)+'\u0001'});s=s.replace(/\*\*([^*\n]+?)\*\*/g,'<strong>$1</strong>').replace(/(^|[^*\w])\*([^*\n]+?)\*(?![*\w])/g,'$1<em>$2</em>').replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');return s.replace(/\u0001(\d+)\u0001/g,(_,i)=>spans[+i])}
 function mdBlocks(text){const lines=esc(text).split('\n');let html='',para=[],list=null,quote=[];const flushP=()=>{if(para.length){html+='<p>'+inline(para.join('\n')).replace(/\n/g,'<br>')+'</p>';para=[]}};const flushL=()=>{if(list){html+='<'+list.t+'>'+list.items.map(i=>'<li>'+inline(i)+'</li>').join('')+'</'+list.t+'>';list=null}};const flushQ=()=>{if(quote.length){html+='<blockquote>'+inline(quote.join('<br>'))+'</blockquote>';quote=[]}};for(const line of lines){let m;if(!line.trim()){flushP();flushL();flushQ();continue}if(m=/^(#{1,6})\s+(.*)$/.exec(line)){flushP();flushL();flushQ();const n=Math.min(m[1].length,3);html+='<h'+n+'>'+inline(m[2])+'</h'+n+'>';continue}if(/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)){flushP();flushL();flushQ();html+='<hr>';continue}if(m=/^&gt;\s?(.*)$/.exec(line)){flushP();flushL();quote.push(m[1]);continue}if(m=/^\s*[-*+]\s+(.*)$/.exec(line)){flushP();flushQ();if(!list||list.t!=='ul'){flushL();list={t:'ul',items:[]}}list.items.push(m[1]);continue}if(m=/^\s*\d+[.)]\s+(.*)$/.exec(line)){flushP();flushQ();if(!list||list.t!=='ol'){flushL();list={t:'ol',items:[]}}list.items.push(m[1]);continue}flushL();flushQ();para.push(line)}flushP();flushL();flushQ();return html}
 function renderMarkdown(src){src=String(src||'');return src.split(/(```[^\n]*\n[\s\S]*?```|```[^\n]*\n[\s\S]*$|```[^\n]*$)/).map((seg,i)=>{if(i%2===0)return mdBlocks(seg);const nl=seg.indexOf('\n');const lang=(nl<0?seg.slice(3):seg.slice(3,nl)).trim().split(/\s+/)[0]||'';let code=nl<0?'':seg.slice(nl+1);if(nl>=0&&seg.endsWith('```'))code=code.replace(/\n?```$/,'');return '<div class="codebox"><div class="codehead"><span>'+esc(lang||'code')+'</span><button class="copy-mini" data-copy-code>Copy code</button></div><pre><code>'+esc(code.replace(/\n$/,''))+'</code></pre></div>'}).join('')}
@@ -336,7 +400,7 @@ function splitThink(raw,streaming){let think='',answer='',open=false;const close
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
 function bindCopy(root){root.querySelectorAll('[data-copy-code]').forEach(b=>b.onclick=()=>{const code=b.closest('.codebox').querySelector('code');navigator.clipboard.writeText(code?code.textContent:'').then(()=>toast('Code copied'))})}
 function thinkBlock(){const d=document.createElement('div');d.className='think';d.hidden=true;d.innerHTML='<button class="think-head" type="button" aria-expanded="false"><svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Thinking</span></button><div class="think-body"></div>';d.querySelector('.think-head').onclick=()=>{const open=d.classList.toggle('open');d.querySelector('.think-head').setAttribute('aria-expanded',String(open))};return d}
-function setThink(node,text,opt){const o=opt||{};const t=node.querySelector('.think');if(!t)return;if(!text&&!o.live){t.hidden=true;return}t.hidden=false;t.classList.toggle('live',!!o.live);t.querySelector('.think-label').textContent=o.live?'Thinking…':(o.secs?'Thought for '+fmtSecs(o.secs):'Thought process');const b=t.querySelector('.think-body');if(b.textContent!==text){b.textContent=text;if(o.live&&t.classList.contains('open'))b.scrollTop=b.scrollHeight}}
+function setThink(node,_text,_opt){const t=node.querySelector('.think');if(t){t.hidden=true;t.classList.remove('live','open');const b=t.querySelector('.think-body');if(b)b.textContent=''}}
 function endThink(node){const t=node.querySelector('.think');if(!t)return;t.classList.remove('live');const l=t.querySelector('.think-label');if(l.textContent==='Thinking…')l.textContent='Thought process'}
 let follow=true;
 function scrollEnd(force){const m=$('messages');if(force||follow)m.scrollTop=m.scrollHeight}
@@ -347,7 +411,7 @@ function updateSend(){$('sendBtn').disabled=!state.busy&&!$('prompt').value.trim
 function hint(){$('composeHint').textContent=state.contextCount?state.contextCount+' item(s) in this chat’s isolated workspace':HINT}
 function setBusy(b){state.busy=b;const btn=$('sendBtn');btn.querySelector('use').setAttribute('href',b?'#i-stop':'#i-up');btn.title=b?'Stop response':'Send message';btn.setAttribute('aria-label',btn.title);updateSend()}
 function cancelRun(){if(state.abort)state.abort.abort();state.abort=null;state.run++;setBusy(false)}
-function renderMessage(role,content,artifacts,extra){const ex=extra||{};const wrap=document.createElement('div');wrap.className='message '+role;wrap.dataset.raw=content||'';const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user'){bubble.textContent=content}else{bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg></div>');bubble.querySelector('.content').innerHTML=renderMarkdown(content);bindCopy(wrap);setThink(wrap,ex.thinking||'',{secs:ex.secs||null});const slot=bubble.querySelector('.artifacts');(artifacts||[]).forEach(a=>slot.appendChild(artifactCard(a)));bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
+function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<think)/i.test(String(content||''))){safeContent='This earlier response contained an unsupported shell/tool-call attempt. Kurt did not execute it. Add the project folder through Workspace files so Kurt can inspect the supplied file tree and contents.'}wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user'){bubble.textContent=content}else{bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg></div>');bubble.querySelector('.content').innerHTML=renderMarkdown(safeContent);bindCopy(wrap);setThink(wrap,'');const slot=bubble.querySelector('.artifacts');(artifacts||[]).forEach(a=>slot.appendChild(artifactCard(a)));bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
 function artifactCard(a){const card=document.createElement('div');card.className='artifact'+(a.validation?.ok?'':' bad');card.innerHTML=`<div class="artifact-top"><div class="file-icon"><svg class="ic"><use href="#i-file"/></svg></div><div class="file-name">${esc(a.path)}</div><div class="file-check">${esc(a.validation?.message||'Saved in temporary workspace')}</div><span class="artifact-chev"><svg class="ic"><use href="#i-chev"/></svg></span></div><div class="artifact-body"><div class="codebox"><div class="codehead"><span>${esc((a.path.split('.').pop()||'FILE').toUpperCase())}</span><button class="copy-mini copy-artifact">Copy code</button></div><pre><code></code></pre></div><div class="artifact-actions"><button class="copy-artifact">Copy</button><button class="download-artifact">Download file</button><button class="primary apply-artifact">Apply to project</button></div></div>`;card.querySelector('code').textContent=a.content;card.querySelector('.artifact-top').onclick=()=>card.classList.toggle('open');card.querySelectorAll('.copy-artifact').forEach(b=>b.onclick=()=>navigator.clipboard.writeText(a.content).then(()=>toast('File content copied')));card.querySelector('.download-artifact').onclick=()=>{const blob=new Blob([a.content],{type:'application/octet-stream'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=a.path.split('/').pop();link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};card.querySelector('.apply-artifact').onclick=async()=>{if(!a.validation?.ok){toast('Fix validation errors before applying');return}if(!state.settings.allow_project_writes){toast('Enable project writes in Settings first');return}const overwrite=confirm(`Apply ${a.path} to ${state.projectRoot}?${a.exists?'\nThis will overwrite the existing project file.':''}\n\nThe isolated workspace copy will remain unchanged.`);if(!overwrite)return;try{const r=await api('/api/file/write',{path:a.path,content:a.content,overwrite,authorized:true});toast(r.message||'Applied to project');}catch(e){toast(e.message)}};return card}
 const SUGGESTIONS=[['Understand my project','Inspect the current project structure and explain its architecture.'],['Build a feature','Help me plan and implement a new feature. Ask for any missing requirements first.'],['Generate a file','Write a small utility script and return it as a file card.'],['Debug code','Help me debug this issue. Start by asking for the relevant error and files.']];
 function showWelcome(){setEmpty(true);follow=true;$('messages').innerHTML='<div class="welcome"><svg class="mark xl" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><h1>What are we building?</h1></div>';$('chips').innerHTML=SUGGESTIONS.map(s=>'<button class="chip" data-prompt="'+esc(s[1])+'">'+esc(s[0])+'</button>').join('');document.querySelectorAll('#chips [data-prompt]').forEach(b=>b.onclick=()=>{$('prompt').value=b.dataset.prompt;autosize();updateSend();$('prompt').focus()})}
@@ -364,16 +428,18 @@ async function ensureChat(){if(!state.chatId){const d=await api('/api/chats',{cr
 async function newChat(){cancelRun();state.chatId=null;resetComposer();showWelcome();setTitle('New chat','');renderChats();document.body.classList.remove('nav-open');$('prompt').focus()}
 async function loadChat(id){cancelRun();const d=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;try{const c=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=c.files||0}catch(e){}hint();$('messages').innerHTML='';const list=d.messages||[];if(list.length){setEmpty(false);list.forEach(m=>renderMessage(m.role,m.content,m.artifacts||[],{thinking:m.thinking,secs:m.thinking_secs}));follow=true;scrollEnd(true)}else showWelcome();setTitle(d.title||'Conversation',d.model||'');renderChats()}
 async function send(){const text=$('prompt').value.trim();if(!text||state.busy)return;const run=++state.run;setBusy(true);try{await ensureChat()}catch(e){if(run===state.run)setBusy(false);toast(e.message);return}if(run!==state.run)return;$('prompt').value='';autosize();hint();const full=text;if(run!==state.run)return;if($('main').classList.contains('empty')){setEmpty(false);$('messages').innerHTML=''}follow=true;renderMessage('user',text);const node=renderMessage('assistant','');node.classList.add('live');scrollEnd(true);$('chatMeta').textContent='Generating…';const contentEl=node.querySelector('.content');let raw='',fieldThink='',tThink=null,tDone=null,pending=false;const controller=new AbortController();state.abort=controller;
-const paint=()=>{pending=false;if(run!==state.run)return;const s=splitThink(raw,true);const think=[fieldThink.trim(),s.think].filter(Boolean).join('\n\n');const open=!!(s.open||(fieldThink&&!s.answer));if(think&&tThink===null)tThink=Date.now();if(tThink!==null&&!open&&tDone===null)tDone=Date.now();setThink(node,think,{live:open,secs:tDone?(tDone-tThink)/1000:null});if(s.answer){contentEl.innerHTML=renderMarkdown(s.answer);bindCopy(node)}node.dataset.raw=s.answer;scrollEnd()};
+const paint=()=>{pending=false;if(run!==state.run)return;const s=splitThink(raw,true);const safeAnswer=stripUnsupportedActions(s.answer);setThink(node,'');contentEl.innerHTML=safeAnswer?renderMarkdown(safeAnswer):'';if(safeAnswer)bindCopy(node);node.dataset.raw=safeAnswer;scrollEnd()};
 const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
-try{const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text:full,model:$('topModel').value}),signal:controller.signal});if(!res.ok){const x=await res.json().catch(()=>({}));throw new Error(x.error||res.statusText)}const reader=res.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;if(run!==state.run)return;buffer+=decoder.decode(value,{stream:true});let sep;while((sep=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,sep);buffer=buffer.slice(sep+2);const dataLine=frame.split('\n').find(x=>x.startsWith('data:'));if(!dataLine)continue;const event=JSON.parse(dataLine.slice(5).trim());if(event.type==='token'){raw+=event.text;queue()}else if(event.type==='thinking'){fieldThink+=event.text;queue()}else if(event.type==='done'){pending=false;contentEl.innerHTML=renderMarkdown(event.content);bindCopy(node);node.dataset.raw=event.content||'';setThink(node,event.thinking||'',{secs:event.thinking_secs||null});const slot=node.querySelector('.artifacts');(event.artifacts||[]).forEach(a=>slot.appendChild(artifactCard(a)));setTitle(event.title||'Conversation',event.model||'Completed');scrollEnd();await refreshChats()}else if(event.type==='error')throw new Error(event.message)}}}catch(e){if(run===state.run){if(e.name==='AbortError'){paint();refreshChats().catch(()=>{})}else{contentEl.classList.add('err');contentEl.textContent='Error: '+e.message;toast(e.message)}}}finally{node.classList.remove('live');endThink(node);if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent==='Generating…')meta.textContent='Ready'}}}
+try{const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text:full,model:$('topModel').value}),signal:controller.signal});if(!res.ok){const x=await res.json().catch(()=>({}));throw new Error(x.error||res.statusText)}const reader=res.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;if(run!==state.run)return;buffer+=decoder.decode(value,{stream:true});let sep;while((sep=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,sep);buffer=buffer.slice(sep+2);const dataLine=frame.split('\n').find(x=>x.startsWith('data:'));if(!dataLine)continue;const event=JSON.parse(dataLine.slice(5).trim());if(event.type==='token'){raw+=event.text;queue()}else if(event.type==='thinking'){fieldThink+=event.text;queue()}else if(event.type==='done'){pending=false;const safeFinal=stripUnsupportedActions(event.content||'');contentEl.innerHTML=safeFinal?renderMarkdown(safeFinal):'';bindCopy(node);node.dataset.raw=safeFinal;setThink(node,'');const slot=node.querySelector('.artifacts');(event.artifacts||[]).forEach(a=>slot.appendChild(artifactCard(a)));setTitle(event.title||'Conversation',event.model||'Completed');scrollEnd();await refreshChats()}else if(event.type==='error')throw new Error(event.message)}}}catch(e){if(run===state.run){if(e.name==='AbortError'){paint();refreshChats().catch(()=>{})}else{contentEl.classList.add('err');contentEl.textContent='Error: '+e.message;toast(e.message)}}}finally{node.classList.remove('live');endThink(node);if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent==='Generating…')meta.textContent='Ready'}}}
 $('messages').addEventListener('scroll',()=>{const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});
 $('toBottom').onclick=()=>{follow=true;scrollEnd(true);$('toBottom').classList.remove('show')};
 $('sendBtn').onclick=()=>{if(state.busy){if(state.abort)state.abort.abort()}else send()};
 $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!state.busy)send()}});
 $('prompt').addEventListener('input',()=>{autosize();updateSend()});
 $('newChat').onclick=newChat;
-async function openSettings(){await refreshBootstrap();$('settingsModal').classList.add('show')}
+function activateSettingsTab(tab){document.querySelectorAll('[data-settings-tab]').forEach(b=>b.classList.toggle('active',b.dataset.settingsTab===tab));document.querySelectorAll('[data-settings-panel]').forEach(p=>p.classList.toggle('active',p.dataset.settingsPanel===tab));const area=document.querySelector('.settings-panel-area');if(area)area.scrollTop=0}
+document.querySelectorAll('[data-settings-tab]').forEach(b=>b.onclick=()=>activateSettingsTab(b.dataset.settingsTab));
+async function openSettings(){await refreshBootstrap();activateSettingsTab('general');$('settingsModal').classList.add('show')}
 async function saveSettings(){const payload={project_root:$('projectRoot').value,system_prompt:$('systemPrompt').value,allow_project_writes:$('allowProjectWrites').checked};if($('settingsModel').value)payload.model=$('settingsModel').value;const d=await api('/api/settings',payload);state.settings=d.settings||{};state.settings.allow_project_writes=$('allowProjectWrites').checked;state.projectRoot=d.project_root;$('workspaceLabel').textContent=state.projectRoot;if(d.model){$('topModel').value=d.model;$('settingsModel').value=d.model}toast('Settings saved')}
 async function browseFiles(){const path=$('fileFolder').value.trim();const d=await api('/api/files?path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row';b.innerHTML='<span>↰</span><label>.. (parent folder)</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row';if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><button class="file-open">Open</button><button class="file-add">Add folder</button>`;row.querySelector('.file-open').onclick=()=>{$('fileFolder').value=item.path;browseFiles()};row.querySelector('.file-add').onclick=()=>{if(!state.selectedFolders.includes(item.path))state.selectedFolders.push(item.path);renderPendingUploads();toast('Folder staged for this chat')}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()}}el.appendChild(row)})}
 function renderPendingUploads(){const labels=[];if(state.selectedFiles.length)labels.push(state.selectedFiles.length+' project file(s)');if(state.selectedFolders.length)labels.push(state.selectedFolders.length+' project folder(s)');if(state.pendingUploads.length)labels.push(state.pendingUploads.length+' computer file(s)');$('uploadList').textContent=labels.length?labels.join(' · '):'No files or folders staged.'}
@@ -382,8 +448,8 @@ function bytesToBase64(buffer){const bytes=new Uint8Array(buffer);let binary='';
 async function attachFiles(){try{await ensureChat();const selectedFiles=state.selectedFiles.slice();const uploads=[];let total=0;for(const item of state.pendingUploads){total+=item.file.size;if(total>20*1024*1024)throw new Error('Local file selection exceeds the 20 MB import limit.');uploads.push({path:item.path,content:bytesToBase64(await item.file.arrayBuffer())})}const result=await api('/api/context/import',{chat_id:state.chatId,selected_files:state.selectedFiles,selected_folders:state.selectedFolders,uploads});state.contextCount=(state.contextCount||0)+Number(result.files||0);state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads=[];renderPendingUploads();$('filesModal').classList.remove('show');hint();toast(result.message||'Context added to isolated workspace')}catch(e){toast(e.message)}}
 async function startDownload(){const model=$('downloadModel').value.trim();if(!model){toast('Enter an Ollama model ID');return}try{const d=await api('/api/download',{model});$('downloadCaption').textContent='Queued: '+model;$('localDownloadStatus').textContent='Download queued: '+model;$('downloadModel').value='';toast('Download started in background');pollDownload()}catch(e){toast(e.message)}}
 async function pollDownload(){try{const d=await api('/api/download/status');const job=d.job;if(!job)return;const percent=job.total?job.completed/job.total*100:0;$('downloadFill').style.width=(job.state==='done'?100:percent)+'%';$('downloadCaption').textContent=job.state==='running'?`${job.model} · ${percent.toFixed(1)}% · ${job.human}`:`${job.model} · ${job.state}${job.error?' · '+job.error:''}`;if(job.state==='done'){await refreshBootstrap();$('localDownloadStatus').textContent=job.model+' installed successfully.';toast('Model download complete')}else if(job.state==='error'){$('localDownloadStatus').textContent=job.error||'Download failed';toast(job.error||'Download failed')}else{$('localDownloadStatus').textContent=job.model+' · '+percent.toFixed(1)+'% · '+job.human;setTimeout(pollDownload,1000)}}catch(e){console.error(e)}}
-$('sidebarSettings').onclick=openSettings;$('sidebarDownload').onclick=async()=>{await openSettings();$('localModelsSection').scrollIntoView({behavior:'smooth',block:'start'})};$('openFiles').onclick=$('contextBtn').onclick=()=>{$('filesModal').classList.add('show');renderPendingUploads();browseFiles()};$('topModel').onchange=async()=>{try{await api('/api/settings',{model:$('topModel').value});$('settingsModel').value=$('topModel').value;await refreshBootstrap();toast('Active model changed')}catch(e){toast(e.message)}};$('settingsModel').onchange=async()=>{const model=$('settingsModel').value;$('topModel').value=model;try{await api('/api/settings',{model});await refreshBootstrap();toast('Active model changed')}catch(e){toast(e.message)}};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=refreshBootstrap;$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:$('keyGroup').value,label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')};$('addRemote').onclick=async()=>{const d=await api('/api/settings',{model_action:'add',provider:$('remoteProvider').value,model:$('remoteModelId').value,label:$('remoteLabel').value,key_group:$('remoteGroup').value,base_url:$('remoteBase').value});await refreshBootstrap();toast(d.message||'Model added')};$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;$('exportWorkspace').onclick=async()=>{if(!state.chatId){toast('Start a conversation first');return}try{const res=await fetch('/api/workspace/export?chat_id='+encodeURIComponent(state.chatId),{headers:{'X-Kurt-Token':TOKEN}});if(!res.ok){const d=await res.json().catch(()=>({}));throw new Error(d.error||res.statusText)}const blob=await res.blob(),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download='kurt-workspace-'+state.chatId.slice(0,8)+'.zip';link.click();setTimeout(()=>URL.revokeObjectURL(url),2000)}catch(e){toast(e.message)}};$('clearChat').onclick=async()=>{if(!state.chatId)return;if(!confirm('Clear this conversation?'))return;cancelRun();await api('/api/chats/'+encodeURIComponent(state.chatId),{clear:true});showWelcome();$('chatTitle').textContent='New conversation';await refreshChats()};document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$(b.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(m=>m.onclick=e=>{if(e.target===m)m.classList.remove('show')});
-$('menuBtn').onclick=()=>document.body.classList.toggle('nav-open');$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',e=>{if(e.target.closest('.chat-item,#newChat,#openFiles,#sidebarSettings,#sidebarDownload'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const t=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=t;try{localStorage.setItem('kurt-theme',t)}catch(e){}};
+$('sidebarSettings').onclick=openSettings;$('openFiles').onclick=$('contextBtn').onclick=()=>{$('filesModal').classList.add('show');renderPendingUploads();browseFiles()};$('topModel').onchange=async()=>{try{await api('/api/settings',{model:$('topModel').value});$('settingsModel').value=$('topModel').value;await refreshBootstrap();toast('Active model changed')}catch(e){toast(e.message)}};$('settingsModel').onchange=async()=>{const model=$('settingsModel').value;$('topModel').value=model;try{await api('/api/settings',{model});await refreshBootstrap();toast('Active model changed')}catch(e){toast(e.message)}};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=refreshBootstrap;$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:$('keyGroup').value,label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')};$('addRemote').onclick=async()=>{const d=await api('/api/settings',{model_action:'add',provider:$('remoteProvider').value,model:$('remoteModelId').value,label:$('remoteLabel').value,key_group:$('remoteGroup').value,base_url:$('remoteBase').value});await refreshBootstrap();toast(d.message||'Model added')};$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;$('exportWorkspace').onclick=async()=>{if(!state.chatId){toast('Start a conversation first');return}try{const res=await fetch('/api/workspace/export?chat_id='+encodeURIComponent(state.chatId),{headers:{'X-Kurt-Token':TOKEN}});if(!res.ok){const d=await res.json().catch(()=>({}));throw new Error(d.error||res.statusText)}const blob=await res.blob(),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download='kurt-workspace-'+state.chatId.slice(0,8)+'.zip';link.click();setTimeout(()=>URL.revokeObjectURL(url),2000)}catch(e){toast(e.message)}};$('clearChat').onclick=async()=>{if(!state.chatId)return;if(!confirm('Clear this conversation?'))return;cancelRun();await api('/api/chats/'+encodeURIComponent(state.chatId),{clear:true});showWelcome();$('chatTitle').textContent='New conversation';await refreshChats()};document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$(b.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(m=>m.onclick=e=>{if(e.target===m)m.classList.remove('show')});
+$('menuBtn').onclick=()=>document.body.classList.toggle('nav-open');$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',e=>{if(e.target.closest('.chat-item,#newChat,#openFiles,#sidebarSettings'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const t=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=t;try{localStorage.setItem('kurt-theme',t)}catch(e){}};
 (async()=>{try{await refreshBootstrap();await refreshChats();showWelcome();pollDownload()}catch(e){toast(e.message)}})();
 </script></body></html>'''
 
@@ -394,6 +460,20 @@ THINK_CLOSE_RE = re.compile(r"</think(?:ing)?>", re.I)
 THINK_TAG_RE = re.compile(r"<(/)?think(?:ing)?>", re.I)
 THINK_RE = re.compile(r"<think(?:ing)?>([\s\S]*?)(?:</think(?:ing)?>|\Z)", re.I)
 ACTION_TAIL_RE = re.compile(r"@@@\s*(?:WRITE|EDIT)\b[\s\S]*\Z")
+UNSUPPORTED_ACTION_BLOCK_RE = re.compile(
+    r"@@@\s*(?:RUN|READ|EXEC|BASH|SHELL)\b[\s\S]*?(?:@@@\s*END\b|\Z)", re.I
+)
+TOOL_CALL_BLOCK_RE = re.compile(
+    r"<\|tool_call_start\|>[\s\S]*?(?:<\|tool_call_end\|>|\Z)", re.I
+)
+
+
+def strip_unsupported_actions(value):
+    """Remove unsupported terminal/tool-call protocol text from model output."""
+    text = UNSUPPORTED_ACTION_BLOCK_RE.sub("", str(value or ""))
+    text = TOOL_CALL_BLOCK_RE.sub("", text)
+    text = re.sub(r"<\|tool_call_(?:start|end)\|>", "", text, flags=re.I)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def split_thinking(raw):
@@ -819,7 +899,7 @@ class KurtWebApp:
         for current, dirs, files in os.walk(root):
             dirs[:] = sorted(d for d in dirs if not KurtWebApp._skip_context_dir(d))
             for name in sorted(files):
-                if self._skip_context_name(name) or name == '.DS_Store':
+                if KurtWebApp._skip_context_name(name) or name == '.DS_Store':
                     continue
                 rows.append(str((Path(current) / name).relative_to(root)).replace('\\', '/'))
                 if len(rows) >= limit:
@@ -1374,21 +1454,22 @@ class Handler(BaseHTTPRequestHandler):
         def finish(stopped=False):
             full = "".join(answer).strip()
             inline_thinking, reply = split_thinking(full)
-            thinking = "\n\n".join(part for part in ("".join(field_thinking).strip(), inline_thinking) if part)
+            reply = strip_unsupported_actions(reply)
+            thinking = ""  # Do not expose or persist model reasoning text.
+
             if stopped:
                 reply = ACTION_TAIL_RE.sub("", reply).strip()
                 artifacts = []
             else:
                 artifacts = self.app.artifacts_from_answer(reply, chat_id)
-            visible = K.BLOCK_RE.sub("", reply).strip()
+            visible = K.BLOCK_RE.sub("", strip_unsupported_actions(reply)).strip()
             secs = None
             if thinking and clock["start"] is not None:
                 secs = round((clock["end"] or time.time()) - clock["start"], 1)
-            if visible or thinking or not stopped:
+            if not visible and not artifacts and not stopped and ("@@@" in full or "tool_call" in full or "<think" in full.lower()):
+                visible = ("I can’t execute shell commands or provider tool calls in this web chat, so that attempted action was discarded. Add the project folder using Workspace files (Choose folder from computer); Kurt will then receive its file tree and readable file contents and can inspect those directly.")
+            if visible or artifacts or not stopped:
                 record = {"role": "assistant", "content": visible, "artifacts": artifacts}
-                if thinking:
-                    record["thinking"] = thinking
-                    record["thinking_secs"] = secs
                 if stopped:
                     record["stopped"] = True
                 chat["messages"].append(record)
@@ -1403,10 +1484,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not chunk:
                     continue
                 if kind in THINKING_KINDS:
-                    field_thinking.append(chunk)
                     clock["field"] = True
                     mark_open()
-                    emit({"type": "thinking", "text": chunk})
                 elif kind == "content":
                     if clock["field"]:
                         clock["field"] = False
@@ -1455,16 +1534,28 @@ def launch_web():
         K.retune()
     except Exception:
         pass
-    server = None
-    last_error = None
-    for port in range(8765, 8785):
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", WEB_PORT), Handler)
+    except OSError as exc:
+        if WEB_PORT >= 1024:
+            raise RuntimeError("Kurt could not bind to localhost:{} (the port may already be in use): {}".format(WEB_PORT, exc)) from exc
+        fallback_port = int(os.environ.get("KURT_WEB_FALLBACK_PORT", "10220"))
+        if not 1024 <= fallback_port <= 65535 or fallback_port == WEB_PORT:
+            raise RuntimeError("KURT_WEB_FALLBACK_PORT must be an unused port from 1024 to 65535.") from exc
         try:
-            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-            break
-        except OSError as exc:
-            last_error = exc
-    if server is None:
-        raise RuntimeError("Could not find a free localhost port between 8765 and 8784: {}".format(last_error))
+            server = ThreadingHTTPServer(("127.0.0.1", fallback_port), Handler)
+        except OSError as fallback_error:
+            raise RuntimeError(
+                "Requested port {} is unavailable ({}), and fallback port {} is unavailable: {}".format(
+                    WEB_PORT, exc, fallback_port, fallback_error
+                )
+            ) from fallback_error
+        print(
+            "Note: could not use localhost:{} ({}); using localhost:{} instead. "
+            "Set KURT_WEB_PORT to another available port (1024+) to choose a different address.".format(
+                WEB_PORT, exc, fallback_port
+            )
+        )
     server.daemon_threads = True
     server.app = app
     url = "http://127.0.0.1:{}".format(server.server_address[1])
