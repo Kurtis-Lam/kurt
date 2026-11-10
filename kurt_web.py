@@ -678,6 +678,21 @@ html,body{height:100%;min-height:100%;overflow:hidden}
  .attachment-chip{max-width:100%}
 }
 
+
+.chat-list{padding:2px 0 14px;scrollbar-gutter:stable}
+.chat-date-heading{padding:16px 10px 6px;color:var(--muted);font-size:11.5px;font-weight:600;line-height:1.2;user-select:none}
+.chat-date-heading:first-child{padding-top:8px}
+.chat-row{margin:1px 0;padding:0 2px 0 0;gap:2px;border-radius:8px;min-height:34px}
+.chat-item{padding:8px 10px;font-size:13.5px;line-height:1.35;border-radius:8px}
+.chat-more{width:28px;height:28px;font-size:18px}
+.chat-row-select{margin:0 2px 0 8px}
+.route-flyout{height:min(320px,calc(100vh - 24px));max-height:none;grid-template-rows:minmax(0,1fr);align-items:stretch;overflow:hidden}
+.route-flyout-column{height:100%;max-height:none;min-height:0;overflow-y:auto;scrollbar-gutter:stable}
+.route-flyout-categories{align-content:start}
+.route-flyout-options{align-content:start}
+.failover-member-row{grid-template-columns:minmax(0,1fr) 36px}
+.reasoning-panel .think-body{border-left-color:var(--line2);color:var(--muted)}
+.reasoning-panel .think-label{font-size:13px}
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -770,10 +785,10 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <div class="row key-sort-row"><span class="inline-note">Sort keys</span><select id="keySort" aria-label="Sort API keys"><option value="name">Name</option><option value="date">Date added</option></select></div><div id="keysList"></div>
 </section>
 <section class="settings-panel" data-settings-panel="groups">
-<h3>Groups</h3><div class="inline-note">Create a fallback order. A group can contain one or more entries: choose a local model, or choose an API model and its key. Kurt moves to the next entry only when a request fails before a response is produced.</div>
+<h3>Groups</h3><div class="inline-note">Create a fallback order. Each entry is one choice: a local model, or a model with a specific API key. Kurt moves to the next entry only when a request fails before a response is produced.</div>
 <div class="field"><label>Group name</label><input id="failoverGroupName" placeholder="e.g. Reliable, Coding fallback"></div>
 <div id="failoverMembers"></div>
-<div class="row"><button id="addFailoverMember" type="button">Add local model / API key</button><button id="saveFailoverGroup" class="primary" type="button">Create group</button><button id="cancelFailoverGroup" type="button" hidden>Cancel edit</button></div>
+<div class="row"><button id="addFailoverMember" type="button">Add fallback</button><button id="saveFailoverGroup" class="primary" type="button">Create group</button><button id="cancelFailoverGroup" type="button" hidden>Cancel edit</button></div>
 <div class="section"><h3>Saved groups</h3><div id="apiGroupsList"></div></div>
 </section>
 </div></div></div></div>
@@ -867,21 +882,20 @@ function renderRoutePicker(){
 function positionRouteFlyout(){
  const menu=$('routeFlyout'),trigger=$('routeCurrent');if(!menu||menu.hidden||!trigger)return;
  const width=Math.max(0,Math.min(430,window.innerWidth-20));
- menu.style.width=width+'px';menu.style.maxHeight=Math.max(160,Math.min(390,window.innerHeight-24))+'px';
- const triggerRect=trigger.getBoundingClientRect();
- const measured=Math.min(menu.scrollHeight||220,390,window.innerHeight-24);
- const actual=Math.max(90,Math.min(menu.getBoundingClientRect().height||measured,measured));
- const left=Math.max(10,Math.min(window.innerWidth-width-10,triggerRect.right-width));
- let top=triggerRect.top-actual-8;
- if(top<12){const below=triggerRect.bottom+8;top=below+actual<=window.innerHeight-12?below:Math.max(12,window.innerHeight-actual-12)}
- menu.style.left=left+'px';menu.style.top=top+'px';
+ const height=Math.max(160,Math.min(320,window.innerHeight-24));
+ menu.style.width=width+'px';menu.style.height=height+'px';menu.style.maxHeight=height+'px';
+ const rect=trigger.getBoundingClientRect();
+ const left=Math.max(10,Math.min(window.innerWidth-width-10,rect.right-width));
+ let top=rect.top-height-8;
+ if(top<12)top=Math.min(rect.bottom+8,window.innerHeight-height-12);
+ menu.style.left=left+'px';menu.style.top=Math.max(12,top)+'px';
 }
 function closeRouteFlyout(){const menu=$('routeFlyout');if(menu){menu.hidden=true;menu.setAttribute('aria-hidden','true');$('routeCurrent')?.setAttribute('aria-expanded','false')}}
 function showRouteOptions(category){
  const menu=$('routeFlyout');if(!menu)return;
  const categories=menu.querySelector('.route-flyout-categories');const options=menu.querySelector('.route-flyout-options');
  categories.querySelectorAll('[data-route-kind]').forEach(button=>button.classList.toggle('active',button.dataset.routeKind===category));
- options.replaceChildren();
+ options.replaceChildren();options.scrollTop=0;
  const routes=(state.routes||[]).filter(route=>route.kind===category);
  if(!routes.length){const empty=document.createElement('div');empty.className='route-flyout-empty';empty.textContent=category==='local'?'No local models are installed.':category==='key'?'No API keys are available for configured models.':'No groups have been created.';options.appendChild(empty)}
  else routes.forEach(route=>{
@@ -949,12 +963,22 @@ function renderMarkdown(src){src=String(src||'');return src.split(/(```[^\n]*\n[
 function splitThink(raw,streaming){let think='',answer='',open=false;const closer=/<\/think(?:ing)?>/i.exec(raw),opener=/<think(?:ing)?>/i.exec(raw);if(closer&&(!opener||closer.index<opener.index)){think+=raw.slice(0,closer.index)+'\n';raw=raw.slice(closer.index+closer[0].length)}while(raw.length){const m=/<think(?:ing)?>/i.exec(raw);if(!m){answer+=raw;break}answer+=raw.slice(0,m.index);const after=raw.slice(m.index+m[0].length);const c=/<\/think(?:ing)?>/i.exec(after);if(!c){think+=after;open=true;break}think+=after.slice(0,c.index)+'\n';raw=after.slice(c.index+c[0].length)}answer=answer.replace(/^\s+/,'');if(streaming)answer=answer.replace(/<\/?(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?$/i,'');return{think:think.trim(),answer,open}}
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
 function bindCopy(root){root.querySelectorAll('[data-copy-code]').forEach(b=>b.onclick=()=>{const code=b.closest('.codebox').querySelector('code');navigator.clipboard.writeText(code?code.textContent:'').then(()=>toast('Code copied'))})}
-function reasoningBlock(){const d=document.createElement('div');d.className='think reasoning-panel';d.hidden=true;d.innerHTML='<button class="think-head" type="button" aria-expanded="false"><svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Model reasoning summary</span></button><div class="think-body"></div>';d.querySelector('.think-head').onclick=()=>{const open=d.classList.toggle('open');d.querySelector('.think-head').setAttribute('aria-expanded',String(open));d.dataset.userCollapsed=open?'':'1'};return d}
+function formatThought(seconds){const s=Number(seconds);if(!Number.isFinite(s)||s<=0)return '';if(s<60)return Math.max(1,Math.round(s))+'s';const m=Math.floor(s/60),r=Math.round(s%60);return r?m+'m '+r+'s':m+'m'}
+function reasoningBlock(){const d=document.createElement('div');d.className='think reasoning-panel';d.hidden=true;d.innerHTML='<button class="think-head" type="button" aria-expanded="false"><svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Thinking…</span></button><div class="think-body"></div>';d.querySelector('.think-head').onclick=()=>{const open=d.classList.toggle('open');d.querySelector('.think-head').setAttribute('aria-expanded',String(open));d.dataset.userCollapsed=open?'':'1';d.dataset.userOpen=open?'1':''};return d}
 function thinkBlock(){const d=document.createElement('div');d.className='think work-log';d.hidden=true;d.innerHTML='<button class="work-log-head" type="button" aria-expanded="false"><svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Workspace activity</span></button><div class="work-log-body"></div>';d.querySelector('.work-log-head').onclick=()=>{const open=d.classList.toggle('open');d.querySelector('.work-log-head').setAttribute('aria-expanded',String(open))};return d}
-function setReasoning(node,text,live=false){const panel=node.querySelector('.reasoning-panel');if(!panel)return;const value=String(text||'').trim();if(!value){panel.hidden=true;return}panel.hidden=false;panel.querySelector('.think-body').textContent=value;panel.classList.toggle('live',!!live);if(live&&!panel.dataset.userCollapsed){panel.classList.add('open');panel.querySelector('.think-head').setAttribute('aria-expanded','true')}}
+function setReasoning(node,text,live=false,seconds=0){
+ const panel=node.querySelector('.reasoning-panel');if(!panel)return;
+ const value=String(text||'').trim();
+ if(!value){panel.hidden=true;return}
+ panel.hidden=false;
+ const body=panel.querySelector('.think-body'),head=panel.querySelector('.think-head'),label=panel.querySelector('.think-label');
+ body.textContent=value;panel.classList.toggle('live',!!live);
+ if(live){label.textContent='Thinking…';if(!panel.dataset.userCollapsed){panel.classList.add('open');head.setAttribute('aria-expanded','true')}body.scrollTop=body.scrollHeight}
+ else{const t=formatThought(seconds);label.textContent=t?'Thought for '+t:'Thought process';if(panel.dataset.userOpen!=='1'){panel.classList.remove('open');head.setAttribute('aria-expanded','false')}}
+}
 function setThink(node,entries){const panel=node.querySelector('.work-log');if(!panel)return;const relevant=/^(Running command:|PASSED:|FAILED:|Searching the web:|Web search failed:|Syntax validation passed:|Basic file validation passed:|Prepared a Kurt system-prompt proposal|Retrieved the exact active Kurt system prompt|Validation warning:)/i;const items=(Array.isArray(entries)?entries:[]).filter(item=>relevant.test(String(typeof item==='string'?item:item?.text||'')));if(!items.length){panel.hidden=true;return}panel.hidden=false;const body=panel.querySelector('.work-log-body');const open=panel.dataset.initialized==='1'&&panel.classList.contains('open');panel.dataset.initialized='1';panel.classList.toggle('open',open);panel.querySelector('.work-log-head').setAttribute('aria-expanded',String(open));body.replaceChildren();items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const label=String(data.text||'Activity');const detail=String(data.detail||'');const row=document.createElement(detail&&detail!==label?'details':'div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');if(row.tagName==='DETAILS'){const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;body.appendChild(row)});panel.querySelector('.think-label').textContent='Workspace activity · '+items.length+' event(s)'}
 function pushWorkStep(node,text,ok,detail){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok&&last.detail===detail)return;entries.push({text,ok,detail:detail||''});if(entries.length>60)entries.shift();setThink(node,entries)}
-function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';node.querySelector('.reasoning-panel')?.classList.remove('live')}
+function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const panel=node.querySelector('.reasoning-panel');if(panel){panel.classList.remove('live');const label=panel.querySelector('.think-label');if(label&&label.textContent.indexOf('Thinking')===0)label.textContent='Thought process'}}
 let follow=true;
 function scrollEnd(force){if(!force&&!follow)return;const m=$('messages');m.scrollTop=m.scrollHeight}
 function setEmpty(on){$('main').classList.toggle('empty',on);if(on)$('toBottom').classList.remove('show')}
@@ -966,7 +990,7 @@ function setBusy(b){state.busy=b;const btn=$('sendBtn');btn.querySelector('use')
 function cancelRun(){if(state.abort)state.abort.abort();state.abort=null;state.run++;setBusy(false)}
 function responseModelLabel(ref){if(!ref)return'';const item=state.models.find(m=>m.ref===ref);return item?`${item.label||item.name||item.model} · ${item.provider}`:String(ref)}
 function setResponseMeta(node,stats,model){const el=node?.querySelector('.response-metrics');if(!el)return;const parts=[];const seconds=Number(stats?.thought_seconds);const speed=Number(stats?.tokens_per_second);if(Number.isFinite(seconds)&&seconds>0)parts.push(`Generated in ${seconds.toFixed(seconds<10?1:0)}s`);if(Number.isFinite(speed)&&speed>0)parts.push(`${stats?.tokens_estimated?'~':''}${speed.toFixed(speed<10?1:0)} tok/s`);const label=responseModelLabel(model);if(label)parts.push(label);el.textContent=parts.join(' · ');if(stats?.tokens_estimated)el.title='Token rate is estimated from generated text length because the provider did not report output-token usage.'}
-function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<think)/i.test(String(content||'')))safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.';wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user'){if(hasMathMarkup(safeContent)){const userContent=document.createElement('div');userContent.className='content user-content';userContent.innerHTML=renderMarkdown(safeContent);bubble.appendChild(userContent);typesetMath(userContent)}else bubble.textContent=content}else{bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');bubble.appendChild(reasoningBlock());bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindCopy(wrap);wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];setReasoning(wrap,extra?.reasoning||'');setThink(wrap,extra?.worklog||[]);setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
+function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<think)/i.test(String(content||'')))safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.';wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user'){if(hasMathMarkup(safeContent)){const userContent=document.createElement('div');userContent.className='content user-content';userContent.innerHTML=renderMarkdown(safeContent);bubble.appendChild(userContent);typesetMath(userContent)}else bubble.textContent=content}else{bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');bubble.appendChild(reasoningBlock());bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindCopy(wrap);wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];setReasoning(wrap,extra?.reasoning||'',false,extra?.thinkingSeconds||0);setThink(wrap,extra?.worklog||[]);setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
 function clearArtifactPane(){const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';const main=$('main');if(main)main.classList.remove('has-artifacts');document.querySelectorAll('.artifact-trigger').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
 function closeArtifactPane(){const main=$('main');if(main)main.classList.remove('has-artifacts');const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';document.querySelectorAll('.artifact-trigger.selected').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
 function renderArtifactTriggers(container,artifacts){if(!container)return;container.innerHTML='';(artifacts||[]).forEach(a=>{const promptCard=a.kind==='system_prompt';const button=document.createElement('button');button.type='button';button.className='artifact-trigger';button.setAttribute('aria-controls','artifactPane');button.setAttribute('aria-expanded','false');button.innerHTML='<span class="artifact-trigger-icon"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span><span class="artifact-trigger-text"><span class="artifact-trigger-name"></span><span class="artifact-trigger-status"></span></span><span class="artifact-trigger-open">Preview →</span>';button.querySelector('.artifact-trigger-name').textContent=promptCard?'System prompt proposal':String(a.path||'Generated file');button.querySelector('.artifact-trigger-status').textContent=a.validation?.message||'Saved in the temporary workspace';button.setAttribute('aria-label','Preview '+(a.path||'generated file'));button.onclick=()=>openArtifactPreview(a,button);container.appendChild(button)})}
@@ -1014,16 +1038,40 @@ async function deleteSelectedChats(){
  }catch(error){toast(error.message)}
 }
 
+function chatDateBucket(ts){
+ const t=Number(ts)||0;if(!t)return {key:'older',label:'Older',order:9999};
+ const d=new Date(t*1000),now=new Date(),day=86400000;
+ const startToday=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime(),ms=d.getTime();
+ if(ms>=startToday)return {key:'today',label:'Today',order:0};
+ if(ms>=startToday-day)return {key:'yesterday',label:'Yesterday',order:1};
+ if(ms>=startToday-7*day)return {key:'7d',label:'Previous 7 days',order:2};
+ if(ms>=startToday-30*day)return {key:'30d',label:'Previous 30 days',order:3};
+ const sameYear=d.getFullYear()===now.getFullYear();
+ const label=d.toLocaleDateString(undefined,sameYear?{month:'long'}:{month:'long',year:'numeric'});
+ return {key:'m'+d.getFullYear()+'-'+d.getMonth(),label,order:4+(now.getFullYear()-d.getFullYear())*12+(now.getMonth()-d.getMonth())};
+}
+function buildChatRow(chat){
+ const row=document.createElement('div');row.className='chat-row'+(chat.id===state.chatId?' active':'')+(state.selectedChatIds.includes(chat.id)?' selected':'');row.dataset.chatId=chat.id;
+ if(state.selectingChats){const check=document.createElement('input');check.type='checkbox';check.className='chat-row-select';check.checked=state.selectedChatIds.includes(chat.id);check.setAttribute('aria-label','Select '+(chat.title||'conversation'));check.onchange=()=>toggleChatSelection(chat.id,check.checked);row.append(check)}
+ const title=document.createElement('button');title.type='button';title.className='chat-item';title.title=chat.title||'New conversation';title.textContent=chat.title||'New conversation';title.onclick=()=>state.selectingChats?toggleChatSelection(chat.id,!state.selectedChatIds.includes(chat.id)):loadChat(chat.id);
+ row.append(title);
+ if(!state.selectingChats){const actions=document.createElement('div');actions.className='chat-actions';const more=document.createElement('button');more.type='button';more.className='chat-more';more.title='Chat options';more.setAttribute('aria-label','Chat options');more.textContent='···';more.onclick=event=>{event.stopPropagation();const rect=more.getBoundingClientRect();openChatMenu(chat.id,rect.right-176,rect.bottom+4)};actions.append(more);row.append(actions)}
+ row.addEventListener('contextmenu',event=>{event.preventDefault();openChatMenu(chat.id,event.clientX,event.clientY)});
+ return row;
+}
 function renderChats(){
  const el=$('chatList');el.replaceChildren();
- const chats=state.chats.slice().sort((a,b)=>{if(!!a.pinned!==!!b.pinned)return a.pinned?-1:1;return state.sort==='oldest'?(a.updated||0)-(b.updated||0):(b.updated||0)-(a.updated||0)});
- chats.forEach(chat=>{
-  const row=document.createElement('div');row.className='chat-row'+(chat.id===state.chatId?' active':'')+(state.selectedChatIds.includes(chat.id)?' selected':'');row.dataset.chatId=chat.id;
-  if(state.selectingChats){const check=document.createElement('input');check.type='checkbox';check.className='chat-row-select';check.checked=state.selectedChatIds.includes(chat.id);check.setAttribute('aria-label','Select '+(chat.title||'conversation'));check.onchange=()=>toggleChatSelection(chat.id,check.checked);row.append(check)}
-  const title=document.createElement('button');title.type='button';title.className='chat-item';title.title=chat.title||'New conversation';title.innerHTML=(chat.pinned?'<span class="pin-indicator">◆</span>':'')+esc(chat.title||'New conversation');title.onclick=()=>state.selectingChats?toggleChatSelection(chat.id,!state.selectedChatIds.includes(chat.id)):loadChat(chat.id);
-  row.append(title);
-  if(!state.selectingChats){const actions=document.createElement('div');actions.className='chat-actions';const more=document.createElement('button');more.type='button';more.className='chat-more';more.title='Chat options';more.setAttribute('aria-label','Chat options');more.textContent='···';more.onclick=event=>{event.stopPropagation();const rect=more.getBoundingClientRect();openChatMenu(chat.id,rect.right-176,rect.bottom+4)};actions.append(more);row.append(actions)}
-  row.addEventListener('contextmenu',event=>{event.preventDefault();openChatMenu(chat.id,event.clientX,event.clientY)});el.append(row);
+ const oldest=state.sort==='oldest';
+ const chats=state.chats.slice().sort((a,b)=>oldest?(a.updated||0)-(b.updated||0):(b.updated||0)-(a.updated||0));
+ const sections=[];
+ const pinned=chats.filter(chat=>chat.pinned);
+ if(pinned.length)sections.push({label:'Pinned',chats:pinned});
+ const buckets=new Map();
+ chats.filter(chat=>!chat.pinned).forEach(chat=>{const bucket=chatDateBucket(chat.updated);let section=buckets.get(bucket.key);if(!section){section={label:bucket.label,order:bucket.order,chats:[]};buckets.set(bucket.key,section)}section.chats.push(chat)});
+ Array.from(buckets.values()).sort((a,b)=>oldest?b.order-a.order:a.order-b.order).forEach(section=>sections.push(section));
+ sections.forEach(section=>{
+  const heading=document.createElement('div');heading.className='chat-date-heading';heading.textContent=section.label;el.append(heading);
+  section.chats.forEach(chat=>el.append(buildChatRow(chat)));
  });
  updateChatSelectionToolbar();
 }
@@ -1074,44 +1122,43 @@ function renderKeys(){
   root.append(row);
  });
 }
-function failoverKeyOptions(model){
- if(!model||model.type!=='remote')return [];
- return state.keys.filter(key=>key.provider===model.provider_id);
+function memberRouteValue(member){
+ const model=String(member?.model||'');if(!model)return '';
+ const key=String(member?.key_id||'pool');
+ if(key==='pool'&&(state.routes||[]).some(route=>route.value==='model|'+model))return 'model|'+model;
+ return 'keymodel|'+model+'|'+key;
+}
+function memberFromRouteValue(value){
+ const parts=String(value||'').split('|');
+ if(parts[0]==='model'&&parts[1])return {model:parts[1],key_id:'pool'};
+ if(parts[0]==='keymodel'&&parts[1]&&parts[2])return {model:parts[1],key_id:parts[2]};
+ return null;
 }
 function addFailoverMember(member={}){
  const root=$('failoverMembers');if(!root)return;
  if(root.children.length>=12){toast('A failover group can contain at most 12 entries');return}
  const row=document.createElement('div');row.className='failover-member-row';
- const modelSelect=document.createElement('select');modelSelect.className='member-model';modelSelect.setAttribute('aria-label','Model');
- const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='Choose model';placeholder.disabled=true;modelSelect.appendChild(placeholder);
- state.models.forEach(model=>{const option=document.createElement('option');option.value=model.ref;option.textContent=model.type==='local'?'Local · '+(model.label||model.name):'API · '+(model.provider||'Provider')+' · '+(model.label||model.name);option.title=option.textContent;modelSelect.appendChild(option)});
- const keySelect=document.createElement('select');keySelect.className='member-key';keySelect.setAttribute('aria-label','API key');
+ const select=document.createElement('select');select.className='member-route';select.setAttribute('aria-label','Local model or API key');
+ const locals=(state.routes||[]).filter(route=>String(route.value).startsWith('model|'));
+ const keyed=(state.routes||[]).filter(route=>String(route.value).startsWith('keymodel|'));
+ const placeholder=document.createElement('option');placeholder.value='';placeholder.disabled=true;placeholder.textContent=(locals.length||keyed.length)?'Choose a model or key':'No local models or keys available';select.appendChild(placeholder);
+ const addGroup=(label,routes)=>{if(!routes.length)return;const group=document.createElement('optgroup');group.label=label;routes.forEach(route=>{const option=document.createElement('option');option.value=route.value;option.textContent=routeChoiceLabel(route.value);option.title=route.label;group.appendChild(option)});select.appendChild(group)};
+ addGroup('Local',locals);addGroup('Key',keyed);
+ const current=memberRouteValue(member);
+ if(current&&!Array.from(select.options).some(option=>option.value===current)){
+  const model=state.models.find(item=>item.ref===member.model);const name=model?.label||model?.name||member.model;
+  const option=document.createElement('option');option.value=current;option.textContent=name+(String(member.key_id||'pool')==='pool'?' · all keys':' · unavailable');select.appendChild(option);
+ }
+ select.value=current||'';
  const remove=document.createElement('button');remove.type='button';remove.className='remove-member';remove.textContent='×';remove.title='Remove fallback';remove.onclick=()=>row.remove();
- const updateKeys=preferred=>{
-  const model=state.models.find(item=>item.ref===modelSelect.value);keySelect.replaceChildren();
-  const hideKeyPicker=!model||model.type==='local';
-  keySelect.disabled=hideKeyPicker;keySelect.hidden=hideKeyPicker;
-  if(keySelect._customWrap)keySelect._customWrap.hidden=hideKeyPicker;
-  if(hideKeyPicker)return;
-  keySelect.disabled=false;keySelect.hidden=false;
-  const availableKeys=failoverKeyOptions(model);
-  const pool=document.createElement('option');pool.value='pool';pool.textContent=availableKeys.length?'All matching keys':'No matching keys — add one in Settings › Keys';pool.disabled=!availableKeys.length;keySelect.appendChild(pool);
-  availableKeys.forEach(key=>{const option=document.createElement('option');option.value=key.id;option.textContent=(key.label||'Account')+' · '+(key.masked||'saved key');option.title=option.textContent;keySelect.appendChild(option)});
-  if(preferred&&Array.from(keySelect.options).some(option=>option.value===preferred))keySelect.value=preferred;
- };
- modelSelect.value=member.model||'';modelSelect.onchange=()=>updateKeys('pool');
- updateKeys(member.key_id||'pool');
- row.append(modelSelect,keySelect,remove);root.appendChild(row);
- enhanceSelect(modelSelect);enhanceSelect(keySelect);
- if(keySelect._customWrap)keySelect._customWrap.hidden=keySelect.hidden;
+ row.append(select,remove);root.appendChild(row);
+ enhanceSelect(select);
 }
 function refreshFailoverMemberOptions(){
  const root=$('failoverMembers');if(!root||!root.children.length)return;
- const members=Array.from(root.querySelectorAll('.failover-member-row')).map(row=>{
-  const key=row.querySelector('.member-key');
-  return {model:row.querySelector('.member-model').value,key_id:key.hidden?'pool':(key.value||'pool')};
- });
+ const members=Array.from(root.querySelectorAll('.member-route')).map(select=>memberFromRouteValue(select.value)).filter(Boolean);
  root.replaceChildren();members.forEach(member=>addFailoverMember(member));
+ if(!root.children.length)addFailoverMember();
 }
 function resetFailoverForm(){
  state.editingGroup=null;$('failoverGroupName').value='';$('failoverMembers').replaceChildren();
@@ -1153,9 +1200,9 @@ function renderApiGroups(){
 }
 async function saveFailoverGroup(){
  const name=$('failoverGroupName').value.trim();
- const members=Array.from($('failoverMembers').querySelectorAll('.failover-member-row')).map(row=>({model:row.querySelector('.member-model').value,key_id:row.querySelector('.member-key').hidden?'pool':row.querySelector('.member-key').value})).filter(item=>item.model);
+ const members=Array.from($('failoverMembers').querySelectorAll('.member-route')).map(select=>memberFromRouteValue(select.value)).filter(Boolean);
  if(!name){toast('Enter a group name');return}
- if(members.length<1){toast('Add at least one local model or API key');return}
+ if(members.length<1){toast('Add at least one fallback entry');return}
  try{
   await api('/api/settings',{failover_action:state.editingGroup?'edit':'add',id:state.editingGroup,name,members});
   await refreshBootstrap();resetFailoverForm();toast('Failover group saved');
@@ -1169,7 +1216,7 @@ async function ensureChat(initialMessage){
  return state.chatId;
 }
 async function newChat(){cancelRun();state.chatId=null;state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=data.effort==='expert'?'expert':'thinking';state.mode=data.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;syncSelect($('effortSelect'));syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',stats:message.stats||null,model:message.model||data.model||null}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
+async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=data.effort==='expert'?'expert':'thinking';state.mode=data.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;syncSelect($('effortSelect'));syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
 async function send(){
  const text=$('prompt').value.trim();if(!text||state.busy)return;
  const run=++state.run;state.effort=$('effortSelect').value;state.mode=$('operationMode').value;const route=$('topModel').value;
@@ -1182,7 +1229,7 @@ async function send(){
  follow=true;renderMessage('user',text);const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
  $('chatMeta').textContent=state.effort+' · '+state.mode+' · Generating…';
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
- const contentEl=node.querySelector('.content');let raw='',reasoning='',pending=false;
+ const contentEl=node.querySelector('.content');let raw='',reasoning='',pending=false,thinkStart=0;
  const controller=new AbortController();state.abort=controller;
  const paint=()=>{pending=false;if(run!==state.run)return;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe){bindCopy(node);typesetMath(contentEl)}node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
@@ -1193,9 +1240,10 @@ async function send(){
   while(true){const packet=await reader.read();if(packet.done)break;if(run!==state.run)return;buffer+=decoder.decode(packet.value,{stream:true});let separator;
    while((separator=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,separator);buffer=buffer.slice(separator+2);const line=frame.split('\n').find(value=>value.startsWith('data:'));if(!line)continue;const event=JSON.parse(line.slice(5).trim());
     if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail);node.querySelector('.assistant-status').textContent=event.status||'Working…'}
-    else if(event.type==='reasoning'){reasoning+=event.text||'';setReasoning(node,reasoning,true)}
+    else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();reasoning+=event.text||'';setReasoning(node,reasoning,true)}
+    else if(event.type==='reasoning_reset'){reasoning=event.text||'';setReasoning(node,reasoning,!!reasoning)}
     else if(event.type==='token'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}
-    else if(event.type==='done'){pending=false;raw=event.content||'';reasoning=event.reasoning||reasoning;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setReasoning(node,reasoning,false);setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='done'){pending=false;raw=event.content||'';reasoning=event.reasoning||reasoning;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setReasoning(node,reasoning,false,event.thinking_seconds||(thinkStart?(performance.now()-thinkStart)/1000:0));setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
     else if(event.type==='error')throw new Error(event.message||'The model request failed');
    }
   }
@@ -2962,6 +3010,7 @@ class Handler(BaseHTTPRequestHandler):
         use_thinking = True
         reasoning_effort = {"thinking": "medium", "expert": "high"}[effort]
         generation_seconds = 0.0
+        thinking_seconds = 0.0
         generation_calls = 0
         usage_calls = 0
         provider_output_tokens = 0
@@ -2976,7 +3025,7 @@ class Handler(BaseHTTPRequestHandler):
             emit({"type": "phase", "text": item["text"], "ok": ok, "detail": item["detail"], "status": status})
 
         def generate_response():
-            nonlocal generation_seconds, generation_calls, usage_calls
+            nonlocal generation_seconds, generation_calls, usage_calls, thinking_seconds
             nonlocal provider_output_tokens, output_chars, active_candidate_index, model
             available = [index for index in range(len(route_candidates)) if index not in failed_candidate_indices]
             if active_candidate_index in available:
@@ -2987,6 +3036,9 @@ class Handler(BaseHTTPRequestHandler):
                 candidate = route_candidates[candidate_index]
                 chunks = []
                 summary_chunks = []
+                lead = "\n\n" if model_summary_chunks else ""
+                thinking_ended_at = None
+                think_tail = ""
                 usage_tokens_this_call = None
                 started_at = time.monotonic()
                 generation_calls += 1
@@ -3005,9 +3057,11 @@ class Handler(BaseHTTPRequestHandler):
                         if not chunk:
                             continue
                         kind_name = str(kind or "").strip().lower().replace("-", "_")
-                        if kind_name in MODEL_SUMMARY_KINDS:
+                        if kind_name in MODEL_SUMMARY_KINDS or kind_name in THINKING_KINDS:
                             if isinstance(chunk, str):
-                                summary_chunks.append(chunk)
+                                piece = chunk if summary_chunks else lead + chunk
+                                summary_chunks.append(piece)
+                                emit({"type": "reasoning", "text": piece})
                             continue
                         if kind_name in ("usage", "stats", "metadata") and isinstance(chunk, dict):
                             usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else chunk
@@ -3018,21 +3072,34 @@ class Handler(BaseHTTPRequestHandler):
                             except (TypeError, ValueError):
                                 pass
                             continue
-                        if kind_name in THINKING_KINDS:
-                            continue
                         if kind_name == "content":
-                            chunks.append(chunk if isinstance(chunk, str) else str(chunk))
+                            text = chunk if isinstance(chunk, str) else str(chunk)
+                            chunks.append(text)
+                            if thinking_ended_at is None:
+                                think_tail = (think_tail + text)[-48:]
+                                if summary_chunks or THINK_CLOSE_RE.search(think_tail):
+                                    thinking_ended_at = time.monotonic()
                     raw_response = "".join(chunks).strip()
                     if not raw_response:
                         raise RuntimeError("The model returned no response text.")
                     active_candidate_index = candidate_index
-                    model_summary_chunks.extend(summary_chunks)
-                    for summary in summary_chunks:
-                        emit({"type": "reasoning", "text": summary})
+                    if not summary_chunks:
+                        inline_thought, _reply = split_thinking(raw_response)
+                        if inline_thought:
+                            piece = lead + inline_thought
+                            summary_chunks.append(piece)
+                            emit({"type": "reasoning", "text": piece})
+                    if summary_chunks:
+                        thinking_seconds += max(0.0, (thinking_ended_at or time.monotonic()) - started_at)
+                        model_summary_chunks.extend(summary_chunks)
                     output_chars += sum(len(chunk) for chunk in chunks)
                     return raw_response
+                except (BrokenPipeError, ConnectionResetError):
+                    raise
                 except Exception as exc:
                     last_error = exc
+                    if summary_chunks:
+                        emit({"type": "reasoning_reset", "text": "".join(model_summary_chunks).strip()})
                     failed_candidate_indices.add(candidate_index)
                     remaining = [index for index in range(len(route_candidates)) if index not in failed_candidate_indices]
                     if not remaining:
@@ -3228,6 +3295,7 @@ class Handler(BaseHTTPRequestHandler):
                 record = {
                     "role": "assistant", "content": visible, "artifacts": artifacts,
                     "worklog": worklog, "reasoning": "".join(model_summary_chunks).strip(),
+                    "thinking_seconds": round(thinking_seconds, 1),
                     "effort": effort, "mode": mode, "route": route_info["route"],
                     "model": model, "stats": stats,
                 }
@@ -3243,6 +3311,7 @@ class Handler(BaseHTTPRequestHandler):
             emit({
                 "type": "done", "content": visible, "artifacts": artifacts,
                 "worklog": worklog, "reasoning": "".join(model_summary_chunks).strip(),
+                "thinking_seconds": round(thinking_seconds, 1),
                 "chat_id": chat_id, "title": chat["title"], "route": route_info["route"],
                 "model": model, "effort": effort, "mode": mode, "stats": stats,
             })
