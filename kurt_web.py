@@ -79,8 +79,21 @@ credentials, or other secrets. Summarize decisions, assumptions, alternatives, a
 in user-facing rationale; do not reveal private chain-of-thought or hidden scratchpad tokens.
 """
 
-RESPONSE_FORMAT_INSTRUCTIONS = """
-RESPONSE FORMAT: Never reveal hidden chain-of-thought, private analysis, or text inside <think> tags. Do not generate <think> blocks or expose internal planning. Give the user the answer directly, with a concise user-facing explanation of important decisions and verification when useful. Keep final prose, code, and file proposals in the normal response body. Do not send hidden reasoning or analysis-channel content to the interface; the interface displays response status and workspace activity instead.
+RESPONSE_FORMAT_INSTRUCTIONS = r"""
+RESPONSE FORMAT:
+- Begin every reply with exactly one concise, user-facing summary block, then the answer:
+  @@@ SUMMARY
+  Briefly state the key observation and approach in 1–3 sentences. This is a public explanation
+  of the approach, not private chain-of-thought. Do not include hidden analysis, internal
+  scratchpad content, speculative internal monologue, or token-by-token reasoning.
+  @@@ END
+- Keep the actual answer after the summary block. Never output <think> tags.
+- Whenever you provide source code, commands, configuration, or a multi-line code example,
+  put it in a fenced Markdown code block with an appropriate language label (for example,
+  ```python). Do not put multi-line code in ordinary paragraphs or inline code. The interface
+  renders fenced code as a copyable code card with a Copy code button.
+- Keep normal prose, the summary, and code clearly separated. Never claim an action happened
+  unless the application reports that it actually happened.
 """
 
 EFFORT_INSTRUCTIONS = {
@@ -94,7 +107,8 @@ NORMAL MODE — NO LOCAL FILE OR COMPUTER ACCESS:
 - You cannot access the configured project directory, chat workspace, attachments, local models' files, or the user's computer through tools or action blocks.
 - Do not request, emit, or simulate READ, LIST, RUN, WRITE, EDIT, or SYSTEM_PROMPT actions. The server blocks these actions as well.
 - You may answer general questions and request external web research with SEARCH.
-- When the user asks you to inspect or change local files, run commands, or work on their project, explain that they must switch this conversation to Code mode. Do not pretend to have inspected anything.
+- When the user asks you to inspect or change local files, run commands, or work on their project, explicitly tell them to switch this conversation to Code mode. Explain that Code mode can read and list files under the configured project directory and chat workspace, while changes and commands require separate approval. Do not pretend to have inspected anything.
+- If the user asks to see their live desktop, screen, or GUI, explain that switching to Code mode enables project-file access but does not provide live screen capture or remote GUI control; ask them to attach a screenshot for visual inspection.
 """
 
 CODE_MODE_INSTRUCTIONS = r"""
@@ -117,12 +131,23 @@ RUN_ACTION_RE = re.compile(r"@@@\s*RUN\s*([^\n]*)\n(.*?)\n?@@@\s*END", re.I | re
 SEARCH_ACTION_RE = re.compile(r"@@@\s*SEARCH\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
 READ_ACTION_RE = re.compile(r"@@@\s*READ\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
 LIST_ACTION_RE = re.compile(r"@@@\s*LIST\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
+SUMMARY_ACTION_RE = re.compile(r"@@@\s*SUMMARY\s*\n(.*?)\n?@@@\s*END", re.I | re.S)
 SYSTEM_PROMPT_ACTION_RE = re.compile(r"@@@\s*SYSTEM_PROMPT\s*\n(.*?)\n?@@@\s*END", re.I | re.S)
 WEB_ACTION_RE = re.compile(
     r"@@@\s*(?:RUN|SEARCH|READ|LIST|SYSTEM_PROMPT)\b[^\n]*\n[\s\S]*?@@@\s*END", re.I
 )
 SYSTEM_PROMPT_REQUEST_RE = re.compile(
     r"^\s*(?:/system-prompt|(?:what\s+is|what's)\s+(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt|(?:show|share|reveal|print|display|quote|give)\s+(?:me\s+)?(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt)\s*[?!.\s]*$",
+    re.I,
+)
+
+NORMAL_MODE_LOCAL_ACCESS_RE = re.compile(
+    r"(?:\b(?:see|view|look\s+at|access|inspect|read|browse|list|open|find|search|check|modify|edit|write|delete|create|run|execute)\b.{0,100}\b(?:my\s+)?(?:mac(?:book)?|computer|desktop|screen|files?|folders?|directories|project|codebase|repository|repo|terminal|drive|disk|local\s+(?:files?|folders?|machine))\b"
+    r"|\b(?:my\s+)?(?:mac(?:book)?|computer|desktop|screen|local\s+(?:files?|folders?|machine)|project\s+(?:files?|folder|directory)|codebase|repository|repo)\b.{0,100}\b(?:access|inspect|read|browse|list|open|find|search|check|modify|edit|write|delete|create|run|execute)\b)",
+    re.I,
+)
+DESKTOP_VISUAL_REQUEST_RE = re.compile(
+    r"\b(?:see|view|look\s+at|show|watch|inspect)\b.{0,90}\b(?:desktop|screen|display|monitor|gui)\b|\b(?:desktop|screen|display|monitor|gui)\b.{0,90}\b(?:see|view|look\s+at|show|watch|inspect)\b",
     re.I,
 )
 
@@ -1108,7 +1133,8 @@ function hasMathMarkup(value){return /\\begin\{(?:equation\*?|align\*?|gather\*?
 window.MathJax={tex:{inlineMath:[],displayMath:[['\\[','\\]']],processEscapes:true,packages:{'[+]':['ams']}},options:{skipHtmlTags:['script','noscript','style','textarea','pre','code']},startup:{typeset:false}};
 function typesetMath(root){if(!root||!window.MathJax?.typesetPromise)return;try{window.MathJax.typesetClear?.([root]);window.MathJax.typesetPromise([root]).catch(error=>console.warn('Math rendering failed:',error))}catch(error){console.warn('Math rendering failed:',error)}}
 const mathJaxScript=document.createElement('script');mathJaxScript.src='https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js';mathJaxScript.async=true;mathJaxScript.onload=()=>document.querySelectorAll('.content').forEach(typesetMath);mathJaxScript.onerror=()=>console.warn('MathJax could not be loaded; equations will remain centered as TeX text.');document.head.appendChild(mathJaxScript);
-function renderMarkdown(src){src=String(src||'');return src.split(/(```[^\n]*\n[\s\S]*?```|```[^\n]*\n[\s\S]*$|```[^\n]*$)/).map((seg,i)=>{if(i%2===0)return mdBlocks(seg);const nl=seg.indexOf('\n');const lang=(nl<0?seg.slice(3):seg.slice(3,nl)).trim().split(/\s+/)[0]||'';let code=nl<0?'':seg.slice(nl+1);if(nl>=0&&seg.endsWith('```'))code=code.replace(/\n?```$/,'');return '<div class="codebox"><div class="codehead"><span>'+esc(lang||'code')+'</span><button class="copy-mini" data-copy-code>Copy code</button></div><pre><code>'+esc(code.replace(/\n$/,''))+'</code></pre></div>'}).join('')}
+function splitResponseSummary(src,allowOpen=false){src=String(src||'');const marker=/@@@\s*SUMMARY\s*\r?\n/i.exec(src);if(!marker)return{summary:'',answer:src};const start=marker.index,bodyStart=start+marker[0].length,tail=src.slice(bodyStart),end=/\r?\n?@@@\s*END\b/i.exec(tail);if(!end)return allowOpen?{summary:tail.trim(),answer:src.slice(0,start).trim()}:{summary:'',answer:src};const summary=tail.slice(0,end.index).trim(),after=tail.slice(end.index+end[0].length);return{summary,answer:(src.slice(0,start)+'\n'+after).replace(/\n{3,}/g,'\n\n').trim()}}
+function renderMarkdown(src){src=String(src||'');return src.split(/((?:```|~~~)[^\n]*\n[\s\S]*?(?:```|~~~)|(?:```|~~~)[^\n]*\n[\s\S]*$|(?:```|~~~)[^\n]*$)/).map((seg,i)=>{if(i%2===0)return mdBlocks(seg);const fence=seg.slice(0,3),nl=seg.indexOf('\n');const lang=(nl<0?seg.slice(3):seg.slice(3,nl)).trim().split(/\s+/)[0]||'';let code=nl<0?'':seg.slice(nl+1);if(nl>=0&&seg.endsWith(fence))code=code.slice(0,-fence.length).replace(/\n$/,'');return '<div class="codebox"><div class="codehead"><span>'+esc(lang||'code')+'</span><button class="copy-mini" data-copy-code>Copy code</button></div><pre><code>'+esc(code.replace(/\n$/,''))+'</code></pre></div>'}).join('')}
 function splitThink(raw,streaming){return{think:'',answer:stripUnsupportedActions(raw),open:false}}
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
 function bindCopy(root){root.querySelectorAll('[data-copy-code]').forEach(b=>b.onclick=()=>{const code=b.closest('.codebox').querySelector('code');navigator.clipboard.writeText(code?code.textContent:'').then(()=>toast('Code copied'))})}
@@ -1125,7 +1151,7 @@ function setReasoning(node,text,live=false,seconds=0){
  const body=panel.querySelector('.think-body');
  body.textContent=value;panel.classList.toggle('live',!!live);if(head)head.classList.toggle('live',!!live);
  if(live){label.textContent='Thinking…';if(!panel.dataset.userCollapsed)setReasoningOpen(panel,true);body.scrollTop=body.scrollHeight}
- else{const t=formatThought(seconds);label.textContent=t?'Summary · '+t:'Response summary';if(panel.dataset.userOpen!=='1')setReasoningOpen(panel,false)}
+ else{const t=formatThought(seconds);label.textContent=t?'Thought for '+t:'Thinking summary';if(panel.dataset.userOpen!=='1')setReasoningOpen(panel,false)}
 }
 function setThink(node,entries){const panel=node.querySelector('.work-log');if(!panel)return;const relevant=/^(Running command:|Prepared a command for approval:|Read project file:|Listed project directory:|PASSED:|FAILED:|Searching the web:|Web search failed:|Syntax validation passed:|Basic file validation passed:|Prepared a Kurt system-prompt proposal|Retrieved the exact active Kurt system prompt|Blocked a local computer action|Validation warning:)/i;const items=(Array.isArray(entries)?entries:[]).filter(item=>relevant.test(String(typeof item==='string'?item:item?.text||'')));if(!items.length){panel.hidden=true;return}panel.hidden=false;const body=panel.querySelector('.work-log-body');const open=panel.dataset.initialized==='1'&&panel.classList.contains('open');panel.dataset.initialized='1';panel.classList.toggle('open',open);panel.querySelector('.work-log-head').setAttribute('aria-expanded',String(open));body.replaceChildren();items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const label=String(data.text||'Activity');const detail=String(data.detail||'');const row=document.createElement(detail&&detail!==label?'details':'div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');if(row.tagName==='DETAILS'){const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;body.appendChild(row)});panel.querySelector('.think-label').textContent='Workspace activity · '+items.length+' event(s)'}
 function pushWorkStep(node,text,ok,detail){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok&&last.detail===detail)return;entries.push({text,ok,detail:detail||''});if(entries.length>60)entries.shift();setThink(node,entries)}
@@ -1550,7 +1576,7 @@ async function ensureChat(initialMessage){
  return state.chatId;
 }
 async function newChat(){cancelRun();state.chatId=null;state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=data.effort==='expert'?'expert':'thinking';state.mode=data.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;syncSelect($('effortSelect'));syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
+async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=data.effort==='expert'?'expert':'thinking';state.mode=data.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;syncSelect($('effortSelect'));syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
 async function send(){
  const text=$('prompt').value.trim();if(!text||state.busy)return;
  const run=++state.run;state.effort=$('effortSelect').value;state.mode=$('operationMode').value;const route=$('topModel').value;
@@ -1563,9 +1589,9 @@ async function send(){
  follow=true;renderMessage('user',text);const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
  $('chatMeta').textContent=state.effort+' · '+state.mode+' · Generating…';
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
- const contentEl=node.querySelector('.content');let raw='',reasoning='',pending=false,thinkStart=0;
+ const contentEl=node.querySelector('.content');let raw='',reasoning='',pending=false,thinkStart=0;setReasoning(node,'Reviewing the request and checking the available context…',true);
  const controller=new AbortController();state.abort=controller;
- const paint=()=>{pending=false;if(run!==state.run)return;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe){bindCopy(node);typesetMath(contentEl)}node.dataset.raw=safe;scrollEnd()};
+ const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseSummary(raw,true);if(parsed.summary)setReasoning(node,parsed.summary,true);const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe){bindCopy(node);typesetMath(contentEl)}node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
  try{
   const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,route,effort:state.effort,mode:state.mode,message_id:messageId}),signal:controller.signal});
@@ -1577,7 +1603,7 @@ async function send(){
     else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();reasoning+=event.text||'';setReasoning(node,reasoning,true)}
     else if(event.type==='reasoning_reset'){reasoning=event.text||'';setReasoning(node,reasoning,!!reasoning)}
     else if(event.type==='token'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}
-    else if(event.type==='done'){pending=false;raw=event.content||'';reasoning=event.reasoning||reasoning;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setReasoning(node,reasoning,false,event.thinking_seconds||(thinkStart?(performance.now()-thinkStart)/1000:0));setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='done'){pending=false;raw=event.content||'';const parsed=splitResponseSummary(raw,false);reasoning=event.reasoning||reasoning||parsed.summary;const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setReasoning(node,reasoning||'I reviewed the request and prepared the response.',false,event.thinking_seconds||(thinkStart?(performance.now()-thinkStart)/1000:0));setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
     else if(event.type==='error')throw new Error(event.message||'The model request failed');
    }
   }
@@ -1675,8 +1701,10 @@ def strip_unsupported_actions(value):
 
 
 def split_thinking(raw):
-    """Discard private inline thought blocks and return only the user-facing reply."""
+    """Extract a public approach summary and discard any private inline thought tags."""
     reply = str(raw or "")
+    summaries = [match.group(1).strip() for match in SUMMARY_ACTION_RE.finditer(reply) if match.group(1).strip()]
+    reply = SUMMARY_ACTION_RE.sub("", reply)
     opener = THINK_OPEN_RE.search(reply)
     closer = THINK_CLOSE_RE.search(reply)
     if closer and (not opener or closer.start() < opener.start()):
@@ -1684,7 +1712,7 @@ def split_thinking(raw):
     reply = re.sub(r"<think(?:ing)?>[\s\S]*?(?:</think(?:ing)?>|\Z)", "", reply, flags=re.I)
     reply = THINK_TAG_RE.sub("", reply)
     reply = re.sub(r"\n{3,}", "\n\n", reply)
-    return "", reply.strip()
+    return "\n\n".join(summaries).strip(), reply.strip()
 
 
 class _SearchHTMLParser(HTMLParser):
@@ -3683,6 +3711,30 @@ class Handler(BaseHTTPRequestHandler):
             validation_errors = []
             max_rounds = 4
             for round_index in range(max_rounds):
+                if round_index == 0 and DESKTOP_VISUAL_REQUEST_RE.search(user_text):
+                    if mode == "normal":
+                        final_raw = (
+                            "Normal mode cannot access your Mac's local files or folders. Switch this conversation to Code mode "
+                            "to let me read and list files inside the configured project directory (and inspect files you attach). "
+                            "Code mode still cannot capture or view your live desktop, screen, or GUI. To show me what is on screen, "
+                            "attach a screenshot. File changes and developer commands remain subject to separate approval."
+                        )
+                    else:
+                        final_raw = (
+                            "I can't capture or view your live desktop, screen, or GUI in either mode. Code mode can read and list files "
+                            "inside the configured project directory and inspect files you attach, but it does not provide live screen access. "
+                            "Attach a screenshot to show me what is on screen. File changes and developer commands still require your approval."
+                        )
+                    log_step("Explained the desktop and Code mode access boundary.", True, status="Mode guidance ready…", detail="No live screen capture or unauthorized local access was attempted.")
+                    break
+                if round_index == 0 and mode == "normal" and NORMAL_MODE_LOCAL_ACCESS_RE.search(user_text):
+                    final_raw = (
+                        "Normal mode cannot access local files, folders, or terminal commands. Switch this conversation to Code mode "
+                        "to let me read and list files inside the configured project directory and inspect files you attach. "
+                        "Any proposed file changes or developer commands will be shown for your approval before they can run or be applied."
+                    )
+                    log_step("Explained the Code mode access boundary.", True, status="Mode guidance ready…", detail="No local file, directory, or terminal action was attempted in Normal mode.")
+                    break
                 if round_index == 0 and mode == "normal" and SYSTEM_PROMPT_REQUEST_RE.fullmatch(user_text):
                     final_raw = "Normal mode cannot inspect local application configuration. Switch this conversation to Code mode to view Kurt's editable system prompt."
                     log_step("Blocked a local configuration read in Normal mode.", False, status="Action blocked…", detail="No local configuration or file was read.")
@@ -3846,7 +3898,12 @@ class Handler(BaseHTTPRequestHandler):
 
             artifacts = list(artifacts_by_path.values())
             stats = response_stats()
-            _inline_thinking, reply = split_thinking(final_raw)
+            response_summary, reply = split_thinking(final_raw)
+            response_summary = response_summary or "".join(model_summary_chunks).strip()
+            if not response_summary and final_raw and mode == "normal" and NORMAL_MODE_LOCAL_ACCESS_RE.search(user_text):
+                response_summary = "I checked the current mode's permissions and identified that local access requires Code mode."
+            if not response_summary and final_raw:
+                response_summary = "I reviewed the request and prepared the response."
             reply = strip_unsupported_actions(reply)
             reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
             if validation_errors:
@@ -3860,8 +3917,8 @@ class Handler(BaseHTTPRequestHandler):
             if visible or artifacts:
                 record = {
                     "role": "assistant", "content": visible, "artifacts": artifacts,
-                    "worklog": worklog, "reasoning": "".join(model_summary_chunks).strip(),
-                    "thinking_seconds": round(thinking_seconds, 1),
+                    "worklog": worklog, "reasoning": response_summary,
+                    "thinking_seconds": round(thinking_seconds or generation_seconds, 1),
                     "effort": effort, "mode": mode, "route": route_info["route"],
                     "model": model, "stats": stats,
                 }
@@ -3876,8 +3933,8 @@ class Handler(BaseHTTPRequestHandler):
             finished = True
             emit({
                 "type": "done", "content": visible, "artifacts": artifacts,
-                "worklog": worklog, "reasoning": "".join(model_summary_chunks).strip(),
-                "thinking_seconds": round(thinking_seconds, 1),
+                "worklog": worklog, "reasoning": response_summary,
+                "thinking_seconds": round(thinking_seconds or generation_seconds, 1),
                 "chat_id": chat_id, "title": chat["title"], "route": route_info["route"],
                 "model": model, "effort": effort, "mode": mode, "stats": stats,
             })
