@@ -274,8 +274,16 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .composer:focus-within{border-color:var(--green);box-shadow:0 0 0 3px var(--green-soft)}
 .composer textarea{display:block;width:100%;resize:none;min-height:30px;max-height:220px;background:transparent;border:0;outline:none;padding:3px 0;font:15px/1.55 var(--sans)}
 .composer textarea::placeholder{color:var(--muted)}
-.compose-bottom{display:flex;align-items:center;gap:4px;margin-left:-8px}
-.spacer{flex:1}
+.compose-bottom{display:flex;align-items:center;gap:4px;margin-left:-8px;min-width:0}
+.spacer{flex:1;min-width:8px}
+.route-picker{position:relative;display:flex;align-items:center;gap:2px;flex:none;min-width:0}
+.route-category{padding:6px 9px;border:1px solid transparent;background:transparent;color:var(--muted);font-size:12px;border-radius:8px;white-space:nowrap}
+.route-category:hover,.route-category.active{background:var(--raise);border-color:var(--line2);color:var(--text)}
+.route-flyout{position:fixed;z-index:70;display:grid;gap:3px;max-width:calc(100vw - 20px);max-height:min(360px,calc(100vh - 24px));overflow:auto;padding:6px;background:var(--panel);border:1px solid var(--line2);border-radius:11px;box-shadow:var(--shadow)}
+.route-flyout[hidden]{display:none}
+.route-flyout-item{width:100%;min-width:0;padding:8px 10px;border:0;border-radius:7px;background:transparent;color:var(--text);text-align:left;font-size:12.5px;white-space:normal;overflow-wrap:anywhere}
+.route-flyout-item:hover,.route-flyout-item[aria-current=true]{background:var(--raise);color:var(--green)}
+.route-flyout-empty{padding:10px;color:var(--muted);font-size:12px}
 .model-pill{max-width:230px;min-width:0;background:transparent;border:0;color:var(--muted);border-radius:9px;padding:6px 8px;font-size:13px;text-overflow:ellipsis;cursor:pointer;outline-offset:0}
 .model-pill:hover{color:var(--text);background:var(--raise)}
 .model-pill option{background:var(--panel);color:var(--text)}
@@ -338,7 +346,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .field{display:grid;gap:5px;margin-bottom:13px}
 .field label{font-size:13px;color:var(--muted)}
-.field input,.field select,.field textarea{background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:8px 10px;outline:none;width:100%}
+.field input,.field select,.field textarea{background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:8px 10px;outline:none;width:100%;min-width:0;max-width:100%}
+.field input{overflow:hidden;text-overflow:ellipsis}
 .field textarea{min-height:145px;resize:vertical;font:12.5px/1.55 var(--mono)}
 .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--green)}
 .section{border-top:1px solid var(--line);margin-top:18px;padding-top:16px}
@@ -346,6 +355,10 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .row>*{flex:1;min-width:100px}
 .key-row,.model-row{display:flex;gap:10px;align-items:center;padding:9px 10px;border:1px solid var(--line);border-radius:10px;margin:6px 0}
+.failover-member-row{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) auto;gap:8px;align-items:center;padding:9px 10px;border:1px solid var(--line);border-radius:10px;margin:7px 0;background:var(--bg)}
+.failover-member-row select{width:100%;min-width:0;max-width:100%;padding:8px 9px;border:1px solid var(--line2);border-radius:8px;background:var(--panel);color:var(--text);font-size:12.5px;text-overflow:ellipsis}
+.failover-member-row .remove-member{width:32px;height:32px;padding:0}
+@media(max-width:700px){.failover-member-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}.route-picker{gap:0}.route-category{padding:4px 3px;font-size:10px}.custom-select.mode-pill{max-width:20vw;min-width:0}}
 .key-row .grow,.model-row .grow{flex:1;min-width:0}
 .key-row small,.model-row small{display:block;color:var(--muted)}
 .pool-card{border:1px solid var(--line2);border-radius:11px;padding:10px 12px;margin:9px 0;background:var(--bg)}
@@ -465,7 +478,7 @@ body.compact-scroll .artifact-pane{top:54px;bottom:0;height:auto;min-height:0;ov
 
 /* Fully styled dropdowns and in-app dialogs */
 .custom-select{position:relative;display:inline-flex;min-width:0;vertical-align:middle}
-.custom-select-trigger{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-width:0;padding:7px 10px;border:1px solid var(--line2);border-radius:9px;background:var(--raise);color:var(--text);font-size:13px;text-align:left;white-space:nowrap}
+.custom-select-trigger{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;padding:7px 10px;border:1px solid var(--line2);border-radius:9px;background:var(--raise);color:var(--text);font-size:13px;text-align:left;white-space:nowrap}
 .custom-select-trigger:after{content:"";width:7px;height:7px;flex:none;border-right:1.7px solid currentColor;border-bottom:1.7px solid currentColor;transform:rotate(45deg) translateY(-2px);transition:transform .18s ease}
 .custom-select.open .custom-select-trigger:after{transform:rotate(225deg) translate(-1px,-1px)}
 .custom-select-menu{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:42;display:none;max-height:min(340px,55vh);overflow:auto;padding:5px;background:var(--panel);border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);transform-origin:top center}
@@ -478,8 +491,8 @@ body.compact-scroll .artifact-pane{top:54px;bottom:0;height:auto;min-height:0;ov
 .custom-select.model-pill{max-width:260px;min-width:0}
 .custom-select.model-pill .custom-select-trigger{border:0;background:transparent;color:var(--muted);padding:6px 8px}
 .custom-select.model-pill .custom-select-trigger:hover{background:var(--raise);color:var(--text)}
-.custom-select.mode-pill{max-width:140px;min-width:86px}
-.custom-select.mode-pill .custom-select-trigger{padding:5px 8px;background:transparent;color:var(--muted);font-size:12px}
+.custom-select.mode-pill{max-width:140px;min-width:86px;border:0!important;background:transparent!important;box-shadow:none!important}
+.custom-select.mode-pill .custom-select-trigger{min-width:0;padding:5px 8px;border:1px solid var(--line)!important;background:transparent;color:var(--muted);font-size:12px;box-shadow:none!important}
 .custom-select.chat-sort{max-width:112px;min-width:0}
 .custom-select.chat-sort .custom-select-menu{min-width:120px;left:auto;right:0}
 .field>.custom-select{width:100%}
@@ -598,11 +611,11 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <div class="composer">
 <textarea id="prompt" rows="1" placeholder="Message Kurt" aria-label="Message Kurt"></textarea>
 <div class="compose-bottom">
-<button class="icon-btn" id="contextBtn" title="Attach workspace files" aria-label="Attach workspace files"><svg class="ic"><use href="#i-plus"/></svg></button>
+<button class="icon-btn" id="contextBtn" title="Add files from this computer" aria-label="Add files from this computer"><svg class="ic"><use href="#i-plus"/></svg></button>
 <span class="spacer"></span>
 <select id="effortSelect" class="mode-pill" title="Response effort" aria-label="Response effort"><option value="thinking" selected>Thinking</option><option value="expert">Expert</option></select>
 <select id="operationMode" class="mode-pill" title="Operating mode" aria-label="Operating mode"><option value="normal" selected>Normal</option><option value="code">Code</option></select>
-<select id="topModel" class="model-pill" title="Active model" aria-label="Active model"></select>
+<div class="route-picker" id="routePicker" aria-label="Choose model route"><button class="route-category" type="button" data-route-category="local">Local</button><button class="route-category" type="button" data-route-category="key">Key</button><button class="route-category" type="button" data-route-category="group">Group</button></div><select id="topModel" hidden aria-label="Selected model route"></select><input id="composerFiles" type="file" multiple hidden>
 <button class="send" id="sendBtn" title="Send message" aria-label="Send message" disabled><svg class="ic"><use href="#i-up"/></svg></button>
 </div>
 </div>
@@ -617,40 +630,41 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 </div></div>
 <div class="modal-backdrop" id="settingsModal"><div class="modal settings-modal"><div class="modal-head"><h2>Kurt settings</h2><button class="ghost" data-close="settingsModal">Close</button></div><div class="modal-body settings-body">
 <nav class="settings-nav" aria-label="Settings sections">
-<div class="settings-nav-caption">Preferences</div>
+<div class="settings-nav-caption">Settings</div>
 <button class="settings-nav-btn active" type="button" data-settings-tab="general">General</button>
 <button class="settings-nav-btn" type="button" data-settings-tab="local-models">Local models</button>
-<button class="settings-nav-btn" type="button" data-settings-tab="api-keys">API key groups</button>
-
+<button class="settings-nav-btn" type="button" data-settings-tab="keys">Keys</button>
+<button class="settings-nav-btn" type="button" data-settings-tab="groups">Groups</button>
 </nav>
 <div class="settings-panel-area">
 <section class="settings-panel active" data-settings-panel="general">
-<h3>General</h3><div class="inline-note">Choose the model Kurt uses by default and configure the project workspace.</div>
+<h3>General</h3><div class="inline-note">Choose the default route and configure the project workspace.</div>
 <div class="settings-grid"><div class="field"><label>Default chat route</label><select id="settingsModel"></select></div><div class="field"><label>Project directory (read-only by default)</label><input id="projectRoot" placeholder="/Users/you/project"></div></div>
 <label class="check-row"><input id="allowProjectWrites" type="checkbox"> Allow applying generated files to the project (each file still requires confirmation)</label>
 <div class="field"><label>System prompt</label><textarea id="systemPrompt" style="min-height:180px"></textarea><div class="inline-note">Kurt can review and propose edits to this prompt in chat. Proposed prompt changes appear as a review card and require your approval before saving. Type /system-prompt in chat to display the exact active Kurt prompt for the selected mode.</div></div>
 <div class="row"><button class="primary" id="saveSettings">Save settings</button><button id="reloadSettings">Reload from disk</button></div>
 </section>
-<section class="settings-panel" id="localModelsSection" data-settings-panel="local-models">
-<h3>Local models</h3><div class="inline-note">Installed Ollama models are sorted by name. You can also download models and add API keys here.</div>
+<section class="settings-panel" data-settings-panel="local-models">
+<h3>Local models</h3><div class="inline-note">Installed Ollama models and model downloads.</div>
 <div id="localModelList"></div>
 <div class="model-download-card"><h4>Download a model</h4><p>Enter an Ollama model ID, for example <code>qwen2.5-coder:7b</code>. Downloads run in the background and progress appears at the top of Kurt.</p><div class="row"><input id="downloadModel" aria-label="Ollama model name" placeholder="Model ID, e.g. qwen2.5-coder:7b"><button id="startDownload" class="primary">Download model</button></div><div class="inline-note" id="localDownloadStatus">No model download started.</div></div>
-<div class="section"><h3>API keys</h3><div class="inline-note">Keys are stored locally. Use a key group to rotate through its saved keys, or select an individual key when chatting.</div>
-<div class="settings-grid"><div class="field"><label>Provider</label><select id="keyProvider"></select></div><div class="field"><label>Key group</label><input id="keyGroup" value="default" placeholder="e.g. personal"></div><div class="field"><label>Account label</label><input id="keyLabel" placeholder="Personal account"></div><div class="field"><label>API key</label><input id="keyValue" type="password" autocomplete="off" placeholder="Paste API key (stored locally)"></div></div><button id="addKey" class="primary">Add API key</button>
-<div class="row key-sort-row"><span class="inline-note">Sort keys</span><select id="keySort" aria-label="Sort API keys"><option value="name">Name</option><option value="date">Date added</option></select></div><div id="keysList"></div></div>
 </section>
-<section class="settings-panel" data-settings-panel="api-keys">
-<h3>API key groups</h3><div class="inline-note">Create named routes that connect an installed local model or an API model to one key or a rotating key pool. Pick a route, a single key, or a full group beside the message box.</div>
-<div class="section" style="border-top:0;margin-top:0;padding-top:0">
-<div class="settings-grid"><div class="field"><label>Group name</label><input id="groupName" placeholder="e.g. Work, Fast, Coding"></div><div class="field"><label>Group source</label><select id="groupSource"><option value="local">Local model</option><option value="api">API model + key</option></select></div></div>
-<div id="groupLocalFields"><div class="field"><label>Local model</label><select id="groupLocalModel"></select></div></div>
-<div id="groupApiFields" hidden><div class="settings-grid"><div class="field"><label>Provider</label><select id="groupProvider"></select></div><div class="field"><label>API model ID</label><input id="groupModelId" placeholder="e.g. claude-sonnet-4-5"></div><div class="field"><label>Display name</label><input id="groupLabel" placeholder="Model name"></div><div class="field"><label>API key group</label><select id="groupPool"></select></div><div class="field"><label>Key used by this group</label><select id="groupKeyId"><option value="pool">All keys in this group (automatic failover)</option></select></div><div class="field"><label>API base URL (optional)</label><input id="groupBase" placeholder="Use provider default"></div></div></div>
-<div class="row"><button id="saveApiGroup" class="primary">Create group</button><button id="cancelApiGroup" hidden>Cancel edit</button></div></div>
-<div id="apiGroupsList"></div>
+<section class="settings-panel" data-settings-panel="keys">
+<h3>Keys</h3><div class="inline-note">Add and manage provider API keys. Keys are stored locally and can be used by individual routes or failover groups.</div>
+<div class="settings-grid"><div class="field"><label>Provider</label><select id="keyProvider"></select></div><div class="field"><label>Key group</label><input id="keyGroup" value="default" placeholder="e.g. personal"></div><div class="field"><label>Account label</label><input id="keyLabel" placeholder="Personal account"></div><div class="field"><label>API key</label><input id="keyValue" type="password" autocomplete="off" placeholder="Paste API key (stored locally)"></div></div><button id="addKey" class="primary">Add key</button>
+<div class="row key-sort-row"><span class="inline-note">Sort keys</span><select id="keySort" aria-label="Sort API keys"><option value="name">Name</option><option value="date">Date added</option></select></div><div id="keysList"></div>
 </section>
-</div></div></div>
+<section class="settings-panel" data-settings-panel="groups">
+<h3>Groups</h3><div class="inline-note">Create a fallback order. Kurt tries each model and its selected key, then switches to the next entry if a request fails before a response is produced. Add at least two entries.</div>
+<div class="field"><label>Group name</label><input id="failoverGroupName" placeholder="e.g. Reliable, Coding fallback"></div>
+<div id="failoverMembers"></div>
+<div class="row"><button id="addFailoverMember" type="button">Add model / key</button><button id="saveFailoverGroup" class="primary" type="button">Create group</button><button id="cancelFailoverGroup" type="button" hidden>Cancel edit</button></div>
+<div class="section"><h3>Saved groups</h3><div id="apiGroupsList"></div></div>
+</section>
+</div></div></div></div>
 <div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files</h2><button class="ghost" data-close="filesModal">Close</button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Choose files or a folder from your computer. This opens the standard macOS Finder or Windows File Explorer picker. Images and other binary files are kept in this chat workspace; readable source files are added to Kurt’s context. Your original files are not changed.</p><div class="file-source"><h3>From this computer</h3><div class="file-actions"><button id="chooseLocalFiles" class="primary">Choose files</button><button id="chooseLocalFolder">Choose folder</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList">No files selected.</div></div><div class="file-source"><h3>From the configured project</h3><div class="row"><input id="fileFolder" value="" placeholder="Project folder path"><button id="refreshFiles">Open</button><button id="selectCurrentFolder">Add this folder</button></div><div class="file-picker" id="filePicker"></div></div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
 <div class="toast" id="toast"></div>
+<div class="route-flyout" id="routeFlyout" hidden></div>
 <div class="chat-context-menu" id="chatContextMenu" role="menu"></div>
 <div class="dialog-backdrop" id="appDialogBackdrop"><form class="app-dialog" id="appDialogForm"><h2 id="appDialogTitle"></h2><p class="dialog-message" id="appDialogMessage"></p><div class="dialog-fields" id="appDialogFields"></div><div class="dialog-actions"><button type="button" id="appDialogCancel">Cancel</button><button type="submit" class="primary" id="appDialogConfirm">Save</button></div></form></div>
 <script>
@@ -675,7 +689,7 @@ async function confirmInApp(title,message,confirmText='Confirm',danger=false){re
 function closeCustomSelects(except){document.querySelectorAll('.custom-select.open').forEach(w=>{if(w!==except){w.classList.remove('open');w.querySelector('.custom-select-trigger')?.setAttribute('aria-expanded','false')}})}
 function syncSelect(select){const wrap=select?._customWrap;if(!wrap)return;const option=select.options[select.selectedIndex];wrap.querySelector('.custom-select-trigger').textContent=option?.textContent||'Choose…';wrap.querySelectorAll('.custom-select-option').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.value===select.value)))}
 function enhanceSelect(select){
- if(!select||select._customWrap)return;const wrap=document.createElement('div');wrap.className='custom-select '+Array.from(select.classList).join(' ');const trigger=document.createElement('button');trigger.type='button';trigger.className='custom-select-trigger';trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');trigger.setAttribute('aria-label',select.getAttribute('aria-label')||select.title||'Choose an option');const menu=document.createElement('div');menu.className='custom-select-menu';menu.setAttribute('role','listbox');select.parentNode.insertBefore(wrap,select);wrap.append(select,trigger,menu);select.classList.add('custom-select-native');select._customWrap=wrap;
+ if(!select||select.id==='topModel'||select._customWrap)return;const wrap=document.createElement('div');wrap.className='custom-select '+Array.from(select.classList).join(' ');const trigger=document.createElement('button');trigger.type='button';trigger.className='custom-select-trigger';trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');trigger.setAttribute('aria-label',select.getAttribute('aria-label')||select.title||'Choose an option');const menu=document.createElement('div');menu.className='custom-select-menu';menu.setAttribute('role','listbox');select.parentNode.insertBefore(wrap,select);wrap.append(select,trigger,menu);select.classList.add('custom-select-native');select._customWrap=wrap;
  const build=()=>{menu.replaceChildren();let group='';Array.from(select.options).forEach(option=>{const groupName=option.parentElement?.tagName==='OPTGROUP'?option.parentElement.label:'';if(groupName&&groupName!==group){group=groupName;const heading=document.createElement('div');heading.className='custom-select-group';heading.textContent=groupName;menu.appendChild(heading)}const button=document.createElement('button');button.type='button';button.className='custom-select-option';button.textContent=option.textContent;button.dataset.value=option.value;button.disabled=option.disabled;button.setAttribute('role','option');button.setAttribute('aria-selected',String(option.value===select.value));button.onclick=()=>{select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));wrap.classList.remove('open');trigger.setAttribute('aria-expanded','false');trigger.focus()};menu.appendChild(button)});syncSelect(select)};
  trigger.onclick=()=>{const open=!wrap.classList.contains('open');closeCustomSelects(wrap);wrap.classList.toggle('open',open);trigger.setAttribute('aria-expanded',String(open))};trigger.onkeydown=e=>{if(['ArrowDown','Enter',' '].includes(e.key)){e.preventDefault();wrap.classList.add('open');trigger.setAttribute('aria-expanded','true');menu.querySelector('.custom-select-option:not(:disabled)')?.focus()}else if(e.key==='Escape'){wrap.classList.remove('open');trigger.setAttribute('aria-expanded','false')}};select.addEventListener('change',build);const observer=new MutationObserver(build);observer.observe(select,{childList:true,subtree:true,attributes:true,characterData:true});select._customObserver=observer;build();
 }
@@ -684,8 +698,53 @@ function setSelectOptions(select,items,placeholder=''){if(!select)return;const c
 
 function modelLabel(m){return `${m.label||m.name||m.model} · ${m.provider}${m.current?' · active':''}`}
 function fillModels(){
- const routes=(state.routes||[]).map(route=>({value:route.value,label:route.label}));const fallback=state.models.filter(model=>model.type==='local').map(model=>({value:'model|'+model.ref,label:'Local · '+modelLabel(model)}));const options=routes.length?routes:fallback;
- setSelectOptions($('topModel'),options,'No routes configured');setSelectOptions($('settingsModel'),options,'No routes configured');const preferred=state.settings.default_route||'';if(options.some(item=>item.value===preferred)){$('topModel').value=preferred;$('settingsModel').value=preferred}else if(options.length){$('settingsModel').value=$('topModel').value}syncSelect($('topModel'));syncSelect($('settingsModel'));renderLocalModels();
+ const routes=(state.routes||[]).map(route=>({value:route.value,label:route.label}));
+ const fallback=state.models.filter(model=>model.type==='local').map(model=>({value:'model|'+model.ref,label:'Local · '+modelLabel(model)}));
+ const options=routes.length?routes:fallback;
+ setSelectOptions($('topModel'),options,'No routes configured');
+ setSelectOptions($('settingsModel'),options,'No routes configured');
+ const preferred=state.settings.default_route||'';
+ if(options.some(item=>item.value===preferred)){$('topModel').value=preferred;$('settingsModel').value=preferred}
+ else if(options.length){$('settingsModel').value=$('topModel').value}
+ syncSelect($('settingsModel'));renderRoutePicker();renderLocalModels();
+}
+function routeCategoryForValue(value){
+ const route=(state.routes||[]).find(item=>item.value===value);
+ if(route?.kind)return route.kind;
+ if(String(value||'').startsWith('model|'))return 'local';
+ if(String(value||'').startsWith('key'))return 'key';
+ return 'group';
+}
+function renderRoutePicker(){
+ const root=$('routePicker');if(!root)return;
+ const active=routeCategoryForValue($('topModel').value);
+ root.querySelectorAll('[data-route-category]').forEach(button=>{
+  const category=button.dataset.routeCategory;
+  button.classList.toggle('active',category===active);
+  button.setAttribute('aria-pressed',String(category===active));
+  button.onclick=event=>{event.stopPropagation();openRouteFlyout(category,button)};
+  button.onmouseenter=()=>openRouteFlyout(category,button);
+ });
+}
+function closeRouteFlyout(){const menu=$('routeFlyout');if(menu){menu.hidden=true;menu.replaceChildren()}}
+function openRouteFlyout(category,trigger){
+ const menu=$('routeFlyout');if(!menu||!trigger)return;
+ const routes=(state.routes||[]).filter(route=>route.kind===category);
+ menu.replaceChildren();
+ if(!routes.length){const empty=document.createElement('div');empty.className='route-flyout-empty';empty.textContent=category==='local'?'No local models are installed.':category==='key'?'No compatible model keys are available.':'No groups have been created.';menu.appendChild(empty)}
+ routes.forEach(route=>{
+  const item=document.createElement('button');item.type='button';item.className='route-flyout-item';item.textContent=route.label;item.title=route.label;
+  if(route.value===$('topModel').value)item.setAttribute('aria-current','true');
+  item.onclick=event=>{event.stopPropagation();$('topModel').value=route.value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}));closeRouteFlyout()};
+  menu.appendChild(item);
+ });
+ menu.hidden=false;
+ const width=Math.min(360,window.innerWidth-20);menu.style.width=width+'px';
+ const rect=trigger.getBoundingClientRect();
+ const left=rect.right+8+width<=window.innerWidth-10?rect.right+8:Math.max(10,rect.left-width-8);
+ const maxHeight=Math.min(360,window.innerHeight-24);menu.style.maxHeight=maxHeight+'px';
+ const height=Math.min(menu.scrollHeight,maxHeight);const top=Math.max(12,Math.min(window.innerHeight-height-12,rect.bottom-height));
+ menu.style.left=left+'px';menu.style.top=top+'px';
 }
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function stripUnsupportedActions(src){return String(src||'')
@@ -730,20 +789,97 @@ function renderChats(){const el=$('chatList');el.replaceChildren();const chats=s
 async function renameChat(id,current){const result=await inAppDialog({title:'Rename conversation',message:'Choose a clear title for this chat.',confirmText:'Rename',fields:[{name:'title',label:'Chat title',value:current,required:true,maxLength:100}]});if(!result)return;const title=result.title.trim();if(!title){toast('Chat title cannot be empty');return}try{await api('/api/chats/'+encodeURIComponent(id),{rename:title});await refreshChats();if(id===state.chatId)setTitle(title,$('chatMeta').textContent)}catch(error){toast(error.message)}}
 async function togglePinChat(id,pinned){try{await api('/api/chats/'+encodeURIComponent(id),{pin:!!pinned});await refreshChats()}catch(error){toast(error.message)}}
 async function deleteChat(id){const chat=state.chats.find(item=>item.id===id);if(!await confirmInApp('Delete conversation',`Delete “${chat?.title||'this chat'}” and its temporary workspace? This cannot be undone.`,'Delete chat',true))return;if(state.chatId===id)cancelRun();try{await api('/api/chats/'+encodeURIComponent(id),{delete:true});if(state.chatId===id){state.chatId=null;resetComposer();showWelcome();setTitle('New chat','')}await refreshChats();toast('Chat deleted')}catch(error){toast(error.message)}}
-async function refreshBootstrap(){const data=await api('/api/bootstrap');state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.settings=data.settings||{};state.projectRoot=data.project_root||'';$('projectRoot').value=state.projectRoot;$('systemPrompt').value=state.settings.system_prompt||'';$('allowProjectWrites').checked=!!state.settings.allow_project_writes;fillProviders();fillModels();renderKeys();renderApiGroups();enhanceAllSelects()}
-function fillProviders(){const providers=state.providers.map(item=>({value:item.id,label:item.label}));setSelectOptions($('keyProvider'),providers,'Choose provider');setSelectOptions($('groupProvider'),providers,'Choose provider');const local=state.models.filter(model=>model.type==='local').sort((a,b)=>(a.label||a.name).localeCompare(b.label||b.name)).map(model=>({value:model.ref,label:model.label||model.name}));setSelectOptions($('groupLocalModel'),local,'Choose local model');updateGroupPoolOptions();}
-function updateGroupPoolOptions(){const provider=$('groupProvider')?.value||'';const groups=[...new Set(state.keys.filter(key=>key.provider===provider).map(key=>key.group||'default'))].sort((a,b)=>a.localeCompare(b));const options=groups.map(group=>({value:provider+'|'+group,label:group+' · '+state.keys.filter(key=>key.provider===provider&&(key.group||'default')===group).length+' key(s)'}));setSelectOptions($('groupPool'),options,'Choose saved key group');updateGroupKeyOptions()}
-function updateGroupKeyOptions(){const parts=String($('groupPool')?.value||'').split('|');const provider=parts[0],group=parts.slice(1).join('|');const keys=state.keys.filter(key=>key.provider===provider&&(key.group||'default')===group);setSelectOptions($('groupKeyId'),[{value:'pool',label:'All keys · automatic failover'},...keys.map(key=>({value:key.id,label:key.label+' · '+key.masked}))],'Choose key');}
-function renderLocalModels(){const root=$('localModelList');if(!root)return;root.replaceChildren();const local=state.models.filter(model=>model.type==='local').sort((a,b)=>(a.label||a.name).localeCompare(b.label||b.name));if(!local.length){root.innerHTML='<div class="empty">No Ollama models are installed yet.</div>';return}local.forEach(model=>{const row=document.createElement('div');row.className='local-model-row';const grow=document.createElement('div');grow.className='grow';grow.innerHTML=`<b>${esc(model.label||model.name)}</b><small>${esc(model.size?String(model.size):'Ollama local model')}${model.current?' · currently active':''}</small>`;const use=document.createElement('button');use.textContent='Use in chat';use.onclick=()=>{const route='model|'+model.ref;$('topModel').value=route;syncSelect($('topModel'));$('topModel').dispatchEvent(new Event('change',{bubbles:true}));activateSettingsTab('general');toast('Local model selected for new chats')};row.append(grow,use);root.append(row)})}
+async function refreshBootstrap(){const data=await api('/api/bootstrap');state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.settings=data.settings||{};state.projectRoot=data.project_root||'';$('projectRoot').value=state.projectRoot;$('systemPrompt').value=state.settings.system_prompt||'';$('allowProjectWrites').checked=!!state.settings.allow_project_writes;fillProviders();fillModels();renderKeys();renderApiGroups();refreshFailoverMemberOptions();enhanceAllSelects()}
+function fillProviders(){const providers=state.providers.map(item=>({value:item.id,label:item.label}));setSelectOptions($('keyProvider'),providers,'Choose provider')}
+function renderLocalModels(){const root=$('localModelList');if(!root)return;root.replaceChildren();const local=state.models.filter(model=>model.type==='local').sort((a,b)=>(a.label||a.name).localeCompare(b.label||b.name));if(!local.length){root.innerHTML='<div class="empty">No Ollama models are installed yet.</div>';return}local.forEach(model=>{const row=document.createElement('div');row.className='local-model-row';const grow=document.createElement('div');grow.className='grow';grow.innerHTML=`<b>${esc(model.label||model.name)}</b><small>${esc(model.size?String(model.size):'Ollama local model')}${model.current?' · currently active':''}</small>`;const use=document.createElement('button');use.textContent='Use in chat';use.onclick=()=>{const route='model|'+model.ref;$('topModel').value=route;$('topModel').dispatchEvent(new Event('change',{bubbles:true}));activateSettingsTab('general');toast('Local model selected for new chats')};row.append(grow,use);root.append(row)})}
 function renderKeys(){const root=$('keysList');if(!root)return;root.replaceChildren();if(!state.keys.length){root.innerHTML='<div class="empty">No API keys saved yet.</div>';return}const groups=new Map();state.keys.forEach(key=>{const provider=key.provider||'unknown',group=key.group||'default',id=provider+'\u0000'+group;if(!groups.has(id))groups.set(id,{provider,group,keys:[]});groups.get(id).keys.push(key)});const sortMode=$('keySort')?.value||state.keySort||'name';[...groups.values()].sort((a,b)=>(a.provider+a.group).localeCompare(b.provider+b.group)).forEach(pool=>{pool.keys.sort((a,b)=>sortMode==='date'?(Number(b.created_at)||0)-(Number(a.created_at)||0):(a.label||'').localeCompare(b.label||''));const card=document.createElement('div');card.className='pool-card';const heading=document.createElement('div');heading.className='pool-head';const grow=document.createElement('div');grow.className='grow';grow.innerHTML=`<b>${esc(pool.provider)} · ${esc(pool.group)}</b><small>${pool.keys.length} key(s) · available to linked groups</small>`;const actions=document.createElement('div');actions.className='pool-actions';const rename=document.createElement('button');rename.textContent='Rename group';rename.onclick=async()=>{const result=await inAppDialog({title:'Rename API key group',message:'All keys in this provider group and their linked routes will be updated.',confirmText:'Rename',fields:[{name:'name',label:'New group name',value:pool.group,required:true,maxLength:50}]});if(!result)return;try{await api('/api/settings',{key_action:'rename_group',provider:pool.provider,old_group:pool.group,new_group:result.name.trim()});await refreshBootstrap();toast('Key group renamed')}catch(error){toast(error.message)}};actions.append(rename);heading.append(grow,actions);card.append(heading);pool.keys.forEach(key=>{const row=document.createElement('div');row.className='key-row';const added=Number(key.created_at)?new Date(Number(key.created_at)*1000).toLocaleDateString():'Date unavailable';row.innerHTML=`<div class="grow"><b>${esc(key.label)}</b><small>${esc(key.masked)} · Added ${esc(added)}</small></div><button class="edit-key">Edit</button><button class="danger remove-key">Remove</button>`;row.querySelector('.edit-key').onclick=async()=>{const result=await inAppDialog({title:'Edit API key',message:'The stored key is never shown. Leave the replacement blank to keep it unchanged.',confirmText:'Save key',fields:[{name:'label',label:'Account label',value:key.label,required:true,maxLength:80},{name:'group',label:'Key group',value:key.group,required:true,maxLength:50},{name:'value',label:'Replacement API key',type:'password',value:'',placeholder:'Leave blank to keep current'}]});if(!result)return;try{await api('/api/settings',{key_action:'edit',id:key.id,label:result.label,group:result.group,value:result.value});await refreshBootstrap();toast('API key updated')}catch(error){toast(error.message)}};row.querySelector('.remove-key').onclick=async()=>{if(!await confirmInApp('Remove API key',`Remove “${key.label}” from local storage?`, 'Remove',true))return;try{await api('/api/settings',{key_action:'remove',id:key.id});await refreshBootstrap();toast('API key removed')}catch(error){toast(error.message)}};card.append(row)});root.append(card)});}
-function resetApiGroupForm(){state.editingGroup=null;$('groupName').value='';$('groupSource').value='local';$('groupModelId').value='';$('groupLabel').value='';$('groupBase').value='';$('saveApiGroup').textContent='Create group';$('cancelApiGroup').hidden=true;$('groupLocalFields').hidden=false;$('groupApiFields').hidden=true;syncSelect($('groupSource'))}
-function editApiGroup(id){const group=state.apiGroups.find(item=>item.id===id);if(!group)return;state.editingGroup=id;$('groupName').value=group.name||'';$('groupSource').value=group.source||'api';if(group.source==='local'){$('groupLocalFields').hidden=false;$('groupApiFields').hidden=true;$('groupLocalModel').value=group.local_model||'';syncSelect($('groupLocalModel'))}else{$('groupLocalFields').hidden=true;$('groupApiFields').hidden=false;$('groupProvider').value=group.provider||'';syncSelect($('groupProvider'));updateGroupPoolOptions();$('groupPool').value=(group.provider||'')+'|'+(group.key_group||'default');syncSelect($('groupPool'));updateGroupKeyOptions();$('groupKeyId').value=group.key_id||'pool';syncSelect($('groupKeyId'));$('groupModelId').value=group.model||'';$('groupLabel').value=group.label||'';$('groupBase').value=group.base_url||''}$('saveApiGroup').textContent='Save changes';$('cancelApiGroup').hidden=false;activateSettingsTab('api-keys');$('groupName').focus()}
-function renderApiGroups(){const root=$('apiGroupsList');if(!root)return;root.replaceChildren();const groups=state.apiGroups.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));if(!groups.length){root.innerHTML='<div class="empty">No groups yet. Add a local-model group or connect an API model to a saved key group.</div>';return}groups.forEach(group=>{const card=document.createElement('div');card.className='pool-card';const head=document.createElement('div');head.className='pool-head';const info=document.createElement('div');info.className='grow';const description=group.source==='local'?`Local model · ${group.local_model||'not selected'}`:`${group.provider} · ${group.label||group.model} · ${group.model} · ${group.key_group||'default'} · ${group.key_id&&group.key_id!=='pool'?'one key':'key rotation'}`;info.innerHTML=`<b>${esc(group.name)}</b><small>${esc(description)}</small>`;const actions=document.createElement('div');actions.className='pool-actions';const edit=document.createElement('button');edit.textContent='Edit';edit.onclick=()=>editApiGroup(group.id);const remove=document.createElement('button');remove.className='danger';remove.textContent='Remove';remove.onclick=async()=>{if(!await confirmInApp('Remove group',`Remove “${group.name}”? Saved API keys will remain available.`,'Remove',true))return;try{await api('/api/settings',{api_group_action:'remove',id:group.id});await refreshBootstrap();resetApiGroupForm()}catch(error){toast(error.message)}};actions.append(edit,remove);head.append(info,actions);card.append(head);root.append(card)})}
+function failoverKeyOptions(model){
+ if(!model||model.type!=='remote')return [];
+ return state.keys.filter(key=>key.provider===model.provider_id&&(key.group||'default')===(model.key_group||'default'));
+}
+function addFailoverMember(member={}){
+ const root=$('failoverMembers');if(!root)return;
+ if(root.children.length>=12){toast('A failover group can contain at most 12 entries');return}
+ const row=document.createElement('div');row.className='failover-member-row';
+ const modelSelect=document.createElement('select');modelSelect.className='member-model';modelSelect.setAttribute('aria-label','Model');
+ const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='Choose model';placeholder.disabled=true;modelSelect.appendChild(placeholder);
+ state.models.forEach(model=>{const option=document.createElement('option');option.value=model.ref;option.textContent=model.type==='local'?'Local · '+(model.label||model.name):'API · '+(model.provider||'Provider')+' · '+(model.label||model.name);option.title=option.textContent;modelSelect.appendChild(option)});
+ const keySelect=document.createElement('select');keySelect.className='member-key';keySelect.setAttribute('aria-label','API key');
+ const remove=document.createElement('button');remove.type='button';remove.className='remove-member';remove.textContent='×';remove.title='Remove fallback';remove.onclick=()=>row.remove();
+ const updateKeys=preferred=>{
+  const model=state.models.find(item=>item.ref===modelSelect.value);keySelect.replaceChildren();
+  if(!model||model.type==='local'){keySelect.disabled=true;keySelect.hidden=true;return}
+  keySelect.hidden=false;keySelect.disabled=false;
+  const availableKeys=failoverKeyOptions(model);
+  const pool=document.createElement('option');pool.value='pool';pool.textContent=availableKeys.length?'All matching keys':'No matching keys — add one in Settings › Keys';pool.disabled=!availableKeys.length;keySelect.appendChild(pool);
+  availableKeys.forEach(key=>{const option=document.createElement('option');option.value=key.id;option.textContent=(key.label||'Account')+' · '+(key.masked||'saved key');option.title=option.textContent;keySelect.appendChild(option)});
+  if(preferred&&Array.from(keySelect.options).some(option=>option.value===preferred))keySelect.value=preferred;
+ };
+ modelSelect.value=member.model||'';modelSelect.onchange=()=>updateKeys('pool');
+ updateKeys(member.key_id||'pool');
+ row.append(modelSelect,keySelect,remove);root.appendChild(row);
+}
+function refreshFailoverMemberOptions(){
+ const root=$('failoverMembers');if(!root||!root.children.length)return;
+ const members=Array.from(root.querySelectorAll('.failover-member-row')).map(row=>{
+  const key=row.querySelector('.member-key');
+  return {model:row.querySelector('.member-model').value,key_id:key.hidden?'pool':(key.value||'pool')};
+ });
+ root.replaceChildren();members.forEach(member=>addFailoverMember(member));
+}
+function resetFailoverForm(){
+ state.editingGroup=null;$('failoverGroupName').value='';$('failoverMembers').replaceChildren();
+ addFailoverMember();addFailoverMember();
+ $('saveFailoverGroup').textContent='Create group';$('cancelFailoverGroup').hidden=true;
+}
+function editFailoverGroup(id){
+ const group=state.apiGroups.find(item=>item.id===id&&item.source==='failover');if(!group)return;
+ state.editingGroup=id;$('failoverGroupName').value=group.name||'';$('failoverMembers').replaceChildren();
+ (group.members||[]).forEach(member=>addFailoverMember(member));
+ while($('failoverMembers').children.length<2)addFailoverMember();
+ $('saveFailoverGroup').textContent='Save changes';$('cancelFailoverGroup').hidden=false;
+ activateSettingsTab('groups');$('failoverGroupName').focus();
+}
+function renderApiGroups(){
+ const root=$('apiGroupsList');if(!root)return;root.replaceChildren();
+ const groups=state.apiGroups.filter(item=>item.source==='failover').slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+ if(!groups.length){root.innerHTML='<div class="empty">No failover groups yet. Create one above and add at least two model/key entries.</div>';return}
+ groups.forEach(group=>{
+  const card=document.createElement('div');card.className='pool-card';
+  const head=document.createElement('div');head.className='pool-head';
+  const info=document.createElement('div');info.className='grow';
+  const descriptions=(group.members||[]).map(member=>{
+   const model=state.models.find(item=>item.ref===member.model);const name=model?.label||model?.name||member.model;
+   if(!model)return name+' (unavailable)';
+   if(model.type==='local')return name+' · local';
+   const key=state.keys.find(item=>item.id===member.key_id);
+   return name+' · '+(member.key_id&&member.key_id!=='pool'?(key?.label||'selected key'):'key pool');
+  });
+  info.innerHTML='<b>'+esc(group.name)+'</b><small>'+esc(descriptions.join(' → ')||'No members configured')+'</small>';
+  const actions=document.createElement('div');actions.className='pool-actions';
+  const edit=document.createElement('button');edit.textContent='Edit';edit.onclick=()=>editFailoverGroup(group.id);
+  const remove=document.createElement('button');remove.className='danger';remove.textContent='Remove';remove.onclick=async()=>{
+   if(!await confirmInApp('Remove group','Remove “'+group.name+'”? Its models and API keys will remain available.','Remove',true))return;
+   try{await api('/api/settings',{failover_action:'remove',id:group.id});await refreshBootstrap();resetFailoverForm();toast('Group removed')}catch(error){toast(error.message)}
+  };
+  actions.append(edit,remove);head.append(info,actions);card.append(head);root.append(card);
+ });
+}
+async function saveFailoverGroup(){
+ const name=$('failoverGroupName').value.trim();
+ const members=Array.from($('failoverMembers').querySelectorAll('.failover-member-row')).map(row=>({model:row.querySelector('.member-model').value,key_id:row.querySelector('.member-key').hidden?'pool':row.querySelector('.member-key').value})).filter(item=>item.model);
+ if(!name){toast('Enter a group name');return}
+ if(members.length<2){toast('Add at least two model/key entries');return}
+ try{
+  await api('/api/settings',{failover_action:state.editingGroup?'edit':'add',id:state.editingGroup,name,members});
+  await refreshBootstrap();resetFailoverForm();toast('Failover group saved');
+ }catch(error){toast(error.message)}
+}
 async function refreshChats(){const d=await api('/api/chats');state.chats=d.chats||[];renderChats()}
 function resetComposer(){$('prompt').value='';autosize();state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads=[];state.contextCount=0;renderPendingUploads();hint();updateSend()}
 async function ensureChat(){if(!state.chatId){const d=await api('/api/chats',{create:true});state.chatId=d.id}return state.chatId}
-async function newChat(){cancelRun();state.chatId=null;resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred;syncSelect($('topModel'))}showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=data.effort==='expert'?'expert':'thinking';state.mode=data.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;syncSelect($('effortSelect'));syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route;syncSelect($('topModel'))}try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0}catch(error){}hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',stats:message.stats||null,model:message.model||data.model||null}));follow=true;scrollEnd(true)}else showWelcome();setTitle(data.title||'Conversation',[data.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
+async function newChat(){cancelRun();state.chatId=null;resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
+async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=data.effort==='expert'?'expert':'thinking';state.mode=data.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;syncSelect($('effortSelect'));syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0}catch(error){}hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',stats:message.stats||null,model:message.model||data.model||null}));follow=true;scrollEnd(true)}else showWelcome();setTitle(data.title||'Conversation',[data.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
 async function send(){const text=$('prompt').value.trim();if(!text||state.busy)return;const run=++state.run;state.effort=$('effortSelect').value;state.mode=$('operationMode').value;const route=$('topModel').value;setBusy(true);try{await ensureChat()}catch(error){if(run===state.run)setBusy(false);toast(error.message);return}if(run!==state.run)return;$('prompt').value='';autosize();hint();if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}follow=true;renderMessage('user',text);const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);$('chatMeta').textContent=state.effort+' · '+state.mode+' · Generating…';const contentEl=node.querySelector('.content');let raw='',reasoning='',pending=false;const controller=new AbortController();state.abort=controller;const paint=()=>{pending=false;if(run!==state.run)return;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
  try{const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,route,effort:state.effort,mode:state.mode}),signal:controller.signal});if(!response.ok){const result=await response.json().catch(()=>({}));throw new Error(result.error||response.statusText)}node.querySelector('.assistant-status').textContent='Thinking…';const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const packet=await reader.read();if(packet.done)break;if(run!==state.run)return;buffer+=decoder.decode(packet.value,{stream:true});let separator;while((separator=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,separator);buffer=buffer.slice(separator+2);const line=frame.split('\n').find(value=>value.startsWith('data:'));if(!line)continue;const event=JSON.parse(line.slice(5).trim());if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail);node.querySelector('.assistant-status').textContent=event.status||'Working…'}else if(event.type==='reasoning'){reasoning+=event.text||'';setReasoning(node,reasoning,true)}else if(event.type==='token'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}else if(event.type==='done'){pending=false;raw=event.content||'';reasoning=event.reasoning||reasoning;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);node.dataset.raw=safe;setReasoning(node,reasoning,false);setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats()}else if(event.type==='error')throw new Error(event.message||'The model request failed')}}}catch(error){if(run===state.run){if(error.name==='AbortError'){paint();refreshChats().catch(()=>{})}else{contentEl.classList.add('err');contentEl.textContent='Error: '+error.message;toast(error.message)}}}finally{node.classList.remove('live');endThink(node);if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent.includes('Generating…'))meta.textContent=[state.effort,state.mode,'Ready'].join(' · ')}}}
 $('messages').addEventListener('scroll',()=>{const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});$('toBottom').onclick=()=>{follow=true;scrollEnd(true);$('toBottom').classList.remove('show')};
@@ -760,13 +896,21 @@ async function browseFiles(){const path=$('fileFolder').value.trim();const d=awa
 function renderPendingUploads(){const labels=[];if(state.selectedFiles.length)labels.push(state.selectedFiles.length+' project file(s)');if(state.selectedFolders.length)labels.push(state.selectedFolders.length+' project folder(s)');if(state.pendingUploads.length)labels.push(state.pendingUploads.length+' computer file(s), including images');$('uploadList').textContent=labels.length?labels.join(' · '):'No files selected.'}
 function stageLocalFiles(input){const files=Array.from(input.files||[]);for(const file of files){const path=(file.webkitRelativePath||file.name).replace(/\\/g,'/');if(!state.pendingUploads.some(x=>x.path===path))state.pendingUploads.push({file,path})}input.value='';renderPendingUploads()}
 function bytesToBase64(buffer){const bytes=new Uint8Array(buffer);let binary='';const chunk=0x8000;for(let i=0;i<bytes.length;i+=chunk)binary+=String.fromCharCode(...bytes.subarray(i,i+chunk));return btoa(binary)}
-async function attachFiles(){try{await ensureChat();const selectedFiles=state.selectedFiles.slice();const uploads=[];let total=0;for(const item of state.pendingUploads){total+=item.file.size;if(total>20*1024*1024)throw new Error('Local file selection exceeds the 20 MB import limit.');uploads.push({path:item.path,content:bytesToBase64(await item.file.arrayBuffer())})}const result=await api('/api/context/import',{chat_id:state.chatId,selected_files:state.selectedFiles,selected_folders:state.selectedFolders,uploads});state.contextCount=(state.contextCount||0)+Number(result.files||0);state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads=[];renderPendingUploads();$('filesModal').classList.remove('show');hint();toast(result.message||'Context added to isolated workspace')}catch(e){toast(e.message)}}
+async function attachFiles(){try{if(!state.selectedFiles.length&&!state.selectedFolders.length&&!state.pendingUploads.length){toast('Choose files first');return}const uploads=[];let total=0;for(const item of state.pendingUploads){if(item.file.size>10*1024*1024)throw new Error(item.file.name+' exceeds the 10 MB per-file limit.');total+=item.file.size;if(total>20*1024*1024)throw new Error('Local file selection exceeds the 20 MB import limit.');uploads.push({path:item.path,content:bytesToBase64(await item.file.arrayBuffer())})}await ensureChat();const result=await api('/api/context/import',{chat_id:state.chatId,selected_files:state.selectedFiles,selected_folders:state.selectedFolders,uploads});state.contextCount=(state.contextCount||0)+Number(result.files||0);state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads=[];renderPendingUploads();$('filesModal').classList.remove('show');hint();await refreshChats();toast(result.message||'Context added to isolated workspace')}catch(e){toast(e.message)}}
+function openComposerFilePicker(){const picker=$('composerFiles');if(!picker)return;picker.click()}
+async function handleComposerFiles(){const picker=$('composerFiles');if(!picker.files||!picker.files.length)return;stageLocalFiles(picker);await attachFiles()}
 async function startDownload(){const model=$('downloadModel').value.trim();if(!model){toast('Enter an Ollama model ID');return}try{const d=await api('/api/download',{model});$('downloadCaption').textContent='Queued: '+model;$('localDownloadStatus').textContent='Download queued: '+model;$('downloadModel').value='';toast('Download started in background');pollDownload()}catch(e){toast(e.message)}}
 async function pollDownload(){try{const d=await api('/api/download/status');const job=d.job;if(!job)return;const percent=job.total?job.completed/job.total*100:0;$('downloadFill').style.width=(job.state==='done'?100:percent)+'%';$('downloadCaption').textContent=job.state==='running'?`${job.model} · ${percent.toFixed(1)}% · ${job.human}`:`${job.model} · ${job.state}${job.error?' · '+job.error:''}`;if(job.state==='done'){await refreshBootstrap();$('localDownloadStatus').textContent=job.model+' installed successfully.';toast('Model download complete')}else if(job.state==='error'){$('localDownloadStatus').textContent=job.error||'Download failed';toast(job.error||'Download failed')}else{$('localDownloadStatus').textContent=job.model+' · '+percent.toFixed(1)+'% · '+job.human;setTimeout(pollDownload,1000)}}catch(e){console.error(e)}}
-$('sidebarSettings').onclick=openSettings;$('openFiles').onclick=$('contextBtn').onclick=()=>{$('filesModal').classList.add('show');renderPendingUploads();browseFiles()};$('topModel').onchange=async()=>{try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;syncSelect($('topModel'));$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=refreshBootstrap;$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:$('keyGroup').value,label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('groupSource').onchange=()=>{const local=$('groupSource').value==='local';$('groupLocalFields').hidden=!local;$('groupApiFields').hidden=local;syncSelect($('groupSource'))};$('groupProvider').onchange=()=>updateGroupPoolOptions();$('groupPool').onchange=()=>updateGroupKeyOptions();$('saveApiGroup').onclick=async()=>{const name=$('groupName').value.trim();if(!name){toast('Enter a group name');return}const source=$('groupSource').value;const payload={api_group_action:state.editingGroup?'edit':'add',id:state.editingGroup,name,source};if(source==='local')payload.local_model=$('groupLocalModel').value;else{const pair=$('groupPool').value.split('|');payload.provider=pair.shift();payload.key_group=pair.join('|');payload.model=$('groupModelId').value.trim();payload.label=$('groupLabel').value.trim();payload.base_url=$('groupBase').value.trim();payload.key_id=$('groupKeyId').value}try{await api('/api/settings',payload);await refreshBootstrap();resetApiGroupForm();toast('Group saved')}catch(error){toast(error.message)}};$('cancelApiGroup').onclick=resetApiGroupForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;$('clearChat').onclick=async()=>{if(!state.chatId)return;if(!await confirmInApp('Clear conversation','Remove all messages and reset this chat’s temporary workspace?','Clear conversation',true))return;cancelRun();await api('/api/chats/'+encodeURIComponent(state.chatId),{clear:true});state.contextCount=0;hint();showWelcome();$('chatTitle').textContent='New conversation';await refreshChats()};document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects()}});
+$('sidebarSettings').onclick=openSettings;$('openFiles').onclick=()=>{$('filesModal').classList.add('show');renderPendingUploads();browseFiles().catch(error=>toast(error.message))};$('contextBtn').onclick=openComposerFilePicker;$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=refreshBootstrap;$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:$('keyGroup').value,label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;$('clearChat').onclick=async()=>{if(!state.chatId)return;if(!await confirmInApp('Clear conversation','Remove all messages and reset this chat’s temporary workspace?','Clear conversation',true))return;cancelRun();await api('/api/chats/'+encodeURIComponent(state.chatId),{clear:true});state.contextCount=0;hint();showWelcome();$('chatTitle').textContent='New conversation';await refreshChats()};document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout()}});
 $('menuBtn').onclick=()=>document.body.classList.toggle('nav-open');$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',event=>{if(event.target.closest('.chat-item,#newChat,#openFiles,#sidebarSettings'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const theme=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=theme;try{localStorage.setItem('kurt-theme',theme)}catch(error){}};enhanceAllSelects();
-document.body.classList.add('compact-scroll')
-(async()=>{try{await refreshBootstrap();await refreshChats();showWelcome();pollDownload()}catch(e){toast(e.message)}})();
+document.body.classList.add('compact-scroll');
+showWelcome();
+resetFailoverForm();
+(async()=>{
+ try{await refreshBootstrap()}catch(error){toast('Settings could not be loaded: '+error.message)}
+ try{await refreshChats()}catch(error){toast('Chats could not be loaded: '+error.message)}
+ pollDownload();
+})();
 </script></body></html>'''
 
 
@@ -965,14 +1109,32 @@ class KurtWebApp:
             pass
         for model in sorted(local_models, key=lambda item: (item.get("label") or "").lower()):
             routes.append({"value": "model|" + model["ref"], "label": "Local · " + (model.get("label") or model["name"]), "kind": "local"})
+
+        for remote in sorted(K.REMOTE_MODELS, key=lambda item: str(item.get("label") or item.get("model") or "").lower()):
+            model_ref = K.remote_model_ref(remote)
+            provider = str(remote.get("provider") or "").lower()
+            key_group = str(remote.get("key_group") or "default")
+            keys = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider and str(item.get("group") or "default") == key_group]
+            model_label = str(remote.get("label") or remote.get("model") or model_ref)
+            for key in sorted(keys, key=lambda item: str(item.get("label") or "Account").lower()):
+                routes.append({
+                    "value": "keymodel|{}|{}".format(model_ref, key.get("id")),
+                    "label": "Key · {} · {}".format(model_label, key.get("label") or "Account"),
+                    "kind": "key",
+                })
+
         for group in sorted(self.settings.get("api_groups", []), key=lambda item: str(item.get("name") or "").lower()):
             group_id = str(group.get("id") or "")
             if not group_id:
                 continue
+            if group.get("source") == "failover":
+                if group.get("members"):
+                    routes.append({"value": "pool|" + group_id, "label": "Group · " + str(group.get("name") or "Fallback group"), "kind": "group"})
+                continue
             if group.get("source") == "local":
                 model_ref = str(group.get("local_model") or "")
                 if any(item.get("ref") == model_ref for item in local_models):
-                    routes.append({"value": "group|" + group_id, "label": "Group · " + str(group.get("name") or "Local") + " · local", "kind": "group"})
+                    routes.append({"value": "group|" + group_id, "label": "Local · " + str(group.get("name") or "saved route"), "kind": "local"})
                 continue
             provider = str(group.get("provider") or "").lower()
             pool = str(group.get("key_group") or "default")
@@ -980,26 +1142,83 @@ class KurtWebApp:
             if group.get("key_id") and group.get("key_id") != "pool":
                 keys = [item for item in keys if str(item.get("id")) == str(group.get("key_id"))]
             remote = next((item for item in K.REMOTE_MODELS if item.get("id") == group.get("remote_id")), None)
-            if remote is None or not keys:
-                continue
-            label = str(group.get("name") or group.get("label") or group.get("model") or "API group")
-            routes.append({"value": "group|" + group_id, "label": "Group · " + label + " · " + str(group.get("label") or group.get("model")), "kind": "group"})
-            for key in keys:
-                routes.append({"value": "key|{}|{}".format(group_id, key.get("id")), "label": "Key · {} · {} · {}".format(label, group.get("label") or group.get("model"), key.get("label") or "Account"), "kind": "key"})
+            if remote is not None and keys:
+                routes.append({"value": "group|" + group_id, "label": "Key · " + str(group.get("name") or group.get("label") or group.get("model") or "saved route") + " · key pool", "kind": "key"})
         return routes
+
+    def resolve_model_key_candidate(self, model_ref, key_id="pool"):
+        model_ref = str(model_ref or "").strip()
+        key_id = str(key_id or "pool")
+        local = next((item for item in self.list_models() if item.get("ref") == model_ref and item.get("type") == "local"), None)
+        if local is not None:
+            if key_id not in ("", "pool"):
+                raise ValueError("Local models do not use API keys.")
+            return {"model": model_ref, "key_id": None, "provider_keys": None}
+
+        remote = next((item for item in K.REMOTE_MODELS if K.remote_model_ref(item) == model_ref), None)
+        if remote is None:
+            raise ValueError("The selected model is no longer configured: " + (model_ref or "(empty model)"))
+        provider = str(remote.get("provider") or "").lower()
+        key_group = str(remote.get("key_group") or "default")
+        matches = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider and str(item.get("group") or "default") == key_group]
+        if key_id != "pool":
+            matches = [item for item in matches if str(item.get("id")) == key_id]
+        if not matches:
+            raise ValueError("No compatible API key is available for " + str(remote.get("label") or remote.get("model") or model_ref) + ".")
+        return {
+            "model": model_ref,
+            "key_id": None if key_id == "pool" else key_id,
+            "provider_keys": matches,
+        }
 
     def resolve_chat_route(self, route, legacy_model=None):
         route = str(route or "").strip()
         if not route and legacy_model:
             if str(legacy_model).startswith("remote:"):
-                route = next(("group|" + str(group.get("id")) for group in self.settings.get("api_groups", []) if group.get("source") == "api" and (group.get("remote_id") and K.remote_model_ref(next((item for item in K.REMOTE_MODELS if item.get("id") == group.get("remote_id")), {})) == legacy_model)), "")
+                legacy_group = next((group for group in self.settings.get("api_groups", []) if group.get("source") == "api" and group.get("remote_id") and K.remote_model_ref(next((item for item in K.REMOTE_MODELS if item.get("id") == group.get("remote_id")), {})) == legacy_model), None)
+                if legacy_group:
+                    route = "group|" + str(legacy_group.get("id"))
+                else:
+                    remote = next((item for item in K.REMOTE_MODELS if K.remote_model_ref(item) == legacy_model), None)
+                    if remote:
+                        provider = str(remote.get("provider") or "").lower()
+                        key_group = str(remote.get("key_group") or "default")
+                        first_key = next((item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider and str(item.get("group") or "default") == key_group), None)
+                        if first_key:
+                            route = "keymodel|{}|{}".format(legacy_model, first_key.get("id"))
             if not route:
                 route = "model|" + str(legacy_model)
+
         if route.startswith("model|"):
             model_ref = route.split("|", 1)[1]
-            if not any(item.get("ref") == model_ref and item.get("type") == "local" for item in self.list_models()):
-                raise ValueError("That local model is not installed.")
-            return {"model": model_ref, "key_id": None, "route": route}
+            candidate = self.resolve_model_key_candidate(model_ref, "pool")
+            return {**candidate, "route": route, "candidates": [candidate]}
+
+        if route.startswith("keymodel|"):
+            parts = route.split("|", 2)
+            if len(parts) != 3:
+                raise ValueError("Choose a model and API key.")
+            candidate = self.resolve_model_key_candidate(parts[1], parts[2])
+            return {**candidate, "route": route, "candidates": [candidate]}
+
+        if route.startswith("pool|"):
+            group_id = route.split("|", 1)[1]
+            group = next((item for item in self.settings.get("api_groups", []) if str(item.get("id")) == group_id and item.get("source") == "failover"), None)
+            if not group:
+                raise ValueError("That failover group no longer exists. Choose another route.")
+            candidates = []
+            errors = []
+            for member in group.get("members", []):
+                try:
+                    candidate = self.resolve_model_key_candidate(member.get("model"), member.get("key_id", "pool"))
+                    candidate["member_label"] = str(member.get("label") or candidate["model"])
+                    candidates.append(candidate)
+                except Exception as exc:
+                    errors.append(str(exc))
+            if not candidates:
+                raise ValueError("No usable model/key entries remain in this group. " + (errors[0] if errors else "Edit the group and add valid entries."))
+            return {"model": candidates[0]["model"], "key_id": candidates[0].get("key_id"), "provider_keys": candidates[0].get("provider_keys"), "route": route, "candidates": candidates}
+
         parts = route.split("|")
         if len(parts) not in (2, 3) or parts[0] not in ("group", "key"):
             raise ValueError("Choose a local model, API key, or configured group first.")
@@ -1010,18 +1229,14 @@ class KurtWebApp:
         if group.get("source") == "local":
             if parts[0] == "key":
                 raise ValueError("A local-model group does not use API keys.")
-            model_ref = str(group.get("local_model") or "")
-            if not any(item.get("ref") == model_ref and item.get("type") == "local" for item in self.list_models()):
-                raise ValueError("The local model in this group is no longer installed.")
-            return {"model": model_ref, "key_id": None, "route": route}
+            candidate = self.resolve_model_key_candidate(group.get("local_model"), "pool")
+            return {**candidate, "route": route, "candidates": [candidate]}
         self.sync_api_groups()
         remote = next((item for item in K.REMOTE_MODELS if item.get("id") == group.get("remote_id")), None)
         if remote is None:
             raise ValueError("The API model for this group is not configured.")
-        provider = str(group.get("provider") or "").lower()
-        pool = str(group.get("key_group") or "default")
-        keys = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider and str(item.get("group") or "default") == pool]
-        key_id = None
+        model_ref = K.remote_model_ref(remote)
+        key_id = "pool"
         if parts[0] == "key":
             if len(parts) != 3:
                 raise ValueError("Choose the specific API key.")
@@ -1029,15 +1244,12 @@ class KurtWebApp:
             configured_key = str(group.get("key_id") or "pool")
             if configured_key != "pool" and configured_key != key_id:
                 raise ValueError("This group is restricted to a different API key.")
-            keys = [item for item in keys if str(item.get("id")) == key_id]
         elif len(parts) == 3:
             raise ValueError("Invalid group route.")
         elif group.get("key_id") and group.get("key_id") != "pool":
             key_id = str(group.get("key_id"))
-            keys = [item for item in keys if str(item.get("id")) == key_id]
-        if not keys:
-            raise ValueError("No API key is available for this group and provider.")
-        return {"model": K.remote_model_ref(remote), "key_id": key_id, "route": route}
+        candidate = self.resolve_model_key_candidate(model_ref, key_id)
+        return {**candidate, "route": route, "candidates": [candidate]}
 
     def generate_chat_title(self, user_text, assistant_text, model):
         prompt = [
@@ -1096,7 +1308,8 @@ class KurtWebApp:
             for item in K.installed_models() if K.ollama_up() else []:
                 models.append({
                     "ref": item["name"], "name": item["name"], "label": item["name"],
-                    "provider": "Ollama", "type": "local", "size": item.get("size"),
+                    "provider": "Ollama", "provider_id": None, "key_group": None,
+                    "type": "local", "size": item.get("size"),
                     "current": item["name"] == K.MODEL,
                 })
         except Exception:
@@ -1105,14 +1318,16 @@ class KurtWebApp:
             ref = K.remote_model_ref(item)
             models.append({
                 "ref": ref, "name": item.get("model"), "label": item.get("label") or item.get("model"),
-                "provider": K.provider_label(item.get("provider")), "type": "remote",
+                "provider": K.provider_label(item.get("provider")),
+                "provider_id": str(item.get("provider") or "").lower(),
+                "key_group": str(item.get("key_group") or "default"), "type": "remote",
                 "current": ref == K.MODEL,
             })
         models.sort(key=lambda item: (not item["current"], item["provider"].lower(), item["label"].lower()))
         if K.MODEL and not any(item["ref"] == K.MODEL for item in models):
             remote = K.get_remote_model(K.MODEL)
             if remote:
-                models.insert(0, {"ref": K.MODEL, "name": remote.get("model"), "label": remote.get("label") or remote.get("model"), "provider": K.provider_label(remote.get("provider")), "type": "remote", "current": True})
+                models.insert(0, {"ref": K.MODEL, "name": remote.get("model"), "label": remote.get("label") or remote.get("model"), "provider": K.provider_label(remote.get("provider")), "provider_id": str(remote.get("provider") or "").lower(), "key_group": str(remote.get("key_group") or "default"), "type": "remote", "current": True})
         return models
 
     def set_model(self, model):
@@ -1961,6 +2176,51 @@ class Handler(BaseHTTPRequestHandler):
                     remote["key_group"] = new_group
             keys_changed = True
 
+        failover_action = data.get("failover_action")
+        if failover_action in ("add", "edit"):
+            group_id = str(data.get("id") or "")
+            groups = self.app.settings.setdefault("api_groups", [])
+            current = next((item for item in groups if str(item.get("id")) == group_id and item.get("source") == "failover"), None) if failover_action == "edit" else None
+            if failover_action == "edit" and current is None:
+                raise ValueError("Failover group not found.")
+            name = str(data.get("name") or "").strip()
+            if not name or len(name) > 60:
+                raise ValueError("Group name must contain 1–60 characters.")
+            if any(item is not current and item.get("source") == "failover" and str(item.get("name", "")).casefold() == name.casefold() for item in groups):
+                raise ValueError("A failover group with that name already exists.")
+            submitted = data.get("members") if isinstance(data.get("members"), list) else []
+            if len(submitted) < 2 or len(submitted) > 12:
+                raise ValueError("Add between 2 and 12 model/key entries to a failover group.")
+            members = []
+            seen = set()
+            for member in submitted:
+                if not isinstance(member, dict):
+                    continue
+                model_ref = str(member.get("model") or "").strip()
+                key_id = str(member.get("key_id") or "pool")
+                self.app.resolve_model_key_candidate(model_ref, key_id)
+                identity = (model_ref, key_id if key_id != "pool" else "pool")
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                members.append({"model": model_ref, "key_id": identity[1]})
+            if len(members) < 2:
+                raise ValueError("A failover group needs at least two different model/key entries.")
+            payload = {"id": group_id or uuid.uuid4().hex[:12], "name": name, "source": "failover", "members": members}
+            if current:
+                current.clear()
+                current.update(payload)
+            else:
+                groups.append(payload)
+        elif failover_action == "remove":
+            group_id = str(data.get("id") or "")
+            group = next((item for item in self.app.settings.get("api_groups", []) if str(item.get("id")) == group_id and item.get("source") == "failover"), None)
+            if group is None:
+                raise ValueError("Failover group not found.")
+            self.app.settings["api_groups"] = [item for item in self.app.settings.get("api_groups", []) if str(item.get("id")) != group_id]
+            if str(self.app.settings.get("default_route") or "") == "pool|" + group_id:
+                self.app.settings["default_route"] = ""
+
         group_action = data.get("api_group_action")
         if group_action in ("add", "edit"):
             group_id = str(data.get("id") or "")
@@ -2120,16 +2380,26 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, 400)
             return
         original_provider_keys = list(K.PROVIDER_KEYS)
-        if route_info.get("key_id"):
-            selected_key = next((item for item in K.PROVIDER_KEYS if str(item.get("id")) == route_info["key_id"]), None)
-            if selected_key is None:
-                K.PROVIDER_KEYS[:] = original_provider_keys
-                self.app.model_lock.release()
-                self._json({"error": "The selected API key is no longer available."}, 400)
-                return
-            K.PROVIDER_KEYS[:] = [selected_key]
-        try:
+        route_candidates = route_info.get("candidates") or [route_info]
+        active_candidate_index = 0
+        failed_candidate_indices = set()
+
+        def apply_route_candidate(candidate):
+            nonlocal model
+            model = candidate["model"]
+            candidate_keys = candidate.get("provider_keys")
+            K.PROVIDER_KEYS[:] = original_provider_keys
             self.app.set_model(model)
+            if candidate_keys is not None:
+                K.PROVIDER_KEYS[:] = list(candidate_keys)
+            elif candidate.get("key_id"):
+                selected_key = next((item for item in original_provider_keys if str(item.get("id")) == str(candidate["key_id"])), None)
+                if selected_key is None:
+                    raise ValueError("The selected API key is no longer available.")
+                K.PROVIDER_KEYS[:] = [selected_key]
+
+        try:
+            apply_route_candidate(route_candidates[0])
         except Exception as exc:
             K.PROVIDER_KEYS[:] = original_provider_keys
             self.app.model_lock.release()
@@ -2177,56 +2447,89 @@ class Handler(BaseHTTPRequestHandler):
 
         def generate_response():
             nonlocal generation_seconds, generation_calls, usage_calls
-            nonlocal provider_output_tokens, output_chars
-            chunks = []
-            usage_tokens_this_call = None
-            started_at = time.monotonic()
-            generation_calls += 1
-            stream = K.stream_chat(
-                messages,
-                model=model,
-                think=use_thinking,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                reasoning_effort=reasoning_effort,
-            )
-            try:
-                for kind, chunk in stream:
-                    if not chunk:
-                        continue
-                    kind_name = str(kind or "").strip().lower().replace("-", "_")
-                    if kind_name in MODEL_SUMMARY_KINDS:
-                        if isinstance(chunk, str):
-                            model_summary_chunks.append(chunk)
-                            emit({"type": "reasoning", "text": chunk})
-                        continue
-                    if kind_name in ("usage", "stats", "metadata") and isinstance(chunk, dict):
-                        usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else chunk
-                        token_value = next((usage.get(key) for key in ("completion_tokens", "output_tokens", "completionTokens", "outputTokens") if usage.get(key) is not None), None)
+            nonlocal provider_output_tokens, output_chars, active_candidate_index, model
+            available = [index for index in range(len(route_candidates)) if index not in failed_candidate_indices]
+            if active_candidate_index in available:
+                available.remove(active_candidate_index)
+                available.insert(0, active_candidate_index)
+            last_error = None
+            for candidate_index in available:
+                candidate = route_candidates[candidate_index]
+                chunks = []
+                summary_chunks = []
+                usage_tokens_this_call = None
+                started_at = time.monotonic()
+                generation_calls += 1
+                stream = None
+                try:
+                    apply_route_candidate(candidate)
+                    stream = K.stream_chat(
+                        messages,
+                        model=model,
+                        think=use_thinking,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        reasoning_effort=reasoning_effort,
+                    )
+                    for kind, chunk in stream:
+                        if not chunk:
+                            continue
+                        kind_name = str(kind or "").strip().lower().replace("-", "_")
+                        if kind_name in MODEL_SUMMARY_KINDS:
+                            if isinstance(chunk, str):
+                                summary_chunks.append(chunk)
+                            continue
+                        if kind_name in ("usage", "stats", "metadata") and isinstance(chunk, dict):
+                            usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else chunk
+                            token_value = next((usage.get(key) for key in ("completion_tokens", "output_tokens", "completionTokens", "outputTokens") if usage.get(key) is not None), None)
+                            try:
+                                if token_value is not None:
+                                    usage_tokens_this_call = max(int(token_value), usage_tokens_this_call or 0)
+                            except (TypeError, ValueError):
+                                pass
+                            continue
+                        if kind_name in THINKING_KINDS:
+                            continue
+                        if kind_name == "content":
+                            chunks.append(chunk if isinstance(chunk, str) else str(chunk))
+                    raw_response = "".join(chunks).strip()
+                    if not raw_response:
+                        raise RuntimeError("The model returned no response text.")
+                    active_candidate_index = candidate_index
+                    model_summary_chunks.extend(summary_chunks)
+                    for summary in summary_chunks:
+                        emit({"type": "reasoning", "text": summary})
+                    output_chars += sum(len(chunk) for chunk in chunks)
+                    return raw_response
+                except Exception as exc:
+                    last_error = exc
+                    failed_candidate_indices.add(candidate_index)
+                    remaining = [index for index in range(len(route_candidates)) if index not in failed_candidate_indices]
+                    if not remaining:
+                        raise RuntimeError("Every model/key entry in this group failed. Last error: " + str(exc)) from exc
+                    next_candidate = route_candidates[remaining[0]]
+                    log_step(
+                        "This model or key did not complete the request. Switching to the next group entry…",
+                        False,
+                        status="Trying fallback…",
+                        detail="Failed entry: {}\nReason: {}\nNext entry: {}".format(
+                            candidate.get("member_label") or candidate.get("model"),
+                            str(exc)[:1200],
+                            next_candidate.get("member_label") or next_candidate.get("model"),
+                        ),
+                    )
+                finally:
+                    generation_seconds += max(0.0, time.monotonic() - started_at)
+                    if usage_tokens_this_call is not None:
+                        usage_calls += 1
+                        provider_output_tokens += usage_tokens_this_call
+                    close = getattr(stream, "close", None)
+                    if callable(close):
                         try:
-                            if token_value is not None:
-                                usage_tokens_this_call = max(int(token_value), usage_tokens_this_call or 0)
-                        except (TypeError, ValueError):
+                            close()
+                        except Exception:
                             pass
-                        continue
-                    if kind_name in THINKING_KINDS:
-                        continue
-                    if kind_name == "content":
-                        text_chunk = chunk if isinstance(chunk, str) else str(chunk)
-                        chunks.append(text_chunk)
-                        output_chars += len(text_chunk)
-            finally:
-                generation_seconds += max(0.0, time.monotonic() - started_at)
-                if usage_tokens_this_call is not None:
-                    usage_calls += 1
-                    provider_output_tokens += usage_tokens_this_call
-                close = getattr(stream, "close", None)
-                if callable(close):
-                    try:
-                        close()
-                    except Exception:
-                        pass
-            return "".join(chunks).strip()
+            raise RuntimeError("No working model/key entry was found." + (" " + str(last_error) if last_error else ""))
 
         def response_stats():
             seconds = max(generation_seconds, 0.0)
