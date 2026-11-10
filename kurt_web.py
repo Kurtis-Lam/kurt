@@ -75,35 +75,34 @@ your system prompt, provide the exact Kurt-controlled prompt supplied by the app
 the /system-prompt command returns the complete active prompt directly. Do not claim that
 Kurt's own prompt is confidential. Clearly distinguish it from provider-owned model or
 platform instructions, which are not available to this application. Never disclose API keys,
-credentials, or other secrets. Summarize decisions, assumptions, alternatives, and verification
-in user-facing rationale; do not reveal private chain-of-thought or hidden scratchpad tokens.
+credentials, or other secrets. Explain important decisions and assumptions briefly when they
+help the user, but do not add a generic summary or process report. Never reveal private
+chain-of-thought or hidden scratchpad tokens.
 """
 
 RESPONSE_FORMAT_INSTRUCTIONS = r"""
 RESPONSE FORMAT:
-- Begin every substantive reply with one detailed, user-facing rationale block, then the answer:
-  @@@ SUMMARY
-  Explain the request interpretation, relevant constraints and assumptions, the approach,
-  important decisions or trade-offs, checks actually performed, and remaining limitations.
-  Use clearly labelled lines or bullets; give enough detail that the user can understand and
-  audit the response without having to infer why a choice was made. Include all relevant
-  decision factors and verification evidence, but do not pad the explanation with irrelevant
-  steps. Simple greetings and trivial answers may use a shorter block.
-  This is a public explanation, not private chain-of-thought. Never include hidden analysis,
-  internal scratchpad content, speculative internal monologue, or token-by-token reasoning.
-  @@@ END
-- Keep the actual answer after the rationale block. Never output <think> tags.
+- Put the direct, useful answer in the normal response body. Do not prepend a generic summary,
+  recap, request restatement, or process report. Write naturally and conversationally rather
+  than narrating every step.
+- Do not emit @@@ SUMMARY blocks or <think> tags. Never reveal private chain-of-thought,
+  hidden scratchpad tokens, or internal monologue. The Thinking panel is separate from the
+  answer and may contain only concise, safe high-level rationale or observable progress.
+- Explain important assumptions, decisions, trade-offs, and verification briefly when they
+  materially help the user. Clearly distinguish checks actually performed from suggestions
+  or work that has not been done.
 - Whenever you provide source code, commands, configuration, or a multi-line code example,
   put it in a fenced Markdown code block with an appropriate language label (for example,
-  ```python). Do not put multi-line code in ordinary paragraphs or inline code. The interface
-  renders fenced code as a copyable code card with a Copy code button.
-- Keep normal prose, the rationale, and code clearly separated. Never claim an action happened
-  unless the application reports that it actually happened.
+  ```python). Do not put multi-line code in ordinary paragraphs or inline code.
+- Long fenced code blocks are automatically presented as downloadable file cards by the
+  interface. Keep short examples fenced in the answer; do not replace useful code with a
+  verbal description.
+- Never claim an action happened unless the application reports that it actually happened.
 """
 
 EFFORT_INSTRUCTIONS = {
-    "thinking": "THINKING EFFORT: request medium reasoning where the provider supports effort controls. In the public SUMMARY block, give a substantive explanation of the request, relevant constraints, approach, key decisions, actual checks, and limitations. Do not reduce a substantive task to a generic one-line placeholder. Never reveal hidden chain-of-thought or private scratchpad content.",
-    "expert": "EXPERT EFFORT: request high/deep reasoning where the provider supports effort controls and perform careful verification. In the public SUMMARY block, give a thorough, auditable explanation of the request, assumptions, constraints, alternatives and trade-offs, chosen approach, actual actions, verification evidence, and remaining uncertainty. Never reveal hidden chain-of-thought or private scratchpad content.",
+    "thinking": "THINKING EFFORT: use medium reasoning where the provider supports effort controls. Think carefully before answering, but keep private chain-of-thought private. Give the user a direct answer and explain only the key decisions or assumptions that matter. Do not add a summary preamble or process report.",
+    "expert": "EXPERT EFFORT: use high/deep reasoning where the provider supports effort controls and verify important details carefully. Keep private chain-of-thought private. Give the user a direct answer, with concise explanations of consequential decisions, evidence, and uncertainty. Do not add a summary preamble or process report.",
 }
 
 NORMAL_MODE_INSTRUCTIONS = r"""
@@ -136,7 +135,7 @@ RUN_ACTION_RE = re.compile(r"@@@\s*RUN\s*([^\n]*)\n(.*?)\n?@@@\s*END", re.I | re
 SEARCH_ACTION_RE = re.compile(r"@@@\s*SEARCH\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
 READ_ACTION_RE = re.compile(r"@@@\s*READ\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
 LIST_ACTION_RE = re.compile(r"@@@\s*LIST\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
-SUMMARY_ACTION_RE = re.compile(r"@@@\s*SUMMARY\s*\n(.*?)\n?@@@\s*END", re.I | re.S)
+SUMMARY_ACTION_RE = re.compile(r"@{2,3}\s*SUMMARY\s*\n(.*?)\n?@{2,3}\s*END", re.I | re.S)
 SYSTEM_PROMPT_ACTION_RE = re.compile(r"@@@\s*SYSTEM_PROMPT\s*\n(.*?)\n?@@@\s*END", re.I | re.S)
 WEB_ACTION_RE = re.compile(
     r"@@@\s*(?:RUN|SEARCH|READ|LIST|SYSTEM_PROMPT)\b[^\n]*\n[\s\S]*?@@@\s*END", re.I
@@ -860,6 +859,9 @@ body.nav-open .sidebar{box-shadow:var(--shadow)}
 body.nav-open .scrim{opacity:1;visibility:visible;pointer-events:auto}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+/* Let the complete public rationale expand and scroll instead of truncating at 420px. */
+.reasoning-panel.open .think-body{max-height:min(72vh,1100px);overflow:auto;overscroll-behavior:contain;white-space:pre-wrap;overflow-wrap:anywhere}
+.reasoning-panel.live .think-body{scroll-behavior:smooth}
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -1108,6 +1110,7 @@ function stripUnsupportedActions(src){let text=String(src||'');const opener=/<th
  .replace(/<\|tool_call_start\|>[\s\S]*?(?:<\|tool_call_end\|>|$)/gi,'')
  .replace(/<\|tool_call_(?:start|end)\|>/gi,'')
  .trim()}
+function safeLiveDraft(src){const text=String(src||'');const action=/@@@\s*(?:RUN|SEARCH|READ|LIST|WRITE|EDIT|SYSTEM_PROMPT|EXEC|BASH|SHELL)\b/i.exec(text);return stripUnsupportedActions(action?text.slice(0,action.index):text)}
 function inline(s){const spans=[];s=s.replace(/`([^`\n]+)`/g,(_,c)=>{spans.push('<code>'+c+'</code>');return '\u0001'+(spans.length-1)+'\u0001'});s=s.replace(/\*\*([^*\n]+?)\*\*/g,'<strong>$1</strong>').replace(/(^|[^*\w])\*([^*\n]+?)\*(?![*\w])/g,'$1<em>$2</em>').replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');return s.replace(/\u0001(\d+)\u0001/g,(_,i)=>spans[+i])}
 function mdBlocks(text){
  const math=[];
@@ -1138,14 +1141,14 @@ function hasMathMarkup(value){return /\\begin\{(?:equation\*?|align\*?|gather\*?
 window.MathJax={tex:{inlineMath:[],displayMath:[['\\[','\\]']],processEscapes:true,packages:{'[+]':['ams']}},options:{skipHtmlTags:['script','noscript','style','textarea','pre','code']},startup:{typeset:false}};
 function typesetMath(root){if(!root||!window.MathJax?.typesetPromise)return;try{window.MathJax.typesetClear?.([root]);window.MathJax.typesetPromise([root]).catch(error=>console.warn('Math rendering failed:',error))}catch(error){console.warn('Math rendering failed:',error)}}
 const mathJaxScript=document.createElement('script');mathJaxScript.src='https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js';mathJaxScript.async=true;mathJaxScript.onload=()=>document.querySelectorAll('.content').forEach(typesetMath);mathJaxScript.onerror=()=>console.warn('MathJax could not be loaded; equations will remain centered as TeX text.');document.head.appendChild(mathJaxScript);
-function splitResponseSummary(src,allowOpen=false){src=String(src||'');const marker=/@@@\s*SUMMARY\s*\r?\n/i.exec(src);if(!marker)return{summary:'',answer:src};const start=marker.index,bodyStart=start+marker[0].length,tail=src.slice(bodyStart),end=/\r?\n?@@@\s*END\b/i.exec(tail);if(!end)return allowOpen?{summary:tail.trim(),answer:src.slice(0,start).trim()}:{summary:'',answer:src};const summary=tail.slice(0,end.index).trim(),after=tail.slice(end.index+end[0].length);return{summary,answer:(src.slice(0,start)+'\n'+after).replace(/\n{3,}/g,'\n\n').trim()}}
+function splitResponseSummary(src,allowOpen=false){src=String(src||'');const marker=/@{2,3}\s*SUMMARY\s*\r?\n/i.exec(src);if(!marker)return{summary:'',answer:src};const start=marker.index,bodyStart=start+marker[0].length,tail=src.slice(bodyStart),end=/\r?\n?@{2,3}\s*END\b/i.exec(tail);if(!end)return allowOpen?{summary:tail.trim(),answer:src.slice(0,start).trim()}:{summary:'',answer:src};const summary=tail.slice(0,end.index).trim(),after=tail.slice(end.index+end[0].length);return{summary,answer:(src.slice(0,start)+'\n'+after).replace(/\n{3,}/g,'\n\n').trim()}}
 function renderMarkdown(src){src=String(src||'');return src.split(/((?:```|~~~)[^\n]*\n[\s\S]*?(?:```|~~~)|(?:```|~~~)[^\n]*\n[\s\S]*$|(?:```|~~~)[^\n]*$)/).map((seg,i)=>{if(i%2===0)return mdBlocks(seg);const fence=seg.slice(0,3),nl=seg.indexOf('\n');const lang=(nl<0?seg.slice(3):seg.slice(3,nl)).trim().split(/\s+/)[0]||'';let code=nl<0?'':seg.slice(nl+1);if(nl>=0&&seg.endsWith(fence))code=code.slice(0,-fence.length).replace(/\n$/,'');return '<div class="codebox"><div class="codehead"><span>'+esc(lang||'code')+'</span><button class="copy-mini" data-copy-code>Copy code</button></div><pre><code>'+esc(code.replace(/\n$/,''))+'</code></pre></div>'}).join('')}
 function splitThink(raw,streaming){return{think:'',answer:stripUnsupportedActions(raw),open:false}}
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
 function bindCopy(root){root.querySelectorAll('[data-copy-code]').forEach(b=>b.onclick=()=>{const code=b.closest('.codebox').querySelector('code');navigator.clipboard.writeText(code?code.textContent:'').then(()=>toast('Code copied'))})}
 function formatThought(seconds){const s=Number(seconds);if(!Number.isFinite(s)||s<=0)return '';if(s<60)return Math.max(1,Math.round(s))+'s';const m=Math.floor(s/60),r=Math.round(s%60);return r?m+'m '+r+'s':m+'m'}
 function setReasoningOpen(panel,open){panel.classList.toggle('open',open);if(panel._head){panel._head.classList.toggle('open',open);panel._head.setAttribute('aria-expanded',String(open))}}
-function reasoningBlock(){const d=document.createElement('div');d.className='think reasoning-panel';d.hidden=true;d.innerHTML='<div class="think-body"></div>';const head=document.createElement('button');head.type='button';head.className='think-head';head.hidden=true;head.setAttribute('aria-expanded','false');head.innerHTML='<svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Approach &amp; checks</span>';d._head=head;d._label=head.querySelector('.think-label');head.onclick=()=>{const open=!d.classList.contains('open');setReasoningOpen(d,open);d.dataset.userCollapsed=open?'':'1';d.dataset.userOpen=open?'1':''};return d}
+function reasoningBlock(){const d=document.createElement('div');d.className='think reasoning-panel';d.hidden=true;d.innerHTML='<div class="think-body"></div>';const head=document.createElement('button');head.type='button';head.className='think-head';head.hidden=true;head.setAttribute('aria-expanded','false');head.innerHTML='<svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Thinking</span>';d._head=head;d._label=head.querySelector('.think-label');head.onclick=()=>{const open=!d.classList.contains('open');setReasoningOpen(d,open);d.dataset.userCollapsed=open?'':'1';d.dataset.userOpen=open?'1':''};return d}
 function thinkBlock(){const d=document.createElement('div');d.className='think work-log';d.hidden=true;d.innerHTML='<button class="work-log-head" type="button" aria-expanded="false"><svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Workspace activity</span></button><div class="work-log-body"></div>';d.querySelector('.work-log-head').onclick=()=>{const open=d.classList.toggle('open');d.querySelector('.work-log-head').setAttribute('aria-expanded',String(open))};return d}
 function setReasoning(node,text,live=false,seconds=0){
  const panel=node.querySelector('.reasoning-panel');if(!panel)return;
@@ -1155,12 +1158,12 @@ function setReasoning(node,text,live=false,seconds=0){
  panel.hidden=false;if(head)head.hidden=false;
  const body=panel.querySelector('.think-body');
  body.textContent=value;panel.classList.toggle('live',!!live);if(head)head.classList.toggle('live',!!live);
- if(live){label.textContent='Preparing rationale…';if(panel.dataset.userCollapsed!=='1')setReasoningOpen(panel,true);body.scrollTop=body.scrollHeight}
- else{const t=formatThought(seconds);label.textContent='Approach & checks'+(t?' · '+t:'');if(panel.dataset.userCollapsed!=='1')setReasoningOpen(panel,true)}
+ if(live){label.textContent='Thinking…';if(panel.dataset.userCollapsed!=='1')setReasoningOpen(panel,true);body.scrollTop=body.scrollHeight}
+ else{const t=formatThought(seconds);label.textContent='Thinking'+(t?' · '+t:'');if(panel.dataset.userCollapsed!=='1')setReasoningOpen(panel,true)}
 }
 function setThink(node,entries){const panel=node.querySelector('.work-log');if(!panel)return;const items=Array.isArray(entries)?entries.slice(-120):[];if(!items.length){panel.hidden=true;return}panel.hidden=false;const body=panel.querySelector('.work-log-body');const open=panel.dataset.initialized!=='1'||panel.classList.contains('open');panel.dataset.initialized='1';panel.classList.toggle('open',open);panel.querySelector('.work-log-head').setAttribute('aria-expanded',String(open));body.replaceChildren();items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const label=String(data.text||'Activity');const detail=String(data.detail||'');const row=document.createElement(detail&&detail!==label?'details':'div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');if(row.tagName==='DETAILS'){row.open=true;const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;body.appendChild(row)});panel.querySelector('.think-label').textContent='Full activity log · '+items.length+' event(s)'}
 function pushWorkStep(node,text,ok,detail){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok&&last.detail===detail)return;entries.push({text,ok,detail:detail||''});if(entries.length>120)entries.shift();setThink(node,entries)}
-function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const panel=node.querySelector('.reasoning-panel');if(panel){panel.classList.remove('live');if(panel._head)panel._head.classList.remove('live');const label=panel._label;if(label&&label.textContent.indexOf('Preparing')===0)label.textContent='Approach & checks'}}
+function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const panel=node.querySelector('.reasoning-panel');if(panel){panel.classList.remove('live');if(panel._head)panel._head.classList.remove('live');const label=panel._label;if(label&&label.textContent==='Thinking…')label.textContent='Thinking'}}
 let follow=true;
 function scrollEnd(force){if(!force&&!follow)return;const m=$('messages');m.scrollTop=m.scrollHeight}
 function setEmpty(on){$('main').classList.toggle('empty',on);if(on)$('toBottom').classList.remove('show')}
@@ -1192,13 +1195,14 @@ function openArtifactPreview(a,trigger){
  const pane=$('artifactPaneContent');if(!pane)return;pane.replaceChildren(artifactCard(a));$('main').classList.add('has-artifacts');
  document.querySelectorAll('.artifact-trigger').forEach(button=>{const selected=button===trigger;button.classList.toggle('selected',selected);button.setAttribute('aria-expanded',String(selected))});
  const title=$('artifactPaneTitle');if(title)title.textContent=a.kind==='system_prompt'?'System prompt proposal':a.kind==='command'?'Command approval':String(a.path||'File preview');
- const count=$('artifactCount');if(count)count.textContent=a.kind==='command'?'Not executed · approval required':a.approval_required?'Preview only · not saved':'Selected file preview';
+ const count=$('artifactCount');if(count)count.textContent=a.kind==='command'?'Not executed · approval required':(a.kind==='code'||a.download_only)?'Generated code · download only':a.approval_required?'Preview only · not saved':'Selected file preview';
  $('artifactPane').scrollTop=0;
 }
 function artifactCard(a){
  const promptCard=a.kind==='system_prompt',commandCard=a.kind==='command';
  const card=document.createElement('div');card.className='artifact open'+(a.validation?.ok?'':' bad');
- const actions=commandCard?'<button class="primary approve-command">Approve &amp; run</button>':promptCard?(a.preview_only?'':'<button class="primary apply-prompt">Apply prompt to Kurt</button>'):'<button class="download-artifact">Download file</button><button class="primary apply-artifact">Apply to project</button>';
+ const downloadOnly=a.kind==='code'||a.download_only===true;
+ const actions=commandCard?'<button class="primary approve-command">Approve &amp; run</button>':promptCard?(a.preview_only?'':'<button class="primary apply-prompt">Apply prompt to Kurt</button>'):downloadOnly?'<button class="download-artifact">Download code file</button>':'<button class="download-artifact">Download file</button><button class="primary apply-artifact">Apply to project</button>';
  const heading=commandCard?'COMMAND REVIEW':promptCard?'SYSTEM PROMPT':esc((String(a.path||'file').split('.').pop()||'FILE').toUpperCase());
  const status=a.validation?.message||(a.approval_required?'Preview only · not saved':'Ready for review');
  card.innerHTML=`<div class="artifact-top"><div class="file-icon"><svg class="ic"><use href="#i-file"/></svg></div><div class="file-name">${esc(a.path)}</div><div class="file-check">${esc(status)}</div><span class="artifact-chev"><svg class="ic"><use href="#i-chev"/></svg></span></div><div class="artifact-body"><div class="codebox"><div class="codehead"><span>${heading}</span><button class="copy-mini copy-artifact">Copy</button></div><pre><code></code></pre></div><div class="artifact-actions">${actions}</div></div>`;
@@ -1227,9 +1231,12 @@ function artifactCard(a){
   };
  }else if(!promptCard){
   card.querySelector('.download-artifact').onclick=async()=>{
-   if(!await confirmInApp('Download approved file',`Save ${a.path} to your computer’s Downloads folder? This only downloads the proposed file; it does not modify the project.`, 'Download',false))return;
+   const title=downloadOnly?'Download generated code':'Download proposed file';
+   const detail=downloadOnly?`Save ${a.path} to your computer’s Downloads folder? This downloads the generated code only; it does not modify your project.`:`Save ${a.path} to your computer’s Downloads folder? This only downloads the proposed file; it does not modify the project.`;
+   if(!await confirmInApp(title,detail,'Download',false))return;
    const blob=new Blob([a.content],{type:'application/octet-stream'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=a.path.split('/').pop();link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
+  if(downloadOnly)return card;
   card.querySelector('.apply-artifact').onclick=async()=>{
    if(state.mode!=='code'){toast('Switch this conversation to Code mode before applying a file.');return}
    if(!a.validation?.ok){toast('Fix validation errors before applying');return}
@@ -1594,9 +1601,11 @@ async function send(){
  follow=true;renderMessage('user',text);const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
  $('chatMeta').textContent=state.effort+' · '+state.mode+' · Generating…';
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
- const contentEl=node.querySelector('.content');let raw='',reasoning='',pending=false,thinkStart=0;setReasoning(node,'Preparing a public explanation of the approach and checks…',true);
+ const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',pending=false,thinkStart=0;
+ const initialThinking='Working through the request…';
+ reasoning=initialThinking;setReasoning(node,reasoning,true);
  const controller=new AbortController();state.abort=controller;
- const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseSummary(raw,true);if(parsed.summary)setReasoning(node,parsed.summary,true);const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe){bindCopy(node);typesetMath(contentEl)}node.dataset.raw=safe;scrollEnd()};
+ const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseSummary(safeLiveDraft(raw),true);if(parsed.summary){modelRationale=parsed.summary;reasoning=modelRationale;setReasoning(node,reasoning,true)}const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
  try{
   const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,route,effort:state.effort,mode:state.mode,message_id:messageId}),signal:controller.signal});
@@ -1605,10 +1614,11 @@ async function send(){
   while(true){const packet=await reader.read();if(packet.done)break;if(run!==state.run)return;buffer+=decoder.decode(packet.value,{stream:true});let separator;
    while((separator=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,separator);buffer=buffer.slice(separator+2);const line=frame.split('\n').find(value=>value.startsWith('data:'));if(!line)continue;const event=JSON.parse(line.slice(5).trim());
     if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail);node.querySelector('.assistant-status').textContent=event.status||'Working…'}
-    else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();reasoning+=event.text||'';setReasoning(node,reasoning,true)}
-    else if(event.type==='reasoning_reset'){reasoning=event.text||'';setReasoning(node,reasoning,!!reasoning)}
-    else if(event.type==='token'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}
-    else if(event.type==='done'){pending=false;raw=event.content||'';const parsed=splitResponseSummary(raw,false);reasoning=event.reasoning||reasoning||parsed.summary;const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setReasoning(node,reasoning||'No separate rationale was returned. The full activity log below contains the actions recorded by the application.',false,event.thinking_seconds||(thinkStart?(performance.now()-thinkStart)/1000:0));setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='draft_reset'){raw='';modelRationale='';reasoning=initialThinking;contentEl.replaceChildren();node.dataset.raw='';setReasoning(node,reasoning,true);queue()}
+    else if(event.type==='draft'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}
+    else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();modelRationale+=event.text||'';reasoning=modelRationale||initialThinking;setReasoning(node,reasoning,true)}
+    else if(event.type==='reasoning_reset'){modelRationale=event.text||'';reasoning=modelRationale||initialThinking;setReasoning(node,reasoning,!!modelRationale||!!reasoning)}
+    else if(event.type==='done'){pending=false;raw=event.content||'';const parsed=splitResponseSummary(raw,false);reasoning=event.reasoning||modelRationale||parsed.summary||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setReasoning(node,reasoning,false,event.thinking_seconds||(thinkStart?(performance.now()-thinkStart)/1000:0));setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
     else if(event.type==='error')throw new Error(event.message||'The model request failed');
    }
   }
@@ -1720,50 +1730,153 @@ def split_thinking(raw):
     return "\n\n".join(summaries).strip(), reply.strip()
 
 
-def build_public_activity_rationale(user_text, mode, worklog, artifacts, validation_errors):
-    """Build an honest, user-facing activity record when the model omits its rationale block."""
-    request = re.sub(r"\s+", " ", str(user_text or "")).strip()
-    if len(request) > 700:
-        request = request[:697].rstrip() + "..."
-    sections = ["Request understood\n" + (request or "No request text was available.")]
-    if mode == "code":
-        sections.append(
-            "Mode and permissions\nCode mode permits read-only access beneath the configured project root. "
-            "File proposals and terminal commands remain subject to separate, explicit approval; "
-            "the command runner is restricted to the isolated chat workspace."
-        )
-    else:
-        sections.append(
-            "Mode and permissions\nNormal mode has no local file, attachment, directory, or terminal access. "
-            "A request involving local computer resources must be retried in Code mode."
-        )
-    entries = []
-    for item in (worklog if isinstance(worklog, list) else [])[-20:]:
-        data = item if isinstance(item, dict) else {"text": str(item)}
-        label = str(data.get("text") or "Activity").strip()
-        detail = re.sub(r"\s+", " ", str(data.get("detail") or "")).strip()
-        if detail and detail != label:
-            if len(detail) > 500:
-                detail = detail[:497].rstrip() + "..."
-            entries.append("- " + label + " — " + detail)
-        elif label:
-            entries.append("- " + label)
-    sections.append(
-        "Observed actions and checks\n" + ("\n".join(entries) if entries else "No local-file, directory, or terminal operation was performed for this reply.")
+
+LONG_CODE_MIN_LINES = 80
+LONG_CODE_MIN_CHARS = 6000
+_CODE_EXTENSIONS = {
+    "python": "py", "py": "py", "javascript": "js", "js": "js",
+    "typescript": "ts", "ts": "ts", "tsx": "tsx", "jsx": "jsx",
+    "bash": "sh", "sh": "sh", "shell": "sh", "zsh": "sh",
+    "json": "json", "yaml": "yml", "yml": "yml", "toml": "toml",
+    "html": "html", "css": "css", "scss": "scss", "sql": "sql",
+    "java": "java", "c": "c", "cpp": "cpp", "c++": "cpp",
+    "csharp": "cs", "cs": "cs", "rust": "rs", "rs": "rs",
+    "go": "go", "golang": "go", "php": "php", "ruby": "rb",
+    "rb": "rb", "swift": "swift", "kotlin": "kt", "kt": "kt",
+    "markdown": "md", "md": "md", "xml": "xml", "powershell": "ps1",
+    "dockerfile": "Dockerfile", "makefile": "Makefile", "text": "txt",
+    "txt": "txt", "ini": "ini", "diff": "diff", "graphql": "graphql",
+}
+
+
+def _code_block_filename(info, index):
+    """Choose a safe download name from a fence info string or its language."""
+    info = str(info or "").strip()
+    tokens = re.findall(r"\S+", info)
+    language = ""
+    candidate = ""
+
+    filename_match = re.search(
+        r"(?:filename|file|path)\s*=\s*(?:\"([^\"]+)\"|'([^']+)'|([^\s]+))",
+        info,
+        re.I,
     )
-    artifact_lines = []
-    for artifact in (artifacts if isinstance(artifacts, list) else []):
-        path = str(artifact.get("path") or "Generated output")
-        validation = artifact.get("validation") if isinstance(artifact, dict) else {}
-        message = str((validation or {}).get("message") or "Prepared for review")
-        artifact_lines.append("- " + path + " — " + message)
-    if artifact_lines:
-        sections.append("Prepared outputs\n" + "\n".join(artifact_lines))
-    if validation_errors:
-        sections.append("Remaining validation issues\n" + "\n".join("- " + str(error) for error in validation_errors[:12]))
-    else:
-        sections.append("Verification scope\nOnly the checks and actions listed above are confirmed. A preview or syntax check does not mean a file was saved or a command was executed.")
-    return "\n\n".join(sections)
+    if filename_match:
+        candidate = next((part for part in filename_match.groups() if part), "")
+
+    if tokens:
+        first = tokens[0].strip('"\'')
+        if not candidate and ("." in first or first.lower() in ("dockerfile", "makefile")):
+            candidate = first
+        elif not candidate and len(tokens) > 1:
+            possible = tokens[1].strip('"\'')
+            if "." in possible or possible.lower() in ("dockerfile", "makefile"):
+                candidate = possible
+        language = first.split(":", 1)[0].lower()
+        if not candidate and ":" in first:
+            suffix = first.split(":", 1)[1]
+            if "." in suffix:
+                candidate = suffix
+
+    if candidate:
+        candidate = candidate.replace("\\", "/").rsplit("/", 1)[-1]
+        candidate = re.sub(r"[^A-Za-z0-9._-]", "_", candidate).strip("._")
+        if candidate and candidate not in (".", ".."):
+            if "." not in candidate and language in _CODE_EXTENSIONS:
+                extension = _CODE_EXTENSIONS[language]
+                candidate += ("." + extension) if extension and extension[0].islower() else ""
+            return candidate
+
+    extension = _CODE_EXTENSIONS.get(language, "txt")
+    if extension in ("Dockerfile", "Makefile"):
+        return "{}-{}".format(extension.lower(), index)
+    return "code-block-{}.{}".format(index, extension)
+
+
+def extract_long_code_artifacts(markdown):
+    """Replace oversized Markdown code fences with safe, download-only file cards."""
+    text = str(markdown or "")
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return text, []
+
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line))
+
+    replacements = []
+    artifacts = []
+    used_names = set()
+    index = 0
+    line_index = 0
+
+    while line_index < len(lines):
+        opening_line = lines[line_index].rstrip("\r\n")
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", opening_line)
+        if not opening:
+            line_index += 1
+            continue
+
+        fence = opening.group(1)
+        fence_char = fence[0]
+        info = opening.group(2).strip()
+        if fence_char == "`" and "`" in info:
+            line_index += 1
+            continue
+
+        closing_re = re.compile(r"^ {0,3}" + re.escape(fence_char) + "{" + str(len(fence)) + r",}\s*$")
+        closing_index = line_index + 1
+        while closing_index < len(lines):
+            if closing_re.match(lines[closing_index].rstrip("\r\n")):
+                break
+            closing_index += 1
+
+        if closing_index >= len(lines):
+            line_index += 1
+            continue
+
+        code = "".join(lines[line_index + 1:closing_index])
+        if code.endswith("\r\n"):
+            code = code[:-2]
+        elif code.endswith("\n"):
+            code = code[:-1]
+
+        line_count = len(code.splitlines())
+        if line_count >= LONG_CODE_MIN_LINES or len(code) >= LONG_CODE_MIN_CHARS:
+            index += 1
+            filename = _code_block_filename(info, index)
+            stem, suffix = os.path.splitext(filename)
+            unique_name = filename
+            duplicate = 2
+            while unique_name.casefold() in used_names:
+                unique_name = "{}-{}{}".format(stem or "code-block", duplicate, suffix)
+                duplicate += 1
+            filename = unique_name
+            used_names.add(filename.casefold())
+            artifacts.append({
+                "kind": "code",
+                "path": filename,
+                "content": code,
+                "download_only": True,
+                "approval_required": False,
+                "source": "markdown_fence",
+                "validation": {
+                    "ok": True,
+                    "checked": False,
+                    "message": "Generated code · download only · not applied",
+                },
+            })
+            start = offsets[line_index]
+            end = offsets[closing_index + 1]
+            replacement = "\n\nThe complete code is available in the **{}** file card below.\n\n".format(filename)
+            replacements.append((start, end, replacement))
+
+        line_index = closing_index + 1
+
+    for start, end, replacement in reversed(replacements):
+        text = text[:start] + replacement + text[end:]
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text, artifacts
 
 
 class _SearchHTMLParser(HTMLParser):
@@ -3640,6 +3753,7 @@ class Handler(BaseHTTPRequestHandler):
             last_error = None
             for candidate_index in available:
                 candidate = route_candidates[candidate_index]
+                emit({"type": "draft_reset"})
                 chunks = []
                 summary_chunks = []
                 lead = "\n\n" if model_summary_chunks else ""
@@ -3683,6 +3797,7 @@ class Handler(BaseHTTPRequestHandler):
                         if kind_name == "content":
                             text = chunk if isinstance(chunk, str) else str(chunk)
                             chunks.append(text)
+                            emit({"type": "draft", "text": text})
                             if thinking_ended_at is None:
                                 think_tail = (think_tail + text)[-48:]
                                 if summary_chunks or THINK_CLOSE_RE.search(think_tail):
@@ -3947,20 +4062,27 @@ class Handler(BaseHTTPRequestHandler):
                 for error in validation_errors:
                     log_step("Validation warning: " + error, False, status="Finishing with warnings…", detail="This artifact did not pass the configured check and is withheld from the accepted artifact list.")
 
-            artifacts = list(artifacts_by_path.values())
             stats = response_stats()
             response_summary, reply = split_thinking(final_raw)
             response_summary = response_summary or "".join(model_summary_chunks).strip()
-            if not response_summary and final_raw:
-                response_summary = build_public_activity_rationale(
-                    user_text, mode, worklog, artifacts, validation_errors
-                )
             reply = strip_unsupported_actions(reply)
             reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
             if validation_errors:
                 warning = "\n\n**Validation warning:** " + "; ".join(validation_errors)
                 reply = (reply + warning).strip()
             visible = K.BLOCK_RE.sub("", reply).strip()
+            visible, code_artifacts = extract_long_code_artifacts(visible)
+            for artifact in code_artifacts:
+                original_name = artifact["path"]
+                stem, suffix = os.path.splitext(original_name)
+                candidate = original_name
+                duplicate = 2
+                while candidate.casefold() in {str(name).casefold() for name in artifacts_by_path}:
+                    candidate = "{}-{}{}".format(stem or "code-block", duplicate, suffix)
+                    duplicate += 1
+                artifact["path"] = candidate
+                artifacts_by_path[candidate] = artifact
+            artifacts = list(artifacts_by_path.values())
             if visible and chat.get("title") in (None, "New conversation"):
                 chat["title"] = self.app.generate_chat_title(user_text, visible, model)
             if not visible and not artifacts:
@@ -3980,7 +4102,6 @@ class Handler(BaseHTTPRequestHandler):
                 chat["mode"] = mode
                 self.app.save_chats()
 
-            emit({"type": "token", "text": visible})
             finished = True
             emit({
                 "type": "done", "content": visible, "artifacts": artifacts,
