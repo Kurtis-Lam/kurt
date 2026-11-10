@@ -10,6 +10,7 @@ import hmac
 import html
 import io
 import json
+import mimetypes
 import os
 import re
 import secrets
@@ -72,6 +73,9 @@ KURT WEB WORKSPACE RULES:
   test ran unless the interface supplied its actual result.
 - Use the workspace tree and readable file contents already supplied in the system
   messages. They are the source of truth for what is available. If the workspace is empty or lacks the files needed, ask the user to attach the files using the composer attachment control or configure the project directory in Settings.
+- Uploaded ZIP archives are automatically extracted into this conversation's workspace. Inspect the extracted paths in the workspace tree and work with the extracted files; do not ask the user to unzip them manually.
+- Uploaded folders are packaged internally for transfer and then extracted into the workspace. Treat the extracted folder tree as the original uploaded folder structure.
+- Images and other binary attachments are stored in the workspace and listed by path. Do not guess their visual contents; only describe an image when the selected model/provider actually supplies image-vision input or an available image-reading tool can inspect it.
 - Do not claim to have inspected files that were not attached or whose contents were not
   supplied. Keep paths relative to this conversation's temporary workspace. Never target
   paths outside it or claim that the original project was changed.
@@ -622,6 +626,58 @@ html,body{height:100%;min-height:100%;overflow:hidden}
  .settings-panel-area{overflow-y:auto;min-height:0}
  .failover-member-row{grid-template-columns:minmax(0,1fr) minmax(0,.9fr) auto}
 }
+/* A little more breathing room between conversation turns and within long answers. */
+.message{margin:0 auto 36px}
+.message.assistant .assistant-heading{margin-bottom:13px}
+.message.user .bubble{padding:11px 16px}
+.content p{margin:0 0 17px}
+.content li{margin:7px 0}
+.content h1,.content h2,.content h3{margin-top:26px;margin-bottom:13px}
+.content .math-display{display:block;width:100%;margin:20px auto 22px;text-align:center;white-space:normal;overflow-x:auto;overflow-y:hidden;font-weight:750;line-height:1.7}
+.content .math-display strong{font-weight:750}
+.content mjx-container[display="true"]{display:block!important;margin:0 auto!important;text-align:center!important;font-weight:700}
+.user-content{font-family:var(--sans);font-size:14px;line-height:1.6;white-space:normal}
+.message.user .bubble:has(.user-content){white-space:normal}
+
+/* Keep the two fallback selectors inside their own grid tracks. */
+#failoverMembers{width:100%;min-width:0}
+.failover-member-row{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) 36px;gap:9px;width:100%;min-width:0;overflow:visible}
+.failover-member-row>.custom-select{display:block;width:100%;min-width:0;max-width:100%;overflow:visible}
+.failover-member-row>.custom-select .custom-select-trigger{width:100%;min-width:0;max-width:100%;gap:6px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
+.failover-member-row>.custom-select .custom-select-menu{min-width:100%;max-width:min(340px,calc(100vw - 48px))}
+.failover-member-row>.remove-member{width:36px;min-width:36px;padding:0;justify-self:end}
+.failover-member-row select{width:100%;min-width:0;max-width:100%}
+
+/* Uploaded files remain visible in the composer, with image previews where available. */
+.composer-attachments{display:flex;flex-wrap:wrap;gap:8px;max-width:100%;padding:0 0 8px}
+.composer-attachments[hidden]{display:none}
+.attachment-chip{display:flex;align-items:center;gap:9px;min-width:0;max-width:min(100%,300px);padding:6px 9px;border:1px solid var(--line);border-radius:11px;background:var(--bg)}
+.attachment-thumb,.attachment-file-icon{width:38px;height:38px;flex:none;border-radius:7px;object-fit:cover;background:var(--raise)}
+.attachment-file-icon{display:grid;place-items:center;color:var(--green)}
+.attachment-file-icon .ic{width:18px;height:18px}
+.attachment-info{display:flex;flex:1;flex-direction:column;min-width:0;gap:2px}
+.attachment-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:650}
+.attachment-meta{color:var(--muted);font-size:11px;line-height:1.35}
+.attachment-status{color:var(--green);font-size:10.5px;line-height:1.3}
+.attachment-remove{width:25px;height:25px;flex:none;padding:0;border:0;background:transparent;color:var(--muted);font-size:17px}
+.attachment-remove:hover{color:var(--danger);background:var(--raise)}
+.upload-list{display:grid;gap:7px;padding:8px 0;color:var(--muted);font-size:12px}
+.upload-item{display:flex;align-items:center;gap:9px;min-width:0;padding:8px 9px;border:1px solid var(--line);border-radius:9px;background:var(--bg)}
+.upload-item .attachment-thumb,.upload-item .attachment-file-icon{width:34px;height:34px}
+.upload-item .attachment-name{font-size:12px}
+.upload-item .attachment-meta{font-size:10.5px}
+.upload-section-label{padding:4px 2px 0;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.upload-empty{padding:8px 2px;color:var(--muted)}
+.route-flyout{box-sizing:border-box;min-width:0}
+.route-flyout-column{min-width:0}
+.route-flyout-category,.route-flyout-item{min-width:0;overflow-wrap:anywhere}
+@media(max-width:700px){
+ .message{margin-bottom:29px}
+ .failover-member-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 34px;gap:6px}
+ .failover-member-row>.remove-member{width:34px;min-width:34px}
+ .attachment-chip{max-width:100%}
+}
+
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -667,6 +723,7 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <div class="composer-wrap">
 <button class="to-bottom" id="toBottom" aria-label="Scroll to latest message" title="Scroll to latest"><svg class="ic"><use href="#i-down"/></svg></button>
 <div class="composer">
+<div class="composer-attachments" id="composerAttachments" aria-live="polite" hidden></div>
 <textarea id="prompt" rows="1" placeholder="Message Kurt" aria-label="Message Kurt"></textarea>
 <div class="compose-bottom">
 <button class="icon-btn" id="contextBtn" title="Add files from this computer" aria-label="Add files from this computer"><svg class="ic"><use href="#i-plus"/></svg></button>
@@ -720,13 +777,13 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <div class="section"><h3>Saved groups</h3><div id="apiGroupsList"></div></div>
 </section>
 </div></div></div></div>
-<div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files</h2><button class="ghost" data-close="filesModal">Close</button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Choose files or a folder from your computer. This opens the standard macOS Finder or Windows File Explorer picker. Images and other binary files are kept in this chat workspace; readable source files are added to Kurt’s context. Your original files are not changed.</p><div class="file-source"><h3>From this computer</h3><div class="file-actions"><button id="chooseLocalFiles" class="primary">Choose files</button><button id="chooseLocalFolder">Choose folder</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList">No files selected.</div></div><div class="file-source"><h3>From the configured project</h3><div class="row"><input id="fileFolder" value="" placeholder="Project folder path"><button id="refreshFiles">Open</button><button id="selectCurrentFolder">Add this folder</button></div><div class="file-picker" id="filePicker"></div></div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
+<div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files</h2><button class="ghost" data-close="filesModal">Close</button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Choose individual files or an entire folder from Finder or File Explorer. Images are retained as image files in this chat. Only a folder selection is packaged internally as a ZIP, then unpacked automatically. Large pasted text is attached as a .txt file. Your original files are never changed.</p><div class="file-source"><h3>From this computer</h3><div class="file-actions"><button id="chooseLocalFiles" class="primary">Choose files</button><button id="chooseLocalFolder">Choose folder</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList" aria-live="polite">No files selected.</div></div><div class="file-source"><h3>From the configured project</h3><div class="row"><input id="fileFolder" value="" placeholder="Project folder path"><button id="refreshFiles">Open</button><button id="selectCurrentFolder">Add this folder</button></div><div class="file-picker" id="filePicker"></div></div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
 <div class="toast" id="toast"></div>
 <div class="route-flyout" id="routeFlyout" hidden><div class="route-flyout-column route-flyout-categories"></div><div class="route-flyout-column route-flyout-options"></div></div>
 <div class="chat-context-menu" id="chatContextMenu" role="menu"></div>
 <div class="dialog-backdrop" id="appDialogBackdrop"><form class="app-dialog" id="appDialogForm"><h2 id="appDialogTitle"></h2><p class="dialog-message" id="appDialogMessage"></p><div class="dialog-fields" id="appDialogFields"></div><div class="dialog-actions"><button type="button" id="appDialogCancel">Cancel</button><button type="submit" class="primary" id="appDialogConfirm">Save</button></div></form></div>
 <script>
-const TOKEN='__TOKEN__';const HINT='Kurt can make mistakes. Attachments are copied into an isolated chat workspace; the project stays unchanged unless you explicitly apply a file.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[]};
+const TOKEN='__TOKEN__';const HINT='Kurt can make mistakes. Attachments are copied into an isolated chat workspace; the project stays unchanged unless you explicitly apply a file.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[]};
 const $=id=>document.getElementById(id);const api=async(path,body)=>{const res=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:body?JSON.stringify(body):undefined});const data=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(data.error||res.statusText);return data};
 function toast(msg){const el=$('toast');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600)}
 
@@ -807,6 +864,18 @@ function renderRoutePicker(){
  trigger.onclick=event=>{event.stopPropagation();openRouteFlyout(trigger)};
  trigger.onmouseenter=()=>{if($('routeFlyout').hidden)openRouteFlyout(trigger)};
 }
+function positionRouteFlyout(){
+ const menu=$('routeFlyout'),trigger=$('routeCurrent');if(!menu||menu.hidden||!trigger)return;
+ const width=Math.max(0,Math.min(430,window.innerWidth-20));
+ menu.style.width=width+'px';menu.style.maxHeight=Math.max(160,Math.min(390,window.innerHeight-24))+'px';
+ const triggerRect=trigger.getBoundingClientRect();
+ const measured=Math.min(menu.scrollHeight||220,390,window.innerHeight-24);
+ const actual=Math.max(90,Math.min(menu.getBoundingClientRect().height||measured,measured));
+ const left=Math.max(10,Math.min(window.innerWidth-width-10,triggerRect.right-width));
+ let top=triggerRect.top-actual-8;
+ if(top<12){const below=triggerRect.bottom+8;top=below+actual<=window.innerHeight-12?below:Math.max(12,window.innerHeight-actual-12)}
+ menu.style.left=left+'px';menu.style.top=top+'px';
+}
 function closeRouteFlyout(){const menu=$('routeFlyout');if(menu){menu.hidden=true;menu.setAttribute('aria-hidden','true');$('routeCurrent')?.setAttribute('aria-expanded','false')}}
 function showRouteOptions(category){
  const menu=$('routeFlyout');if(!menu)return;
@@ -814,17 +883,19 @@ function showRouteOptions(category){
  categories.querySelectorAll('[data-route-kind]').forEach(button=>button.classList.toggle('active',button.dataset.routeKind===category));
  options.replaceChildren();
  const routes=(state.routes||[]).filter(route=>route.kind===category);
- if(!routes.length){const empty=document.createElement('div');empty.className='route-flyout-empty';empty.textContent=category==='local'?'No local models are installed.':category==='key'?'No API keys are available for configured models.':'No groups have been created.';options.appendChild(empty);return}
- routes.forEach(route=>{
+ if(!routes.length){const empty=document.createElement('div');empty.className='route-flyout-empty';empty.textContent=category==='local'?'No local models are installed.':category==='key'?'No API keys are available for configured models.':'No groups have been created.';options.appendChild(empty)}
+ else routes.forEach(route=>{
   const item=document.createElement('button');item.type='button';item.className='route-flyout-item';item.textContent=routeChoiceLabel(route.value);item.title=route.label;
   if(route.value===$('topModel').value)item.setAttribute('aria-current','true');
   item.onclick=event=>{event.stopPropagation();$('topModel').value=route.value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}));closeRouteFlyout()};
   options.appendChild(item);
  });
+ requestAnimationFrame(positionRouteFlyout);
 }
 function openRouteFlyout(trigger){
  const menu=$('routeFlyout');if(!menu||!trigger)return;
  const categories=menu.querySelector('.route-flyout-categories');categories.replaceChildren();
+ menu.hidden=false;menu.setAttribute('aria-hidden','false');$('routeCurrent').setAttribute('aria-expanded','true');
  const categoryLabels=[['local','Local'],['key','Key'],['group','Group']];
  const first=routeCategoryForValue($('topModel').value);
  categoryLabels.forEach(([kind,label])=>{
@@ -835,14 +906,10 @@ function openRouteFlyout(trigger){
   categories.appendChild(button);
  });
  showRouteOptions(first);
- menu.hidden=false;menu.setAttribute('aria-hidden','false');$('routeCurrent').setAttribute('aria-expanded','true');
- const rect=trigger.getBoundingClientRect();
- const width=Math.min(430,window.innerWidth-20);menu.style.width=width+'px';
- const height=Math.min(menu.scrollHeight,390,window.innerHeight-24);
- const left=Math.max(10,Math.min(window.innerWidth-width-10,rect.right-width));
- const top=Math.max(12,Math.min(window.innerHeight-height-12,rect.top-height-8));
- menu.style.left=left+'px';menu.style.top=top+'px';
+ requestAnimationFrame(positionRouteFlyout);
 }
+window.addEventListener('resize',positionRouteFlyout);
+window.addEventListener('scroll',positionRouteFlyout,true);
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function stripUnsupportedActions(src){return String(src||'')
  .replace(/@@@\s*(?:RUN|SEARCH|SYSTEM_PROMPT|READ|EXEC|BASH|SHELL)\b[\s\S]*?(?:@@@\s*END\b|$)/gi,'')
@@ -850,7 +917,34 @@ function stripUnsupportedActions(src){return String(src||'')
  .replace(/<\|tool_call_(?:start|end)\|>/gi,'')
  .trim()}
 function inline(s){const spans=[];s=s.replace(/`([^`\n]+)`/g,(_,c)=>{spans.push('<code>'+c+'</code>');return '\u0001'+(spans.length-1)+'\u0001'});s=s.replace(/\*\*([^*\n]+?)\*\*/g,'<strong>$1</strong>').replace(/(^|[^*\w])\*([^*\n]+?)\*(?![*\w])/g,'$1<em>$2</em>').replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');return s.replace(/\u0001(\d+)\u0001/g,(_,i)=>spans[+i])}
-function mdBlocks(text){const lines=esc(text).split('\n');let html='',para=[],list=null,quote=[];const flushP=()=>{if(para.length){html+='<p>'+inline(para.join('\n')).replace(/\n/g,'<br>')+'</p>';para=[]}};const flushL=()=>{if(list){html+='<'+list.t+'>'+list.items.map(i=>'<li>'+inline(i)+'</li>').join('')+'</'+list.t+'>';list=null}};const flushQ=()=>{if(quote.length){html+='<blockquote>'+inline(quote.join('<br>'))+'</blockquote>';quote=[]}};for(const line of lines){let m;if(!line.trim()){flushP();flushL();flushQ();continue}if(m=/^(#{1,6})\s+(.*)$/.exec(line)){flushP();flushL();flushQ();const n=Math.min(m[1].length,3);html+='<h'+n+'>'+inline(m[2])+'</h'+n+'>';continue}if(/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)){flushP();flushL();flushQ();html+='<hr>';continue}if(m=/^&gt;\s?(.*)$/.exec(line)){flushP();flushL();quote.push(m[1]);continue}if(m=/^\s*[-*+]\s+(.*)$/.exec(line)){flushP();flushQ();if(!list||list.t!=='ul'){flushL();list={t:'ul',items:[]}}list.items.push(m[1]);continue}if(m=/^\s*\d+[.)]\s+(.*)$/.exec(line)){flushP();flushQ();if(!list||list.t!=='ol'){flushL();list={t:'ol',items:[]}}list.items.push(m[1]);continue}flushL();flushQ();para.push(line)}flushP();flushL();flushQ();return html}
+function mdBlocks(text){
+ const math=[];
+ const mathToken=tex=>{const index=math.push(String(tex||'').trim())-1;return '\n\u0002KURTMATH'+index+'\u0002\n'};
+ text=String(text||'')
+  .replace(/\\\[([\s\S]*?)\\\]/g,(_,tex)=>mathToken(tex))
+  .replace(/\$\$([\s\S]*?)\$\$/g,(_,tex)=>mathToken(tex))
+  .replace(/\\\(([\s\S]*?)\\\)/g,(_,tex)=>mathToken(tex))
+  .replace(/(^|[^\$])\$([^\$\n]+)\$(?!\$)/g,(_,prefix,tex)=>prefix+mathToken(tex));
+ const lines=esc(text).split('\n');let html='',para=[],list=null,quote=[];
+ const flushP=()=>{if(para.length){html+='<p>'+inline(para.join('\n')).replace(/\n/g,'<br>')+'</p>';para=[]}};
+ const flushL=()=>{if(list){html+='<'+list.t+'>'+list.items.map(i=>'<li>'+inline(i)+'</li>').join('')+'</'+list.t+'>';list=null}};
+ const flushQ=()=>{if(quote.length){html+='<blockquote>'+inline(quote.join('<br>'))+'</blockquote>';quote=[]}};
+ for(const line of lines){let m;
+  if(m=/^\u0002KURTMATH(\d+)\u0002$/.exec(line)){flushP();flushL();flushQ();html+='<div class="math-display"><strong>\\['+esc(math[Number(m[1])])+'\\]</strong></div>';continue}
+  if(!line.trim()){flushP();flushL();flushQ();continue}
+  if(m=/^(#{1,6})\s+(.*)$/.exec(line)){flushP();flushL();flushQ();const n=Math.min(m[1].length,3);html+='<h'+n+'>'+inline(m[2])+'</h'+n+'>';continue}
+  if(/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)){flushP();flushL();flushQ();html+='<hr>';continue}
+  if(m=/^&gt;\s?(.*)$/.exec(line)){flushP();flushL();quote.push(m[1]);continue}
+  if(m=/^\s*[-*+]\s+(.*)$/.exec(line)){flushP();flushQ();if(!list||list.t!=='ul'){flushL();list={t:'ul',items:[]}}list.items.push(m[1]);continue}
+  if(m=/^\s*\d+[.)]\s+(.*)$/.exec(line)){flushP();flushQ();if(!list||list.t!=='ol'){flushL();list={t:'ol',items:[]}}list.items.push(m[1]);continue}
+  flushL();flushQ();para.push(line)
+ }
+ flushP();flushL();flushQ();return html
+}
+function hasMathMarkup(value){return /\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$|\\\([\s\S]*?\\\)|(^|[^\$])\$[^\$\n]+\$(?!\$)/.test(String(value||''))}
+window.MathJax={tex:{inlineMath:[],displayMath:[['\\[','\\]']],processEscapes:true,packages:{'[+]':['ams']}},options:{skipHtmlTags:['script','noscript','style','textarea','pre','code']},startup:{typeset:false}};
+function typesetMath(root){if(!root||!window.MathJax?.typesetPromise)return;try{window.MathJax.typesetClear?.([root]);window.MathJax.typesetPromise([root]).catch(error=>console.warn('Math rendering failed:',error))}catch(error){console.warn('Math rendering failed:',error)}}
+const mathJaxScript=document.createElement('script');mathJaxScript.src='https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js';mathJaxScript.async=true;mathJaxScript.onload=()=>document.querySelectorAll('.content').forEach(typesetMath);mathJaxScript.onerror=()=>console.warn('MathJax could not be loaded; equations will remain centered as TeX text.');document.head.appendChild(mathJaxScript);
 function renderMarkdown(src){src=String(src||'');return src.split(/(```[^\n]*\n[\s\S]*?```|```[^\n]*\n[\s\S]*$|```[^\n]*$)/).map((seg,i)=>{if(i%2===0)return mdBlocks(seg);const nl=seg.indexOf('\n');const lang=(nl<0?seg.slice(3):seg.slice(3,nl)).trim().split(/\s+/)[0]||'';let code=nl<0?'':seg.slice(nl+1);if(nl>=0&&seg.endsWith('```'))code=code.replace(/\n?```$/,'');return '<div class="codebox"><div class="codehead"><span>'+esc(lang||'code')+'</span><button class="copy-mini" data-copy-code>Copy code</button></div><pre><code>'+esc(code.replace(/\n$/,''))+'</code></pre></div>'}).join('')}
 function splitThink(raw,streaming){let think='',answer='',open=false;const closer=/<\/think(?:ing)?>/i.exec(raw),opener=/<think(?:ing)?>/i.exec(raw);if(closer&&(!opener||closer.index<opener.index)){think+=raw.slice(0,closer.index)+'\n';raw=raw.slice(closer.index+closer[0].length)}while(raw.length){const m=/<think(?:ing)?>/i.exec(raw);if(!m){answer+=raw;break}answer+=raw.slice(0,m.index);const after=raw.slice(m.index+m[0].length);const c=/<\/think(?:ing)?>/i.exec(after);if(!c){think+=after;open=true;break}think+=after.slice(0,c.index)+'\n';raw=after.slice(c.index+c[0].length)}answer=answer.replace(/^\s+/,'');if(streaming)answer=answer.replace(/<\/?(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?$/i,'');return{think:think.trim(),answer,open}}
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
@@ -872,7 +966,7 @@ function setBusy(b){state.busy=b;const btn=$('sendBtn');btn.querySelector('use')
 function cancelRun(){if(state.abort)state.abort.abort();state.abort=null;state.run++;setBusy(false)}
 function responseModelLabel(ref){if(!ref)return'';const item=state.models.find(m=>m.ref===ref);return item?`${item.label||item.name||item.model} · ${item.provider}`:String(ref)}
 function setResponseMeta(node,stats,model){const el=node?.querySelector('.response-metrics');if(!el)return;const parts=[];const seconds=Number(stats?.thought_seconds);const speed=Number(stats?.tokens_per_second);if(Number.isFinite(seconds)&&seconds>0)parts.push(`Generated in ${seconds.toFixed(seconds<10?1:0)}s`);if(Number.isFinite(speed)&&speed>0)parts.push(`${stats?.tokens_estimated?'~':''}${speed.toFixed(speed<10?1:0)} tok/s`);const label=responseModelLabel(model);if(label)parts.push(label);el.textContent=parts.join(' · ');if(stats?.tokens_estimated)el.title='Token rate is estimated from generated text length because the provider did not report output-token usage.'}
-function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<think)/i.test(String(content||'')))safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.';wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user')bubble.textContent=content;else{bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');bubble.appendChild(reasoningBlock());bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');bubble.querySelector('.content').innerHTML=renderMarkdown(safeContent);bindCopy(wrap);wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];setReasoning(wrap,extra?.reasoning||'');setThink(wrap,extra?.worklog||[]);setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
+function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<think)/i.test(String(content||'')))safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.';wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user'){if(hasMathMarkup(safeContent)){const userContent=document.createElement('div');userContent.className='content user-content';userContent.innerHTML=renderMarkdown(safeContent);bubble.appendChild(userContent);typesetMath(userContent)}else bubble.textContent=content}else{bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');bubble.appendChild(reasoningBlock());bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindCopy(wrap);wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];setReasoning(wrap,extra?.reasoning||'');setThink(wrap,extra?.worklog||[]);setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
 function clearArtifactPane(){const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';const main=$('main');if(main)main.classList.remove('has-artifacts');document.querySelectorAll('.artifact-trigger').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
 function closeArtifactPane(){const main=$('main');if(main)main.classList.remove('has-artifacts');const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';document.querySelectorAll('.artifact-trigger.selected').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
 function renderArtifactTriggers(container,artifacts){if(!container)return;container.innerHTML='';(artifacts||[]).forEach(a=>{const promptCard=a.kind==='system_prompt';const button=document.createElement('button');button.type='button';button.className='artifact-trigger';button.setAttribute('aria-controls','artifactPane');button.setAttribute('aria-expanded','false');button.innerHTML='<span class="artifact-trigger-icon"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span><span class="artifact-trigger-text"><span class="artifact-trigger-name"></span><span class="artifact-trigger-status"></span></span><span class="artifact-trigger-open">Preview →</span>';button.querySelector('.artifact-trigger-name').textContent=promptCard?'System prompt proposal':String(a.path||'Generated file');button.querySelector('.artifact-trigger-status').textContent=a.validation?.message||'Saved in the temporary workspace';button.setAttribute('aria-label','Preview '+(a.path||'generated file'));button.onclick=()=>openArtifactPreview(a,button);container.appendChild(button)})}
@@ -995,8 +1089,11 @@ function addFailoverMember(member={}){
  const remove=document.createElement('button');remove.type='button';remove.className='remove-member';remove.textContent='×';remove.title='Remove fallback';remove.onclick=()=>row.remove();
  const updateKeys=preferred=>{
   const model=state.models.find(item=>item.ref===modelSelect.value);keySelect.replaceChildren();
-  if(!model||model.type==='local'){keySelect.disabled=true;keySelect.hidden=true;return}
-  keySelect.hidden=false;keySelect.disabled=false;
+  const hideKeyPicker=!model||model.type==='local';
+  keySelect.disabled=hideKeyPicker;keySelect.hidden=hideKeyPicker;
+  if(keySelect._customWrap)keySelect._customWrap.hidden=hideKeyPicker;
+  if(hideKeyPicker)return;
+  keySelect.disabled=false;keySelect.hidden=false;
   const availableKeys=failoverKeyOptions(model);
   const pool=document.createElement('option');pool.value='pool';pool.textContent=availableKeys.length?'All matching keys':'No matching keys — add one in Settings › Keys';pool.disabled=!availableKeys.length;keySelect.appendChild(pool);
   availableKeys.forEach(key=>{const option=document.createElement('option');option.value=key.id;option.textContent=(key.label||'Account')+' · '+(key.masked||'saved key');option.title=option.textContent;keySelect.appendChild(option)});
@@ -1005,6 +1102,8 @@ function addFailoverMember(member={}){
  modelSelect.value=member.model||'';modelSelect.onchange=()=>updateKeys('pool');
  updateKeys(member.key_id||'pool');
  row.append(modelSelect,keySelect,remove);root.appendChild(row);
+ enhanceSelect(modelSelect);enhanceSelect(keySelect);
+ if(keySelect._customWrap)keySelect._customWrap.hidden=keySelect.hidden;
 }
 function refreshFailoverMemberOptions(){
  const root=$('failoverMembers');if(!root||!root.children.length)return;
@@ -1063,14 +1162,14 @@ async function saveFailoverGroup(){
  }catch(error){toast(error.message)}
 }
 async function refreshChats(){const d=await api('/api/chats');state.chats=d.chats||[];renderChats()}
-function resetComposer(){$('prompt').value='';autosize();state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads=[];state.contextCount=0;renderPendingUploads();hint();updateSend()}
+function resetComposer(){$('prompt').value='';autosize();state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.uploadedFiles=[];state.contextCount=0;renderPendingUploads();hint();updateSend()}
 async function ensureChat(initialMessage){
  if(!state.chatId){const body={create:true};if(initialMessage)body.initial_message=initialMessage;const d=await api('/api/chats',body);state.chatId=d.id}
  else if(initialMessage){await api('/api/chats/'+encodeURIComponent(state.chatId),{append_user_message:initialMessage})}
  return state.chatId;
 }
 async function newChat(){cancelRun();state.chatId=null;state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=data.effort==='expert'?'expert':'thinking';state.mode=data.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;syncSelect($('effortSelect'));syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0}catch(error){}hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',stats:message.stats||null,model:message.model||data.model||null}));follow=true;scrollEnd(true)}else showWelcome();setTitle(data.title||'Conversation',[data.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
+async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=data.effort==='expert'?'expert':'thinking';state.mode=data.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;syncSelect($('effortSelect'));syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',stats:message.stats||null,model:message.model||data.model||null}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
 async function send(){
  const text=$('prompt').value.trim();if(!text||state.busy)return;
  const run=++state.run;state.effort=$('effortSelect').value;state.mode=$('operationMode').value;const route=$('topModel').value;
@@ -1085,7 +1184,7 @@ async function send(){
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
  const contentEl=node.querySelector('.content');let raw='',reasoning='',pending=false;
  const controller=new AbortController();state.abort=controller;
- const paint=()=>{pending=false;if(run!==state.run)return;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
+ const paint=()=>{pending=false;if(run!==state.run)return;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe){bindCopy(node);typesetMath(contentEl)}node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
  try{
   const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,route,effort:state.effort,mode:state.mode,message_id:messageId}),signal:controller.signal});
@@ -1096,7 +1195,7 @@ async function send(){
     if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail);node.querySelector('.assistant-status').textContent=event.status||'Working…'}
     else if(event.type==='reasoning'){reasoning+=event.text||'';setReasoning(node,reasoning,true)}
     else if(event.type==='token'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}
-    else if(event.type==='done'){pending=false;raw=event.content||'';reasoning=event.reasoning||reasoning;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);node.dataset.raw=safe;setReasoning(node,reasoning,false);setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='done'){pending=false;raw=event.content||'';reasoning=event.reasoning||reasoning;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setReasoning(node,reasoning,false);setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
     else if(event.type==='error')throw new Error(event.message||'The model request failed');
    }
   }
@@ -1112,16 +1211,44 @@ $('closeArtifactPane').onclick=closeArtifactPane;
 $('sendBtn').onclick=()=>{if(state.busy){if(state.abort)state.abort.abort()}else send()};
 $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!state.busy)send()}});
 $('prompt').addEventListener('input',()=>{autosize();updateSend()});
+$('prompt').addEventListener('paste',event=>{
+ const clipboardItems=Array.from(event.clipboardData?.items||[]);const pastedImages=clipboardItems.filter(item=>String(item.type||'').startsWith('image/')).map(item=>item.getAsFile()).filter(Boolean);
+ if(pastedImages.length){event.preventDefault();stageUploadFiles(pastedImages);attachFiles();return}
+ const pastedText=event.clipboardData?.getData('text/plain')||'';
+ if(pastedText.length>16000){event.preventDefault();const stamp=new Date().toISOString().replace(/[:.]/g,'-');const file=new File([pastedText],'pasted-text-'+stamp+'.txt',{type:'text/plain'});if(file.size>10*1024*1024){toast('This pasted text exceeds the 10 MB attachment limit. Split it into smaller parts.');return}stageUploadFiles([file]);$('prompt').value='I attached a large pasted text file. Please read it and help me with its contents.';autosize();updateSend();toast('Large paste attached as a .txt file');attachFiles()}
+ });
 $('newChat').onclick=newChat;$('chatSort').onchange=()=>{state.sort=$('chatSort').value;renderChats()};$('selectChats').onclick=()=>setChatSelectionMode(!state.selectingChats);$('selectAllChats').onchange=()=>selectAllChats($('selectAllChats').checked);$('deleteSelectedChats').onclick=deleteSelectedChats;$('cancelChatSelect').onclick=()=>setChatSelectionMode(false);$('effortSelect').onchange=()=>{state.effort=$('effortSelect').value};$('operationMode').onchange=()=>{state.mode=$('operationMode').value;hint()};
 function activateSettingsTab(tab){document.querySelectorAll('[data-settings-tab]').forEach(button=>button.classList.toggle('active',button.dataset.settingsTab===tab));document.querySelectorAll('[data-settings-panel]').forEach(panel=>panel.classList.toggle('active',panel.dataset.settingsPanel===tab));const area=document.querySelector('.settings-panel-area');if(area)area.scrollTop=0}
 document.querySelectorAll('[data-settings-tab]').forEach(b=>b.onclick=()=>activateSettingsTab(b.dataset.settingsTab));
 async function openSettings(){await refreshBootstrap();activateSettingsTab('general');$('settingsModal').classList.add('show')}
 async function saveSettings(){const payload={project_root:$('projectRoot').value,system_prompt:$('systemPrompt').value,allow_project_writes:$('allowProjectWrites').checked,default_route:$('settingsModel').value};const data=await api('/api/settings',payload);state.settings=data.settings||{};state.settings.allow_project_writes=$('allowProjectWrites').checked;state.projectRoot=data.project_root;await refreshBootstrap();toast('Settings saved')}
 async function browseFiles(){const path=$('fileFolder').value.trim();const d=await api('/api/files?path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()}}el.appendChild(row)})}
-function renderPendingUploads(){const labels=[];if(state.selectedFiles.length)labels.push(state.selectedFiles.length+' project file(s)');if(state.selectedFolders.length)labels.push(state.selectedFolders.length+' project folder(s)');if(state.pendingUploads.length)labels.push(state.pendingUploads.length+' computer file(s), including images');$('uploadList').textContent=labels.length?labels.join(' · '):'No files selected.'}
-function stageLocalFiles(input){const files=Array.from(input.files||[]);for(const file of files){const path=(file.webkitRelativePath||file.name).replace(/\\/g,'/');if(!state.pendingUploads.some(x=>x.path===path))state.pendingUploads.push({file,path})}input.value='';renderPendingUploads()}
+function formatFileSize(value){const bytes=Math.max(0,Number(value)||0);if(bytes<1024)return bytes+' B';if(bytes<1024*1024)return (bytes/1024).toFixed(1)+' KB';return (bytes/1024/1024).toFixed(1)+' MB'}
+function fileIconNode(item){if(item.previewUrl&&String(item.type||item.mime||'').startsWith('image/')){const image=document.createElement('img');image.className='attachment-thumb';image.src=item.previewUrl;image.alt=item.name||'Uploaded image';return image}const icon=document.createElement('span');icon.className='attachment-file-icon';icon.innerHTML='<svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>';return icon}
+function makeUploadCard(item,{uploaded=false,removable=false,compact=false,index=-1}={}){
+ const row=document.createElement('div');row.className='upload-item'+(compact?' attachment-chip':'');
+ row.appendChild(fileIconNode(item));const info=document.createElement('span');info.className='attachment-info';
+ const name=document.createElement('span');name.className='attachment-name';name.textContent=item.name||String(item.path||'').split('/').pop()||'Uploaded file';name.title=item.path||name.textContent;
+ const meta=document.createElement('span');meta.className='attachment-meta';meta.textContent=[formatFileSize(item.size),item.folderRoot?'Folder upload':''].filter(Boolean).join(' · ');
+ const status=document.createElement('span');status.className='attachment-status';status.textContent=uploaded?'Added to this chat':'Ready to add';
+ info.append(name,meta,status);row.appendChild(info);
+ if(removable){const remove=document.createElement('button');remove.type='button';remove.className='attachment-remove';remove.textContent='×';remove.title='Remove attachment';remove.setAttribute('aria-label','Remove '+name.textContent);remove.onclick=()=>{const removed=state.pendingUploads.splice(index,1)[0];if(removed?.previewUrl)URL.revokeObjectURL(removed.previewUrl);renderPendingUploads()};row.appendChild(remove)}
+ return row
+}
+function renderComposerAttachments(){const root=$('composerAttachments');if(!root)return;root.replaceChildren();const pending=state.pendingUploads||[],uploaded=state.uploadedFiles||[];pending.forEach((item,index)=>root.appendChild(makeUploadCard(item,{removable:true,index,compact:true})));uploaded.forEach(item=>root.appendChild(makeUploadCard(item,{uploaded:true,compact:true})));root.hidden=!pending.length&&!uploaded.length}
+function renderPendingUploads(){const root=$('uploadList');if(!root)return;root.replaceChildren();
+ const pending=state.pendingUploads||[],uploaded=state.uploadedFiles||[];const projectCount=state.selectedFiles.length+state.selectedFolders.length;
+ if(!pending.length&&!projectCount&&!uploaded.length){const empty=document.createElement('div');empty.className='upload-empty';empty.textContent='No files selected.';root.appendChild(empty)}
+ if(pending.length){const label=document.createElement('div');label.className='upload-section-label';label.textContent='Ready to add';root.appendChild(label);pending.forEach((item,index)=>root.appendChild(makeUploadCard(item,{removable:true,index}))) }
+ if(state.selectedFiles.length||state.selectedFolders.length){const label=document.createElement('div');label.className='upload-section-label';label.textContent='From project workspace';root.appendChild(label);state.selectedFolders.forEach(path=>{const card=makeUploadCard({name:path.split('/').pop()||'Project folder',path,size:0,folderRoot:path},{removable:false});root.appendChild(card)});state.selectedFiles.forEach(path=>root.appendChild(makeUploadCard({name:path.split('/').pop(),path,size:0},{removable:false}))) }
+ if(uploaded.length){const label=document.createElement('div');label.className='upload-section-label';label.textContent='Already in this chat';root.appendChild(label);uploaded.forEach(item=>root.appendChild(makeUploadCard(item,{uploaded:true}))) }
+ renderComposerAttachments()
+}
+function stageUploadFiles(files){for(const file of files||[]){const relative=String(file.webkitRelativePath||file.name).replace(/\\/g,'/');const folderRoot=file.webkitRelativePath?relative.split('/')[0]:'';if(state.pendingUploads.some(x=>x.path===relative))continue;const previewUrl=String(file.type||'').startsWith('image/')?URL.createObjectURL(file):null;state.pendingUploads.push({file,path:relative,name:file.name,size:file.size,type:file.type||'',folderRoot,previewUrl})}renderPendingUploads()}
+function stageLocalFiles(input){stageUploadFiles(Array.from(input.files||[]));input.value=''}
 function bytesToBase64(buffer){const bytes=new Uint8Array(buffer);let binary='';const chunk=0x8000;for(let i=0;i<bytes.length;i+=chunk)binary+=String.fromCharCode(...bytes.subarray(i,i+chunk));return btoa(binary)}
-async function attachFiles(){try{if(!state.selectedFiles.length&&!state.selectedFolders.length&&!state.pendingUploads.length){toast('Choose files first');return}const uploads=[];let total=0;for(const item of state.pendingUploads){if(item.file.size>10*1024*1024)throw new Error(item.file.name+' exceeds the 10 MB per-file limit.');total+=item.file.size;if(total>20*1024*1024)throw new Error('Local file selection exceeds the 20 MB import limit.');uploads.push({path:item.path,content:bytesToBase64(await item.file.arrayBuffer())})}await ensureChat();const result=await api('/api/context/import',{chat_id:state.chatId,selected_files:state.selectedFiles,selected_folders:state.selectedFolders,uploads});state.contextCount=(state.contextCount||0)+Number(result.files||0);state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads=[];renderPendingUploads();$('filesModal').classList.remove('show');hint();await refreshChats();toast(result.message||'Context added to isolated workspace')}catch(e){toast(e.message)}}
+async function loadUploadedImagePreviews(){const items=(state.uploadedFiles||[]).filter(item=>item.image&&!item.previewUrl);await Promise.all(items.map(async item=>{try{const url='/api/context/preview?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(item.path);const response=await fetch(url,{headers:{'X-Kurt-Token':TOKEN}});if(!response.ok)return;item.previewUrl=URL.createObjectURL(await response.blob())}catch(error){console.warn('Could not load an attachment preview:',error)}}));renderPendingUploads()}
+async function attachFiles(){try{if(!state.selectedFiles.length&&!state.selectedFolders.length&&!state.pendingUploads.length){toast('Choose files first');return}const uploads=[];let total=0;for(const item of state.pendingUploads){if(item.file.size>10*1024*1024)throw new Error(item.file.name+' exceeds the 10 MB per-file limit.');total+=item.file.size;if(total>20*1024*1024)throw new Error('Local file selection exceeds the 20 MB import limit.');uploads.push({path:item.path,folder_root:item.folderRoot||'',content:bytesToBase64(await item.file.arrayBuffer())})}await ensureChat();const previewMap=new Map([...(state.uploadedFiles||[]),...state.pendingUploads].filter(item=>item.previewUrl).map(item=>[item.path,item.previewUrl]));const result=await api('/api/context/import',{chat_id:state.chatId,selected_files:state.selectedFiles,selected_folders:state.selectedFolders,uploads});state.contextCount=Number(result.items?.length??((state.contextCount||0)+Number(result.files||0)));state.uploadedFiles=(result.items||[]).map(item=>({...item,previewUrl:previewMap.get(item.path)||null}));state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl&&!state.uploadedFiles.some(uploaded=>uploaded.previewUrl===item.previewUrl))URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];renderPendingUploads();$('filesModal').classList.remove('show');hint();await refreshChats();loadUploadedImagePreviews();toast(result.message||'Files added to this chat')}catch(e){toast(e.message)}}
 function openComposerFilePicker(){const picker=$('composerFiles');if(!picker)return;picker.click()}
 async function handleComposerFiles(){const picker=$('composerFiles');if(!picker.files||!picker.files.length)return;stageLocalFiles(picker);await attachFiles()}
 async function startDownload(){const model=$('downloadModel').value.trim();if(!model){toast('Enter an Ollama model ID');return}try{const d=await api('/api/download',{model});$('downloadCaption').textContent='Queued: '+model;$('localDownloadStatus').textContent='Download queued: '+model;$('downloadModel').value='';toast('Download started in background');pollDownload()}catch(e){toast(e.message)}}
@@ -1781,17 +1908,19 @@ class KurtWebApp:
             total_bytes += len(content)
             if total_bytes > MAX_IMPORT_BYTES:
                 raise ValueError('The total context import exceeds 20 MB.')
+            folder_root = str(item.get('folder_root') or '').strip().replace('\\', '/')
             if Path(rel).suffix.lower() == '.zip':
-                archive_dir = workspace / '.kurt_imports'
-                archive_dir.mkdir(parents=True, exist_ok=True)
-                archive_path = archive_dir / (Path(rel).stem[:48] + '-' + uuid.uuid4().hex[:8] + '.zip')
-                archive_path.write_bytes(content)
-                self._extract_zip_bytes(content, workspace)
+                target = self.resolve_chat_path(workspace, rel)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+                extracted, _expanded = self._extract_zip_bytes(content, workspace)
                 archives += 1
-                imported += 1
-            elif '/' in rel:
-                top = rel.split('/', 1)[0]
-                upload_groups.setdefault(top, []).append((rel, content))
+                imported += 1 + extracted
+            elif folder_root:
+                folder_root = self._safe_context_relative(folder_root)
+                if rel != folder_root and not rel.startswith(folder_root + '/'):
+                    raise ValueError('A folder upload contains a path outside its selected folder.')
+                upload_groups.setdefault(folder_root, []).append((rel, content))
             else:
                 direct_uploads.append((rel, content))
         for rel, content in direct_uploads:
@@ -1812,45 +1941,62 @@ class KurtWebApp:
             count, _size = self._extract_zip_bytes(payload, workspace)
             imported += count
             archives += 1
-        return {'ok': True, 'files': imported, 'bytes': total_bytes, 'archives': archives,
-                'workspace': str(workspace), 'message': f'Added {imported} item(s) to this chat workspace; {archives} folder/archive ZIP(s) created and unpacked.'}
+        items = self.context_file_list(chat_id)
+        return {'ok': True, 'files': imported, 'items': items, 'bytes': total_bytes, 'archives': archives,
+                'workspace': str(workspace), 'message': f'Added files to this chat workspace. Automatically unpacked {archives} folder/archive ZIP(s).'}
 
     def context_contents(self, chat_id):
         root = self.chat_workspace(chat_id)
         chunks = []
         used = 0
-        included = 0
         skipped = 0
+        truncated = 0
+        paths = []
         for current, dirs, files in os.walk(root):
             dirs[:] = sorted(d for d in dirs if not self._skip_context_dir(d))
-            for name in sorted(files):
+            for name in files:
                 path = Path(current) / name
                 if self._skip_context_name(name) or path.is_symlink() or '.kurt_imports' in path.parts:
                     continue
-                try:
-                    size = path.stat().st_size
-                    if size > 250_000:
-                        skipped += 1
-                        continue
-                    raw = path.read_bytes()
-                    if b'\x00' in raw[:4096]:
-                        skipped += 1
-                        continue
-                    content = raw.decode('utf-8')
-                except (OSError, UnicodeError):
+                paths.append(path)
+        paths.sort(key=lambda path: (
+            0 if path.name.startswith('pasted-text-') and path.suffix.lower() == '.txt' else 1,
+            path.relative_to(root).as_posix().lower(),
+        ))
+        for path in paths:
+            try:
+                raw = path.read_bytes()
+                if b'\x00' in raw[:4096]:
                     skipped += 1
                     continue
-                rel = path.relative_to(root).as_posix()
-                block = f'\n--- FILE: {rel} ---\n{content}\n'
-                if used + len(block) > MAX_WORKSPACE_CONTEXT:
-                    skipped += 1
-                    continue
-                chunks.append(block)
-                used += len(block)
-                included += 1
-        intro = 'Text file contents from this conversation’s isolated temporary workspace.'
+                content = raw.decode('utf-8')
+            except (OSError, UnicodeError):
+                skipped += 1
+                continue
+            rel = path.relative_to(root).as_posix()
+            header = f'\n--- FILE: {rel} ---\n'
+            remaining = MAX_WORKSPACE_CONTEXT - used - len(header) - 1
+            if remaining <= 0:
+                skipped += 1
+                continue
+            if len(content) > remaining:
+                suffix = '\n[Content truncated in this prompt to fit the 1.4 MB inline context budget. The full file remains in the chat workspace.]'
+                content = content[:max(0, remaining - len(suffix))] + suffix
+                truncated += 1
+            block = header + content + '\n'
+            chunks.append(block)
+            used += len(block)
+        intro = 'Text file contents from this conversation’s isolated temporary workspace. Uploaded ZIP files and folders are extracted automatically; use the extracted paths shown in the workspace tree.'
+        if truncated:
+            intro += f'\n{truncated} text file(s) are partially included because the inline text context is limited to 1.4 MB; the full files remain in the workspace.'
         if skipped:
-            intro += f'\n{skipped} file(s) were omitted from inline context because they were binary, unreadable, or over the per-file/context limit; they remain in the workspace ZIP.'
+            intro += f'\n{skipped} file(s) were omitted from inline text context because they were binary or unreadable; the original attachments remain in this workspace.'
+        image_paths = [item['path'] for item in self.context_file_list(chat_id) if item.get('image')]
+        if image_paths:
+            intro += '\nImage attachments available in the workspace: ' + ', '.join(image_paths[:80])
+            if len(image_paths) > 80:
+                intro += f' (and {len(image_paths) - 80} more)'
+            intro += '\nOnly make visual claims when the active model/provider has actual vision input or an available image-reading tool.'
         return intro + ('\n' + ''.join(chunks) if chunks else '\n(No readable text files attached yet.)')
 
     def chat_system_prompt(self, chat_id, mode="normal", effort="thinking"):
@@ -1982,12 +2128,30 @@ class KurtWebApp:
             pass
 
     def context_file_count(self, chat_id):
+        return len(self.context_file_list(chat_id))
+
+    def context_file_list(self, chat_id):
         root = self.chat_workspace(chat_id)
-        count = 0
+        items = []
         for current, dirs, files in os.walk(root):
-            dirs[:] = [d for d in dirs if not self._skip_context_dir(d)]
-            count += sum(1 for name in files if not self._skip_context_name(name) and name != '.DS_Store')
-        return count
+            dirs[:] = sorted(d for d in dirs if not self._skip_context_dir(d) and d not in ('.kurt_imports', '.kurt_inputs'))
+            for name in sorted(files):
+                if self._skip_context_name(name) or name == '.DS_Store':
+                    continue
+                path = Path(current) / name
+                if path.is_symlink() or '.kurt_imports' in path.parts or '.kurt_inputs' in path.parts:
+                    continue
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                mime_type = mimetypes.guess_type(name)[0] or 'application/octet-stream'
+                items.append({
+                    'path': path.relative_to(root).as_posix(), 'name': name,
+                    'size': size, 'type': mime_type, 'image': mime_type.startswith('image/'),
+                    'archive': path.suffix.lower() == '.zip',
+                })
+        return items
 
     def reset_chat_workspace(self, chat_id):
         root = self.chat_workspace(chat_id)
@@ -2160,7 +2324,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+            self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; font-src 'self' data: https://cdn.jsdelivr.net; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(data)
@@ -2203,7 +2367,31 @@ class Handler(BaseHTTPRequestHandler):
                 if not self.app.get_chat(chat_id):
                     self._json({"error": "Conversation not found."}, 404)
                     return
-                self._json({"files": self.app.context_file_count(chat_id)})
+                items = self.app.context_file_list(chat_id)
+                self._json({"files": len(items), "items": items})
+            elif parsed.path == "/api/context/preview":
+                args = parse_qs(parsed.query)
+                chat_id = str(args.get("chat_id", [""])[0])
+                if not self.app.get_chat(chat_id):
+                    self._json({"error": "Conversation not found."}, 404)
+                    return
+                relative = self.app._safe_context_relative(args.get("path", [""])[0])
+                image_path = self.app.resolve_chat_path(self.app.chat_workspace(chat_id), relative)
+                if not image_path.is_file() or image_path.is_symlink():
+                    self._json({"error": "Attachment not found."}, 404)
+                    return
+                content_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
+                if not content_type.startswith("image/") or image_path.stat().st_size > 8 * 1024 * 1024:
+                    self._json({"error": "Only images up to 8 MB can be previewed."}, 400)
+                    return
+                payload = image_path.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(payload)
             elif parsed.path == "/api/workspace/export":
                 args = parse_qs(parsed.query)
                 chat_id = str(args.get("chat_id", [""])[0])
