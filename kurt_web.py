@@ -91,9 +91,8 @@ in user-facing rationale; do not reveal private chain-of-thought or hidden scrat
 """
 
 EFFORT_INSTRUCTIONS = {
-    "flash": "FLASH EFFORT: prioritize speed and concise answers; request no reasoning where the provider supports disabling it. Some reasoning models enforce internal reasoning regardless of client settings.",
-    "thinking": "THINKING EFFORT: request medium reasoning where the provider supports effort controls. Include a useful user-facing rationale summary covering key observations, decisions, assumptions, and checks. Never expose private chain-of-thought or hidden scratchpad tokens.",
-    "expert": "EXPERT EFFORT: request high/deep reasoning where the provider supports effort controls and perform careful verification. Include a detailed user-facing rationale summary covering key observations, decisions, assumptions, alternatives, verification evidence, and remaining uncertainty. Never expose private chain-of-thought or hidden scratchpad tokens.",
+    "thinking": "THINKING EFFORT: request medium reasoning where the provider supports effort controls. Provide a concise, user-facing reasoning summary covering key observations, approach, assumptions, and checks. Use a provider-supplied reasoning-summary channel when available. Never reveal hidden chain-of-thought or private scratchpad content.",
+    "expert": "EXPERT EFFORT: request high/deep reasoning where the provider supports effort controls and perform careful verification. Provide a detailed, user-facing reasoning summary covering key observations, approach, assumptions, alternatives, verification evidence, and remaining uncertainty. Use a provider-supplied reasoning-summary channel when available. Never reveal hidden chain-of-thought or private scratchpad content.",
 }
 
 NORMAL_MODE_INSTRUCTIONS = r"""
@@ -170,19 +169,25 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .side-title{color:var(--muted);font-weight:600;font-size:12px;padding:16px 10px 6px}
 .side-heading{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:14px 8px 5px}
 .side-heading .side-title{padding:0}
-.chat-sort{max-width:112px;background:transparent;border:1px solid transparent;border-radius:7px;color:var(--muted);padding:3px 5px;font-size:11px}
-.chat-sort:hover{border-color:var(--line2);color:var(--text)}
+.chat-sort{max-width:112px}
+.custom-select.chat-sort .custom-select-trigger{padding:3px 5px;border-color:transparent;background:transparent;color:var(--muted);font-size:11px}
+.custom-select.chat-sort .custom-select-trigger:hover{border-color:var(--line2);color:var(--text)}
 .chat-list{overflow:auto;min-height:80px;flex:1}
 .chat-row{display:flex;align-items:center;gap:3px;margin:2px 0;padding:2px;border-radius:9px}
 .chat-row:hover,.chat-row.active{background:var(--raise)}
 .chat-item{flex:1;min-width:0;padding:6px 7px;border:0;background:transparent;text-align:left;cursor:pointer;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
 .chat-item:hover,.chat-row.active .chat-item{color:var(--text);background:transparent}
 .chat-item .pin-indicator{color:var(--green);margin-right:5px}
-.chat-actions{display:flex;gap:1px;flex:none;opacity:.55}
-.chat-row:hover .chat-actions,.chat-row:focus-within .chat-actions{opacity:1}
-.chat-action{width:25px;height:25px;padding:0;border:0;background:transparent;color:var(--muted);font-size:13px;border-radius:6px}
-.chat-action:hover{color:var(--text);background:var(--panel)}
-.chat-action.danger:hover{color:var(--danger)}
+.chat-actions{display:flex;flex:none;opacity:0;transition:opacity .16s ease}
+.chat-row:hover .chat-actions,.chat-row:focus-within .chat-actions,.chat-row.active .chat-actions{opacity:1}
+.chat-more{width:30px;height:30px;padding:0;border:0;background:transparent;color:var(--muted);font-size:20px;line-height:1;border-radius:7px}
+.chat-more:hover{color:var(--text);background:var(--panel)}
+.chat-context-menu{position:fixed;z-index:45;display:none;min-width:174px;padding:5px;background:var(--panel);border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);transform-origin:top right}
+.chat-context-menu.open{display:grid;animation:menuIn .14s ease both}
+.chat-context-menu button{width:100%;display:flex;align-items:center;gap:9px;padding:8px 10px;border:0;background:transparent;text-align:left;color:var(--text);font-size:13px}
+.chat-context-menu button:hover{background:var(--raise)}
+.chat-context-menu button.danger{color:var(--danger)}
+.chat-context-menu .menu-divider{height:1px;background:var(--line);margin:4px 2px}
 .side-bottom{border-top:1px solid var(--line);padding-top:8px;display:grid;gap:2px}
 .local-note{font-size:12px;color:var(--muted);padding:6px 10px 0}
 .status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:var(--green);margin-right:7px}
@@ -225,21 +230,24 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .assistant-heading .mark{width:24px;height:19.2px;padding:2px;border-radius:6px;background:#0b120e;color:#3dd66e;box-sizing:content-box}
 .assistant-status{font-weight:400;color:var(--muted);font-size:12px;margin-left:2px}
 .message.live .assistant-heading .mark{animation:blink 1.1s steps(2,start) infinite}
-.msg-foot{display:flex;align-items:center;gap:4px;margin-top:6px;min-height:30px}
+.msg-foot{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:6px;min-height:30px}
 .copy-msg{width:30px;height:30px}
 .copy-msg .ic{width:16px;height:16px}
+.response-metrics{min-width:0;color:var(--muted);font-size:11.5px;line-height:1.5;overflow-wrap:anywhere}
 .message.live .mark{animation:blink 1.1s steps(2,start) infinite}
 .message.live .copy-msg{visibility:hidden}
 @keyframes blink{50%{opacity:.35}}
-.think{margin:0 0 8px}
+.think{margin:0 0 8px;max-width:100%}
 .think[hidden]{display:none}
-.think-head{display:inline-flex;align-items:center;gap:6px;background:transparent;border:0;padding:3px 0;color:var(--muted);font-size:13.5px}
+.think-head{display:inline-flex;align-items:center;gap:7px;background:transparent;border:0;padding:4px 0;color:var(--muted);font-size:13px}
 .think-head:hover{color:var(--text)}
-.think-head .chev{width:15px;height:15px;transition:transform .15s;transform:rotate(-90deg)}
+.think-head .chev{width:15px;height:15px;transition:transform .24s cubic-bezier(.2,.75,.25,1);transform:rotate(-90deg)}
 .think.open .chev{transform:rotate(0deg)}
-.think-body{display:none;border-left:2px solid var(--line2);margin:6px 0 4px 5px;padding:2px 0 2px 14px;color:var(--muted);font-size:14px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto}
-.think.open .think-body{display:block}
+.think-body{display:block;max-height:0;opacity:0;overflow:hidden;border-left:2px solid var(--line2);margin:0 0 0 5px;padding:0 0 0 14px;color:var(--muted);font-size:14px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;transition:max-height .28s cubic-bezier(.2,.75,.25,1),opacity .2s ease,margin .2s ease,padding .2s ease}
+.think.open .think-body{max-height:5000px;opacity:1;margin:6px 0 4px 5px;padding:2px 0 2px 14px;overflow:auto}
 .think.live .think-label{background:linear-gradient(90deg,var(--muted) 30%,var(--text) 50%,var(--muted) 70%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shimmer 1.8s linear infinite}
+.reasoning-panel .think-body{border-left-color:var(--green);color:var(--text);max-height:0}
+.reasoning-panel.open .think-body{max-height:5000px}
 @keyframes shimmer{from{background-position:100% 0}to{background-position:-100% 0}}
 .codebox{background:var(--code);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:12px 0}
 .codehead{display:flex;justify-content:space-between;align-items:center;padding:5px 6px 5px 12px;border-bottom:1px solid var(--line);color:var(--muted);font:12px var(--mono)}
@@ -256,8 +264,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .artifact.bad .file-check{color:var(--danger)}
 .artifact-chev{color:var(--muted);transition:transform .15s;display:grid}
 .artifact.open .artifact-chev{transform:rotate(180deg)}
-.artifact-body{display:none;border-top:1px solid var(--line)}
-.artifact.open .artifact-body{display:block}
+.artifact-body{display:block;max-height:0;opacity:0;overflow:hidden;border-top:1px solid var(--line);transition:max-height .3s cubic-bezier(.2,.75,.25,1),opacity .2s ease}
+.artifact.open .artifact-body{max-height:12000px;opacity:1}
 .artifact-body .codebox{margin:0;border:0;border-radius:0}
 .artifact-actions{display:flex;gap:7px;padding:10px 12px;border-top:1px solid var(--line);flex-wrap:wrap}
 .artifact-actions button{font-size:13px}
@@ -300,9 +308,10 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .main.empty .chips{display:flex}
 .chip{border-radius:999px;background:transparent;border:1px solid var(--line2);color:var(--muted);padding:7px 15px;font-size:13.5px}
 .chip:hover{color:var(--text);border-color:var(--green);background:var(--raise)}
-.modal-backdrop{position:fixed;inset:0;background:rgba(4,10,7,.6);z-index:30;display:none;align-items:center;justify-content:center;padding:20px}
-.modal-backdrop.show{display:flex}
-.modal{width:min(850px,100%);max-height:88vh;overflow:auto;background:var(--panel);border:1px solid var(--line2);border-radius:14px;box-shadow:var(--shadow)}
+.modal-backdrop{position:fixed;inset:0;background:rgba(4,10,7,.6);z-index:30;display:flex;align-items:center;justify-content:center;padding:20px;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .2s ease,visibility .2s ease}
+.modal-backdrop.show{opacity:1;visibility:visible;pointer-events:auto}
+.modal{width:min(850px,100%);max-height:88vh;overflow:auto;background:var(--panel);border:1px solid var(--line2);border-radius:14px;box-shadow:var(--shadow);transform:translateY(12px) scale(.985);transition:transform .24s cubic-bezier(.2,.75,.25,1)}
+.modal-backdrop.show .modal{transform:translateY(0) scale(1)}
 .modal-head{position:sticky;top:0;z-index:2;background:var(--panel);padding:14px 20px;display:flex;align-items:center;border-bottom:1px solid var(--line)}
 .modal-head h2{font-size:17px;margin:0;flex:1}
 .modal-body{padding:18px 20px 24px}
@@ -315,8 +324,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .settings-nav-btn:hover{background:var(--raise);color:var(--text)}
 .settings-nav-btn.active{background:var(--green-soft);border-color:var(--line2);color:var(--text);font-weight:650}
 .settings-panel-area{min-width:0;min-height:0;overflow-y:auto;padding:22px 25px 28px}
-.settings-panel{display:none;max-width:760px}
-.settings-panel.active{display:block}
+.settings-panel{display:block;max-width:760px;max-height:0;opacity:0;overflow:hidden;pointer-events:none;transform:translateY(5px);transition:max-height .32s cubic-bezier(.2,.75,.25,1),opacity .2s ease,transform .24s ease}
+.settings-panel.active{max-height:12000px;opacity:1;pointer-events:auto;transform:translateY(0)}
 .settings-panel>h3{font-size:18px;letter-spacing:-.01em;margin:0 0 5px}
 .settings-panel>.inline-note{margin:0 0 18px;line-height:1.55}
 .model-download-card{padding:14px;border:1px solid var(--line2);border-radius:11px;background:var(--bg);margin-top:16px}
@@ -395,7 +404,7 @@ body.nav-open .scrim{display:block;position:fixed;inset:0;background:rgba(4,10,7
 .main{display:flex;flex:1 0 auto;flex-direction:row;align-items:stretch;justify-content:flex-start;width:100%;min-width:0;min-height:calc(100vh - 54px);min-height:calc(100dvh - 54px);padding-bottom:0}
 .chat-area{display:flex;flex:1 1 0%;flex-direction:column;width:100%;max-width:100%;min-width:0;min-height:calc(100vh - 54px);min-height:calc(100dvh - 54px)}
 .main.has-artifacts .chat-area{flex:0 0 50%;width:50%;max-width:50%}
-.artifact-pane{display:none;flex:0 0 50%;width:50%;min-width:0;max-width:50%;min-height:calc(100vh - 54px);min-height:calc(100dvh - 54px);overflow-y:auto;overscroll-behavior:contain;padding:14px 18px 24px;background:var(--side);border-left:1px solid var(--line)}
+.artifact-pane{display:none;position:fixed;top:54px;right:0;bottom:0;z-index:18;width:calc((100vw - 268px)/2);min-width:0;max-width:none;min-height:0;height:auto;overflow-y:auto;overscroll-behavior:contain;padding:14px 18px 24px;background:var(--side);border-left:1px solid var(--line);box-shadow:-12px 0 32px rgba(0,0,0,.12)}
 .main.has-artifacts .artifact-pane{display:flex;flex-direction:column}
 .artifact-pane-head{position:sticky;top:-14px;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:10px;margin:-14px -18px 14px;padding:15px 18px 12px;background:var(--side);border-bottom:1px solid var(--line)}
 .artifact-pane-head>div{display:flex;flex:1;flex-direction:column;gap:2px;min-width:0}
@@ -445,16 +454,102 @@ body.compact-scroll .messages{min-height:0;flex:1 1 auto;overflow-y:auto;overscr
 body.compact-scroll .main.empty{min-height:0}
 body.compact-scroll .main.empty .messages{flex:1 1 auto;overflow-y:auto}
 body.compact-scroll .composer-wrap{flex-shrink:0}
-body.compact-scroll .artifact-pane{height:100%;min-height:0;overflow-y:auto}
+body.compact-scroll .artifact-pane{top:54px;bottom:0;height:auto;min-height:0;overflow-y:auto}
 @media(max-width:900px){.main.has-artifacts .messages{padding-left:14px;padding-right:14px}.artifact-pane{padding-left:12px;padding-right:12px}.artifact-pane-head{margin-left:-12px;margin-right:-12px;padding-left:12px;padding-right:12px}}
 @media(max-width:700px){
-.main.has-artifacts{flex-direction:column}
-.main.has-artifacts .chat-area{flex:1 1 auto;width:100%;max-width:none}
-.main.has-artifacts .artifact-pane{flex:0 0 auto;width:100%;max-width:none;min-height:45vh;max-height:70vh;border-left:0;border-top:1px solid var(--line)}
-.artifact-pane .artifact-body .codebox pre{max-height:42vh}
-body.compact-scroll .main.has-artifacts .chat-area{flex:1 1 60%;height:auto;min-height:0}
-body.compact-scroll .main.has-artifacts .artifact-pane{flex:0 0 40%;height:auto;min-height:0;max-height:none}
+.main.has-artifacts{flex-direction:row}
+.main.has-artifacts .chat-area{flex:1 1 100%;width:100%;max-width:100%}
+.main.has-artifacts .artifact-pane{top:54px;right:0;bottom:0;left:0;width:100vw;max-width:none;min-height:0;max-height:none;border-left:0;border-top:0;padding:12px 14px 20px}
+.artifact-pane .artifact-body .codebox pre{max-height:calc(100dvh - 220px)}
 }
+
+/* Fully styled dropdowns and in-app dialogs */
+.custom-select{position:relative;display:inline-flex;min-width:0;vertical-align:middle}
+.custom-select-trigger{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-width:0;padding:7px 10px;border:1px solid var(--line2);border-radius:9px;background:var(--raise);color:var(--text);font-size:13px;text-align:left;white-space:nowrap}
+.custom-select-trigger:after{content:"";width:7px;height:7px;flex:none;border-right:1.7px solid currentColor;border-bottom:1.7px solid currentColor;transform:rotate(45deg) translateY(-2px);transition:transform .18s ease}
+.custom-select.open .custom-select-trigger:after{transform:rotate(225deg) translate(-1px,-1px)}
+.custom-select-menu{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:42;display:none;max-height:min(340px,55vh);overflow:auto;padding:5px;background:var(--panel);border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);transform-origin:top center}
+.custom-select.open .custom-select-menu{display:block;animation:menuIn .15s ease both}
+.custom-select-option{display:block;width:100%;padding:8px 9px;border:0;border-radius:7px;background:transparent;color:var(--text);text-align:left;font-size:13px;white-space:normal}
+.custom-select-option:hover,.custom-select-option[aria-selected=true]{background:var(--raise);color:var(--green)}
+.custom-select-option:disabled{opacity:.4;cursor:not-allowed}
+.custom-select-group{padding:7px 9px 3px;color:var(--muted);font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.custom-select-native{display:none!important}
+.custom-select.model-pill{max-width:260px;min-width:0}
+.custom-select.model-pill .custom-select-trigger{border:0;background:transparent;color:var(--muted);padding:6px 8px}
+.custom-select.model-pill .custom-select-trigger:hover{background:var(--raise);color:var(--text)}
+.custom-select.mode-pill{max-width:140px;min-width:86px}
+.custom-select.mode-pill .custom-select-trigger{padding:5px 8px;background:transparent;color:var(--muted);font-size:12px}
+.custom-select.chat-sort{max-width:112px;min-width:0}
+.custom-select.chat-sort .custom-select-menu{min-width:120px;left:auto;right:0}
+.field>.custom-select{width:100%}
+.field>.custom-select .custom-select-trigger{background:var(--bg)}
+@keyframes menuIn{from{opacity:0;transform:translateY(-4px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
+.dialog-backdrop{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(4,10,7,.62);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .18s ease,visibility .18s ease}
+.dialog-backdrop.show{opacity:1;visibility:visible;pointer-events:auto}
+.app-dialog{width:min(470px,100%);padding:20px;background:var(--panel);border:1px solid var(--line2);border-radius:14px;box-shadow:var(--shadow);transform:translateY(10px) scale(.985);transition:transform .22s cubic-bezier(.2,.75,.25,1)}
+.dialog-backdrop.show .app-dialog{transform:translateY(0) scale(1)}
+.app-dialog h2{margin:0 0 7px;font-size:17px}
+.dialog-message{margin:0 0 15px;color:var(--muted);font-size:13px;white-space:pre-wrap}
+.dialog-fields{display:grid;gap:11px}
+.dialog-field{display:grid;gap:5px;color:var(--muted);font-size:12px}
+.dialog-field input,.dialog-field textarea{width:100%;padding:9px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);color:var(--text);outline:none}
+.dialog-field input:focus,.dialog-field textarea:focus{border-color:var(--green)}
+.dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.dialog-actions .danger{background:var(--danger);border-color:var(--danger);color:#fff}
+@media(max-width:700px){.custom-select.model-pill{max-width:42vw}.custom-select.mode-pill{max-width:22vw;min-width:0}.custom-select-trigger{font-size:12px}.chat-more{opacity:1}}
+@media(prefers-reduced-motion:reduce){.custom-select-menu,.app-dialog,.modal,.modal-backdrop,.artifact-body,.think-body,.settings-panel{transition:none!important;animation:none!important}}
+
+
+.modal-backdrop{display:flex;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .2s ease,visibility .2s ease}
+.modal-backdrop.show{display:flex;opacity:1;visibility:visible;pointer-events:auto}
+.modal{transform:translateY(9px) scale(.99);transition:transform .22s cubic-bezier(.2,.75,.25,1)}
+.modal-backdrop.show .modal{transform:translateY(0) scale(1)}
+/* Smoothly animate custom menus in both directions. */
+.custom-select-menu{display:block;visibility:hidden;opacity:0;pointer-events:none;max-height:0;overflow:hidden;transform:translateY(-4px) scale(.985);transition:max-height .18s ease,opacity .15s ease,transform .15s ease,visibility .15s}
+.custom-select.open .custom-select-menu{display:block;visibility:visible;opacity:1;pointer-events:auto;max-height:min(340px,55vh);transform:translateY(0) scale(1);animation:none;overflow:auto}
+.chat-context-menu{display:grid;visibility:hidden;opacity:0;pointer-events:none;transform:translateY(-4px);transition:opacity .14s ease,transform .14s ease,visibility .14s}
+.chat-context-menu.open{display:grid;visibility:visible;opacity:1;pointer-events:auto;transform:translateY(0);animation:none}
+
+/* Stable viewport: the conversation scrolls, while the composer stays at the bottom. */
+html,body{height:100%;min-height:100%;overflow:hidden}
+.app{height:100vh;height:100dvh;min-height:0}
+.stage{display:flex;flex-direction:column;height:100vh;height:100dvh;min-height:0;overflow:hidden}
+.topbar{flex:0 0 54px;min-height:54px}
+.download-strip{flex:0 0 2px}
+.main{flex:1 1 auto;height:calc(100dvh - 56px);min-height:0;overflow:hidden}
+.chat-area{height:100%;min-height:0;overflow:hidden;flex:1 1 0%;display:flex;flex-direction:column}
+.main .messages{flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain}
+.main.empty .messages{flex:1 1 auto;min-height:0;overflow-y:auto}
+.composer-wrap{flex:0 0 auto;margin-top:auto;padding-bottom:max(10px,env(safe-area-inset-bottom))}
+.main.has-artifacts .chat-area{height:100%;min-height:0}
+.main.has-artifacts .messages{min-height:0;flex:1 1 auto;overflow-y:auto}
+.artifact-pane{top:54px;bottom:0;height:auto}
+.custom-select-menu{transform-origin:top center}
+.compose-bottom .custom-select-menu{top:auto;bottom:calc(100% + 7px);transform-origin:bottom center}
+.compose-bottom .custom-select{z-index:1}
+.compose-bottom .custom-select.open{z-index:50}
+.think-body,.work-log-body{display:block;max-height:0;overflow:hidden;opacity:0;transition:max-height .24s ease,opacity .2s ease,margin .2s ease}
+.think.open .think-body,.work-log.open .work-log-body{max-height:420px;overflow:auto;opacity:1}
+.work-log-body{padding-top:0;padding-bottom:0}
+.work-log.open .work-log-body{padding-top:3px;padding-bottom:9px}
+.work-log:not(.open) .work-log-body{display:block}
+.reasoning-panel{padding:0 0 3px}
+.reasoning-panel .think-body{max-height:0}
+.reasoning-panel.open .think-body{max-height:320px}
+.artifact-body{display:block;max-height:0;overflow:hidden;opacity:0;transition:max-height .28s ease,opacity .2s ease}
+.artifact.open .artifact-body{max-height:3000px;opacity:1}
+.artifact .artifact-body .codebox pre{max-height:48vh;overflow:auto}
+.work-detail{max-height:0;overflow:hidden;transition:max-height .22s ease,opacity .18s ease;opacity:0}
+.work-step[open] .work-detail{max-height:1200px;opacity:1}
+.settings-panel{display:block;max-width:760px;max-height:0;overflow:hidden;opacity:0;transition:max-height .3s ease,opacity .2s ease}
+.settings-panel.active{display:block;max-height:5000px;opacity:1}
+.key-sort-row{margin:12px 0 6px;justify-content:flex-end}
+.key-sort-row>span{flex:1}
+.chat-actions{opacity:0}
+.chat-row:hover .chat-actions,.chat-row:focus-within .chat-actions,.chat-row.active .chat-actions{opacity:1}
+@media(max-width:700px){.main.has-artifacts .chat-area{height:100%;min-height:0}.artifact-pane{top:54px;bottom:0}.chat-actions{opacity:1}}
+@media(prefers-reduced-motion:reduce){.think-body,.work-log-body,.artifact-body,.work-detail,.settings-panel{transition:none!important}}
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -471,7 +566,6 @@ body.compact-scroll .main.has-artifacts .artifact-pane{flex:0 0 40%;height:auto;
 <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></symbol>
 <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
 <symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></symbol>
-<symbol id="i-scroll" viewBox="0 0 24 24"><path d="M8 4v16M5 7l3-3 3 3M5 17l3 3 3-3M16 6h4M16 12h4M16 18h4"/></symbol>
 </svg>
 <div class="scrim" id="scrim"></div>
 <div class="app">
@@ -490,7 +584,7 @@ body.compact-scroll .main.has-artifacts .artifact-pane{flex:0 0 40%;height:auto;
 <header class="topbar">
 <button class="icon-btn menu-btn" id="menuBtn" aria-label="Open menu"><svg class="ic"><use href="#i-menu"/></svg></button>
 <div class="titles"><div id="chatTitle" class="chat-title">New chat</div><div id="chatMeta" class="chat-meta"></div></div>
-<button class="icon-btn" id="scrollModeBtn" title="Enable compact internal scrolling" aria-label="Enable compact internal scrolling" aria-pressed="false"><svg class="ic"><use href="#i-scroll"/></svg></button>
+
 <button class="icon-btn" id="clearChat" title="Clear conversation messages" aria-label="Clear conversation messages"><svg class="ic"><use href="#i-trash"/></svg></button>
 <button class="icon-btn" id="themeBtn" title="Switch colour theme" aria-label="Switch colour theme"><svg class="ic"><use href="#i-theme"/></svg></button>
 </header>
@@ -506,7 +600,7 @@ body.compact-scroll .main.has-artifacts .artifact-pane{flex:0 0 40%;height:auto;
 <div class="compose-bottom">
 <button class="icon-btn" id="contextBtn" title="Attach workspace files" aria-label="Attach workspace files"><svg class="ic"><use href="#i-plus"/></svg></button>
 <span class="spacer"></span>
-<select id="effortSelect" class="mode-pill" title="Response effort" aria-label="Response effort"><option value="flash">Flash</option><option value="thinking" selected>Thinking</option><option value="expert">Expert</option></select>
+<select id="effortSelect" class="mode-pill" title="Response effort" aria-label="Response effort"><option value="thinking" selected>Thinking</option><option value="expert">Expert</option></select>
 <select id="operationMode" class="mode-pill" title="Operating mode" aria-label="Operating mode"><option value="normal" selected>Normal</option><option value="code">Code</option></select>
 <select id="topModel" class="model-pill" title="Active model" aria-label="Active model"></select>
 <button class="send" id="sendBtn" title="Send message" aria-label="Send message" disabled><svg class="ic"><use href="#i-up"/></svg></button>
@@ -527,41 +621,72 @@ body.compact-scroll .main.has-artifacts .artifact-pane{flex:0 0 40%;height:auto;
 <button class="settings-nav-btn active" type="button" data-settings-tab="general">General</button>
 <button class="settings-nav-btn" type="button" data-settings-tab="local-models">Local models</button>
 <button class="settings-nav-btn" type="button" data-settings-tab="api-keys">API key groups</button>
-<button class="settings-nav-btn" type="button" data-settings-tab="remote-models">Remote API models</button>
+
 </nav>
 <div class="settings-panel-area">
 <section class="settings-panel active" data-settings-panel="general">
 <h3>General</h3><div class="inline-note">Choose the model Kurt uses by default and configure the project workspace.</div>
-<div class="settings-grid"><div class="field"><label>Active model</label><select id="settingsModel"></select></div><div class="field"><label>Project directory (read-only by default)</label><input id="projectRoot" placeholder="/Users/you/project"></div></div>
+<div class="settings-grid"><div class="field"><label>Default chat route</label><select id="settingsModel"></select></div><div class="field"><label>Project directory (read-only by default)</label><input id="projectRoot" placeholder="/Users/you/project"></div></div>
 <label class="check-row"><input id="allowProjectWrites" type="checkbox"> Allow applying generated files to the project (each file still requires confirmation)</label>
 <div class="field"><label>System prompt</label><textarea id="systemPrompt" style="min-height:180px"></textarea><div class="inline-note">Kurt can review and propose edits to this prompt in chat. Proposed prompt changes appear as a review card and require your approval before saving. Type /system-prompt in chat to display the exact active Kurt prompt for the selected mode.</div></div>
 <div class="row"><button class="primary" id="saveSettings">Save settings</button><button id="reloadSettings">Reload from disk</button></div>
 </section>
 <section class="settings-panel" id="localModelsSection" data-settings-panel="local-models">
-<h3>Local models</h3><div class="inline-note">Manage models installed through Ollama. Choose an installed model to make it active, or download another model to this computer.</div>
+<h3>Local models</h3><div class="inline-note">Installed Ollama models are sorted by name. You can also download models and add API keys here.</div>
 <div id="localModelList"></div>
 <div class="model-download-card"><h4>Download a model</h4><p>Enter an Ollama model ID, for example <code>qwen2.5-coder:7b</code>. Downloads run in the background and progress appears at the top of Kurt.</p><div class="row"><input id="downloadModel" aria-label="Ollama model name" placeholder="Model ID, e.g. qwen2.5-coder:7b"><button id="startDownload" class="primary">Download model</button></div><div class="inline-note" id="localDownloadStatus">No model download started.</div></div>
+<div class="section"><h3>API keys</h3><div class="inline-note">Keys are stored locally. Use a key group to rotate through its saved keys, or select an individual key when chatting.</div>
+<div class="settings-grid"><div class="field"><label>Provider</label><select id="keyProvider"></select></div><div class="field"><label>Key group</label><input id="keyGroup" value="default" placeholder="e.g. personal"></div><div class="field"><label>Account label</label><input id="keyLabel" placeholder="Personal account"></div><div class="field"><label>API key</label><input id="keyValue" type="password" autocomplete="off" placeholder="Paste API key (stored locally)"></div></div><button id="addKey" class="primary">Add API key</button>
+<div class="row key-sort-row"><span class="inline-note">Sort keys</span><select id="keySort" aria-label="Sort API keys"><option value="name">Name</option><option value="date">Date added</option></select></div><div id="keysList"></div></div>
 </section>
 <section class="settings-panel" data-settings-panel="api-keys">
-<h3>API key groups</h3><div class="inline-note">Keys in the same provider and group form a rotation pool. Kurt retries another key for quota, rate-limit, authentication, server, and connection errors before response content starts.</div>
-<div id="keysList"></div>
-<div class="section"><h3>Add an API key</h3><div class="settings-grid"><div class="field"><label>Provider</label><select id="keyProvider"></select></div><div class="field"><label>Key group</label><input id="keyGroup" list="keyPoolOptions" value="default" placeholder="e.g. personal"></div><div class="field"><label>Account label</label><input id="keyLabel" placeholder="Personal account"></div><div class="field"><label>API key</label><input id="keyValue" type="password" placeholder="Paste key (stored locally)"></div></div><button id="addKey" class="primary">Add API key</button><datalist id="keyPoolOptions"></datalist></div>
-</section>
-<section class="settings-panel" data-settings-panel="remote-models">
-<h3>Remote API models</h3><div class="inline-note">Register models from Claude, OpenAI, Grok, OpenRouter, and other configured providers. Each model uses the provider and key group selected below.</div>
-<div class="section" style="border-top:0;margin-top:0;padding-top:0"><div class="settings-grid"><div class="field"><label>Provider</label><select id="remoteProvider"></select></div><div class="field"><label>API model ID</label><input id="remoteModelId" placeholder="e.g. openrouter/free"></div><div class="field"><label>Display name</label><input id="remoteLabel" placeholder="Model name"></div><div class="field"><label>Key group</label><input id="remoteGroup" list="keyPoolOptions" value="default"></div><div class="field" style="grid-column:1/-1"><label>API base URL (optional for standard providers)</label><input id="remoteBase" placeholder="https://api.example.com/v1"></div></div><button id="addRemote" class="primary">Add remote model</button></div>
-<div id="remoteList" style="margin-top:18px"></div>
+<h3>API key groups</h3><div class="inline-note">Create named routes that connect an installed local model or an API model to one key or a rotating key pool. Pick a route, a single key, or a full group beside the message box.</div>
+<div class="section" style="border-top:0;margin-top:0;padding-top:0">
+<div class="settings-grid"><div class="field"><label>Group name</label><input id="groupName" placeholder="e.g. Work, Fast, Coding"></div><div class="field"><label>Group source</label><select id="groupSource"><option value="local">Local model</option><option value="api">API model + key</option></select></div></div>
+<div id="groupLocalFields"><div class="field"><label>Local model</label><select id="groupLocalModel"></select></div></div>
+<div id="groupApiFields" hidden><div class="settings-grid"><div class="field"><label>Provider</label><select id="groupProvider"></select></div><div class="field"><label>API model ID</label><input id="groupModelId" placeholder="e.g. claude-sonnet-4-5"></div><div class="field"><label>Display name</label><input id="groupLabel" placeholder="Model name"></div><div class="field"><label>API key group</label><select id="groupPool"></select></div><div class="field"><label>Key used by this group</label><select id="groupKeyId"><option value="pool">All keys in this group (automatic failover)</option></select></div><div class="field"><label>API base URL (optional)</label><input id="groupBase" placeholder="Use provider default"></div></div></div>
+<div class="row"><button id="saveApiGroup" class="primary">Create group</button><button id="cancelApiGroup" hidden>Cancel edit</button></div></div>
+<div id="apiGroupsList"></div>
 </section>
 </div></div></div>
 <div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files</h2><button class="ghost" data-close="filesModal">Close</button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Choose files or a folder from your computer. This opens the standard macOS Finder or Windows File Explorer picker. Images and other binary files are kept in this chat workspace; readable source files are added to Kurt’s context. Your original files are not changed.</p><div class="file-source"><h3>From this computer</h3><div class="file-actions"><button id="chooseLocalFiles" class="primary">Choose files</button><button id="chooseLocalFolder">Choose folder</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList">No files selected.</div></div><div class="file-source"><h3>From the configured project</h3><div class="row"><input id="fileFolder" value="" placeholder="Project folder path"><button id="refreshFiles">Open</button><button id="selectCurrentFolder">Add this folder</button></div><div class="file-picker" id="filePicker"></div></div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
 <div class="toast" id="toast"></div>
+<div class="chat-context-menu" id="chatContextMenu" role="menu"></div>
+<div class="dialog-backdrop" id="appDialogBackdrop"><form class="app-dialog" id="appDialogForm"><h2 id="appDialogTitle"></h2><p class="dialog-message" id="appDialogMessage"></p><div class="dialog-fields" id="appDialogFields"></div><div class="dialog-actions"><button type="button" id="appDialogCancel">Cancel</button><button type="submit" class="primary" id="appDialogConfirm">Save</button></div></form></div>
 <script>
-const TOKEN='__TOKEN__';const HINT='Kurt can make mistakes. Attachments are copied into an isolated chat workspace; the project stays unchanged unless you explicitly apply a file.';let state={models:[],providers:[],keys:[],remoteModels:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',effort:'thinking',mode:'normal'};
+const TOKEN='__TOKEN__';const HINT='Kurt can make mistakes. Attachments are copied into an isolated chat workspace; the project stays unchanged unless you explicitly apply a file.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null};
 const $=id=>document.getElementById(id);const api=async(path,body)=>{const res=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:body?JSON.stringify(body):undefined});const data=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(data.error||res.statusText);return data};
 function toast(msg){const el=$('toast');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600)}
-function setScrollMode(enabled){const compact=!!enabled;document.body.classList.toggle('compact-scroll',compact);const b=$('scrollModeBtn');if(b){b.setAttribute('aria-pressed',String(compact));b.title=compact?'Use normal page scrolling':'Enable compact internal scrolling';b.setAttribute('aria-label',b.title)}try{localStorage.setItem('kurt-compact-scroll',compact?'1':'0')}catch(e){}}
+
+function inAppDialog(options={}){
+ return new Promise(resolve=>{
+  const backdrop=$('appDialogBackdrop'),form=$('appDialogForm'),fieldsRoot=$('appDialogFields');
+  $('appDialogTitle').textContent=options.title||'Confirm';$('appDialogMessage').textContent=options.message||'';fieldsRoot.replaceChildren();
+  $('appDialogConfirm').textContent=options.confirmText||'Save';$('appDialogConfirm').classList.toggle('danger',!!options.danger);
+  const controls=[];
+  (options.fields||[]).forEach(field=>{const label=document.createElement('label');label.className='dialog-field';label.textContent=field.label||field.name;const control=document.createElement(field.multiline?'textarea':'input');if(!field.multiline)control.type=field.type||'text';control.value=field.value??'';control.placeholder=field.placeholder||'';control.autocomplete=field.autocomplete||'off';control.required=!!field.required;if(field.maxLength)control.maxLength=field.maxLength;label.appendChild(control);fieldsRoot.appendChild(label);controls.push({name:field.name,control})});
+  let settled=false;const finish=value=>{if(settled)return;settled=true;backdrop.classList.remove('show');form.onsubmit=null;$('appDialogCancel').onclick=null;backdrop.onclick=null;document.removeEventListener('keydown',onKey);resolve(value)};
+  const onKey=e=>{if(e.key==='Escape'){e.preventDefault();finish(null)}};
+  form.onsubmit=e=>{e.preventDefault();if(!form.reportValidity())return;finish(controls.length?Object.fromEntries(controls.map(x=>[x.name,x.control.value])):true)};
+  $('appDialogCancel').onclick=()=>finish(null);backdrop.onclick=e=>{if(e.target===backdrop)finish(null)};document.addEventListener('keydown',onKey);backdrop.classList.add('show');setTimeout(()=>{(controls[0]?.control||$('appDialogConfirm')).focus()},30);
+ });
+}
+async function confirmInApp(title,message,confirmText='Confirm',danger=false){return (await inAppDialog({title,message,confirmText,danger}))!==null}
+function closeCustomSelects(except){document.querySelectorAll('.custom-select.open').forEach(w=>{if(w!==except){w.classList.remove('open');w.querySelector('.custom-select-trigger')?.setAttribute('aria-expanded','false')}})}
+function syncSelect(select){const wrap=select?._customWrap;if(!wrap)return;const option=select.options[select.selectedIndex];wrap.querySelector('.custom-select-trigger').textContent=option?.textContent||'Choose…';wrap.querySelectorAll('.custom-select-option').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.value===select.value)))}
+function enhanceSelect(select){
+ if(!select||select._customWrap)return;const wrap=document.createElement('div');wrap.className='custom-select '+Array.from(select.classList).join(' ');const trigger=document.createElement('button');trigger.type='button';trigger.className='custom-select-trigger';trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');trigger.setAttribute('aria-label',select.getAttribute('aria-label')||select.title||'Choose an option');const menu=document.createElement('div');menu.className='custom-select-menu';menu.setAttribute('role','listbox');select.parentNode.insertBefore(wrap,select);wrap.append(select,trigger,menu);select.classList.add('custom-select-native');select._customWrap=wrap;
+ const build=()=>{menu.replaceChildren();let group='';Array.from(select.options).forEach(option=>{const groupName=option.parentElement?.tagName==='OPTGROUP'?option.parentElement.label:'';if(groupName&&groupName!==group){group=groupName;const heading=document.createElement('div');heading.className='custom-select-group';heading.textContent=groupName;menu.appendChild(heading)}const button=document.createElement('button');button.type='button';button.className='custom-select-option';button.textContent=option.textContent;button.dataset.value=option.value;button.disabled=option.disabled;button.setAttribute('role','option');button.setAttribute('aria-selected',String(option.value===select.value));button.onclick=()=>{select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));wrap.classList.remove('open');trigger.setAttribute('aria-expanded','false');trigger.focus()};menu.appendChild(button)});syncSelect(select)};
+ trigger.onclick=()=>{const open=!wrap.classList.contains('open');closeCustomSelects(wrap);wrap.classList.toggle('open',open);trigger.setAttribute('aria-expanded',String(open))};trigger.onkeydown=e=>{if(['ArrowDown','Enter',' '].includes(e.key)){e.preventDefault();wrap.classList.add('open');trigger.setAttribute('aria-expanded','true');menu.querySelector('.custom-select-option:not(:disabled)')?.focus()}else if(e.key==='Escape'){wrap.classList.remove('open');trigger.setAttribute('aria-expanded','false')}};select.addEventListener('change',build);const observer=new MutationObserver(build);observer.observe(select,{childList:true,subtree:true,attributes:true,characterData:true});select._customObserver=observer;build();
+}
+function enhanceAllSelects(root=document){root.querySelectorAll('select').forEach(enhanceSelect)}
+function setSelectOptions(select,items,placeholder=''){if(!select)return;const current=select.value;select.innerHTML='';if(placeholder){const option=document.createElement('option');option.value='';option.textContent=placeholder;option.disabled=true;select.appendChild(option)}items.forEach(item=>{const option=document.createElement('option');option.value=item.value;option.textContent=item.label;select.appendChild(option)});if(items.some(item=>item.value===current))select.value=current;else if(items.length)select.value=items[0].value;syncSelect(select)}
+
 function modelLabel(m){return `${m.label||m.name||m.model} · ${m.provider}${m.current?' · active':''}`}
-function fillModels(){const html=state.models.map(m=>`<option value="${esc(m.ref)}">${esc(modelLabel(m))}</option>`).join('');$('topModel').innerHTML=html||'<option>No models configured</option>';$('settingsModel').innerHTML=html||'<option>No models configured</option>';if(state.settings.model){$('topModel').value=state.settings.model;$('settingsModel').value=state.settings.model}renderLocalModels()}
+function fillModels(){
+ const routes=(state.routes||[]).map(route=>({value:route.value,label:route.label}));const fallback=state.models.filter(model=>model.type==='local').map(model=>({value:'model|'+model.ref,label:'Local · '+modelLabel(model)}));const options=routes.length?routes:fallback;
+ setSelectOptions($('topModel'),options,'No routes configured');setSelectOptions($('settingsModel'),options,'No routes configured');const preferred=state.settings.default_route||'';if(options.some(item=>item.value===preferred)){$('topModel').value=preferred;$('settingsModel').value=preferred}else if(options.length){$('settingsModel').value=$('topModel').value}syncSelect($('topModel'));syncSelect($('settingsModel'));renderLocalModels();
+}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function stripUnsupportedActions(src){return String(src||'')
  .replace(/@@@\s*(?:RUN|SEARCH|SYSTEM_PROMPT|READ|EXEC|BASH|SHELL)\b[\s\S]*?(?:@@@\s*END\b|$)/gi,'')
@@ -574,12 +699,14 @@ function renderMarkdown(src){src=String(src||'');return src.split(/(```[^\n]*\n[
 function splitThink(raw,streaming){let think='',answer='',open=false;const closer=/<\/think(?:ing)?>/i.exec(raw),opener=/<think(?:ing)?>/i.exec(raw);if(closer&&(!opener||closer.index<opener.index)){think+=raw.slice(0,closer.index)+'\n';raw=raw.slice(closer.index+closer[0].length)}while(raw.length){const m=/<think(?:ing)?>/i.exec(raw);if(!m){answer+=raw;break}answer+=raw.slice(0,m.index);const after=raw.slice(m.index+m[0].length);const c=/<\/think(?:ing)?>/i.exec(after);if(!c){think+=after;open=true;break}think+=after.slice(0,c.index)+'\n';raw=after.slice(c.index+c[0].length)}answer=answer.replace(/^\s+/,'');if(streaming)answer=answer.replace(/<\/?(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?$/i,'');return{think:think.trim(),answer,open}}
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
 function bindCopy(root){root.querySelectorAll('[data-copy-code]').forEach(b=>b.onclick=()=>{const code=b.closest('.codebox').querySelector('code');navigator.clipboard.writeText(code?code.textContent:'').then(()=>toast('Code copied'))})}
-function thinkBlock(){const d=document.createElement('div');d.className='think work-log open';d.hidden=true;d.innerHTML='<button class="work-log-head" type="button" aria-expanded="true"><svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Reasoning summaries & execution trace</span></button><div class="work-log-body"></div>';d.querySelector('.work-log-head').onclick=()=>{const open=d.classList.toggle('open');d.querySelector('.work-log-head').setAttribute('aria-expanded',String(open))};return d}
-function setThink(node,entries){const t=node.querySelector('.work-log');if(!t)return;const items=Array.isArray(entries)?entries:[];if(!items.length){t.hidden=true;return}t.hidden=false;const head=t.querySelector('.work-log-head');const body=t.querySelector('.work-log-body');const initialized=t.dataset.initialized==='1';const parentOpen=initialized?t.classList.contains('open'):true;const childStates=new Map(Array.from(body.querySelectorAll('details.work-step')).map(row=>[row.querySelector('summary')?.textContent,row.open]));if(!initialized)t.dataset.initialized='1';t.classList.toggle('open',parentOpen);head.setAttribute('aria-expanded',String(parentOpen));body.innerHTML='';items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const summary=String(data.text||'Progress update');const detail=String(data.detail||'');if(detail&&detail!==summary){const row=document.createElement('details');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');row.open=childStates.has(summary)?childStates.get(summary):true;const label=document.createElement('summary');label.textContent=summary;const contents=document.createElement('div');contents.className='work-detail';contents.textContent=detail;row.append(label,contents);body.appendChild(row)}else{const row=document.createElement('div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');row.textContent=summary;body.appendChild(row)}});t.querySelector('.think-label').textContent='Reasoning summaries & execution trace · '+items.length+' step(s)'}
+function reasoningBlock(){const d=document.createElement('div');d.className='think reasoning-panel';d.hidden=true;d.innerHTML='<button class="think-head" type="button" aria-expanded="false"><svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Model reasoning summary</span></button><div class="think-body"></div>';d.querySelector('.think-head').onclick=()=>{const open=d.classList.toggle('open');d.querySelector('.think-head').setAttribute('aria-expanded',String(open));d.dataset.userCollapsed=open?'':'1'};return d}
+function thinkBlock(){const d=document.createElement('div');d.className='think work-log';d.hidden=true;d.innerHTML='<button class="work-log-head" type="button" aria-expanded="false"><svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Workspace activity</span></button><div class="work-log-body"></div>';d.querySelector('.work-log-head').onclick=()=>{const open=d.classList.toggle('open');d.querySelector('.work-log-head').setAttribute('aria-expanded',String(open))};return d}
+function setReasoning(node,text,live=false){const panel=node.querySelector('.reasoning-panel');if(!panel)return;const value=String(text||'').trim();if(!value){panel.hidden=true;return}panel.hidden=false;panel.querySelector('.think-body').textContent=value;panel.classList.toggle('live',!!live);if(live&&!panel.dataset.userCollapsed){panel.classList.add('open');panel.querySelector('.think-head').setAttribute('aria-expanded','true')}}
+function setThink(node,entries){const panel=node.querySelector('.work-log');if(!panel)return;const relevant=/^(Running command:|PASSED:|FAILED:|Searching the web:|Web search failed:|Syntax validation passed:|Basic file validation passed:|Prepared a Kurt system-prompt proposal|Retrieved the exact active Kurt system prompt|Validation warning:)/i;const items=(Array.isArray(entries)?entries:[]).filter(item=>relevant.test(String(typeof item==='string'?item:item?.text||'')));if(!items.length){panel.hidden=true;return}panel.hidden=false;const body=panel.querySelector('.work-log-body');const open=panel.dataset.initialized==='1'&&panel.classList.contains('open');panel.dataset.initialized='1';panel.classList.toggle('open',open);panel.querySelector('.work-log-head').setAttribute('aria-expanded',String(open));body.replaceChildren();items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const label=String(data.text||'Activity');const detail=String(data.detail||'');const row=document.createElement(detail&&detail!==label?'details':'div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');if(row.tagName==='DETAILS'){const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;body.appendChild(row)});panel.querySelector('.think-label').textContent='Workspace activity · '+items.length+' event(s)'}
 function pushWorkStep(node,text,ok,detail){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok&&last.detail===detail)return;entries.push({text,ok,detail:detail||''});if(entries.length>60)entries.shift();setThink(node,entries)}
-function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const t=node.querySelector('.work-log');if(t)t.classList.remove('live')}
+function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';node.querySelector('.reasoning-panel')?.classList.remove('live')}
 let follow=true;
-function scrollEnd(force){if(!force&&!follow)return;if(document.body.classList.contains('compact-scroll')){const m=$('messages');m.scrollTop=m.scrollHeight}else{window.scrollTo({top:document.documentElement.scrollHeight,behavior:'auto'})}}
+function scrollEnd(force){if(!force&&!follow)return;const m=$('messages');m.scrollTop=m.scrollHeight}
 function setEmpty(on){$('main').classList.toggle('empty',on);if(on)$('toBottom').classList.remove('show')}
 function setTitle(title,meta){$('chatTitle').textContent=title||'New chat';$('chatMeta').textContent=meta||''}
 function autosize(){const t=$('prompt');t.style.height='auto';t.style.height=Math.min(t.scrollHeight,220)+'px'}
@@ -587,46 +714,48 @@ function updateSend(){$('sendBtn').disabled=!state.busy&&!$('prompt').value.trim
 function hint(){const base=state.contextCount?state.contextCount+' item(s) in this chat’s isolated workspace':HINT;$('composeHint').textContent=state.mode==='code'?base+' Code mode can run approved developer checks in a per-chat Python venv; a venv is not a full operating-system sandbox.':base}
 function setBusy(b){state.busy=b;const btn=$('sendBtn');btn.querySelector('use').setAttribute('href',b?'#i-stop':'#i-up');btn.title=b?'Stop response':'Send message';btn.setAttribute('aria-label',btn.title);updateSend()}
 function cancelRun(){if(state.abort)state.abort.abort();state.abort=null;state.run++;setBusy(false)}
-function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<think)/i.test(String(content||''))){safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.'}wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user'){bubble.textContent=content}else{bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button></div>');bubble.querySelector('.content').innerHTML=renderMarkdown(safeContent);bindCopy(wrap);setThink(wrap,extra?.worklog||[]);wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
+function responseModelLabel(ref){if(!ref)return'';const item=state.models.find(m=>m.ref===ref);return item?`${item.label||item.name||item.model} · ${item.provider}`:String(ref)}
+function setResponseMeta(node,stats,model){const el=node?.querySelector('.response-metrics');if(!el)return;const parts=[];const seconds=Number(stats?.thought_seconds);const speed=Number(stats?.tokens_per_second);if(Number.isFinite(seconds)&&seconds>0)parts.push(`Generated in ${seconds.toFixed(seconds<10?1:0)}s`);if(Number.isFinite(speed)&&speed>0)parts.push(`${stats?.tokens_estimated?'~':''}${speed.toFixed(speed<10?1:0)} tok/s`);const label=responseModelLabel(model);if(label)parts.push(label);el.textContent=parts.join(' · ');if(stats?.tokens_estimated)el.title='Token rate is estimated from generated text length because the provider did not report output-token usage.'}
+function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<think)/i.test(String(content||'')))safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.';wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user')bubble.textContent=content;else{bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');bubble.appendChild(reasoningBlock());bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');bubble.querySelector('.content').innerHTML=renderMarkdown(safeContent);bindCopy(wrap);wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];setReasoning(wrap,extra?.reasoning||'');setThink(wrap,extra?.worklog||[]);setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
 function clearArtifactPane(){const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';const main=$('main');if(main)main.classList.remove('has-artifacts');document.querySelectorAll('.artifact-trigger').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
 function closeArtifactPane(){const main=$('main');if(main)main.classList.remove('has-artifacts');const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';document.querySelectorAll('.artifact-trigger.selected').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
 function renderArtifactTriggers(container,artifacts){if(!container)return;container.innerHTML='';(artifacts||[]).forEach(a=>{const promptCard=a.kind==='system_prompt';const button=document.createElement('button');button.type='button';button.className='artifact-trigger';button.setAttribute('aria-controls','artifactPane');button.setAttribute('aria-expanded','false');button.innerHTML='<span class="artifact-trigger-icon"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span><span class="artifact-trigger-text"><span class="artifact-trigger-name"></span><span class="artifact-trigger-status"></span></span><span class="artifact-trigger-open">Preview →</span>';button.querySelector('.artifact-trigger-name').textContent=promptCard?'System prompt proposal':String(a.path||'Generated file');button.querySelector('.artifact-trigger-status').textContent=a.validation?.message||'Saved in the temporary workspace';button.setAttribute('aria-label','Preview '+(a.path||'generated file'));button.onclick=()=>openArtifactPreview(a,button);container.appendChild(button)})}
 function openArtifactPreview(a,trigger){const pane=$('artifactPaneContent');if(!pane)return;pane.replaceChildren(artifactCard(a));$('main').classList.add('has-artifacts');document.querySelectorAll('.artifact-trigger').forEach(button=>{const selected=button===trigger;button.classList.toggle('selected',selected);button.setAttribute('aria-expanded',String(selected))});const title=$('artifactPaneTitle');if(title)title.textContent=a.kind==='system_prompt'?'System prompt proposal':String(a.path||'File preview');const count=$('artifactCount');if(count)count.textContent='Selected file preview';const side=$('artifactPane');side.scrollTop=0}
-function artifactCard(a){const promptCard=a.kind==='system_prompt';const card=document.createElement('div');card.className='artifact open'+(a.validation?.ok?'':' bad');card.innerHTML=`<div class="artifact-top"><div class="file-icon"><svg class="ic"><use href="#i-file"/></svg></div><div class="file-name">${esc(a.path)}</div><div class="file-check">${esc(a.validation?.message||'Saved in temporary workspace')}</div><span class="artifact-chev"><svg class="ic"><use href="#i-chev"/></svg></span></div><div class="artifact-body"><div class="codebox"><div class="codehead"><span>${promptCard?'SYSTEM PROMPT':esc((a.path.split('.').pop()||'FILE').toUpperCase())}</span><button class="copy-mini copy-artifact">Copy</button></div><pre><code></code></pre></div><div class="artifact-actions"><button class="copy-artifact">Copy</button>${promptCard?(a.preview_only?'':'<button class="primary apply-prompt">Apply prompt to Kurt</button>'):'<button class="download-artifact">Download file</button><button class="primary apply-artifact">Apply to project</button>'}</div></div>`;card.querySelector('code').textContent=a.content;card.querySelector('.artifact-top').onclick=()=>card.classList.toggle('open');card.querySelectorAll('.copy-artifact').forEach(b=>b.onclick=()=>navigator.clipboard.writeText(a.content).then(()=>toast('Content copied')));if(promptCard&&!a.preview_only){card.querySelector('.apply-prompt').onclick=async()=>{if(!confirm('Replace Kurt’s editable system prompt with this proposed version?'))return;try{await api('/api/settings',{system_prompt:a.content});await refreshBootstrap();toast('Kurt system prompt updated')}catch(e){toast(e.message)}}}else if(!promptCard){card.querySelector('.download-artifact').onclick=()=>{const blob=new Blob([a.content],{type:'application/octet-stream'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=a.path.split('/').pop();link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};card.querySelector('.apply-artifact').onclick=async()=>{if(!a.validation?.ok){toast('Fix validation errors before applying');return}if(!state.settings.allow_project_writes){toast('Enable project writes in Settings first');return}const overwrite=confirm(`Apply ${a.path} to ${state.projectRoot}?${a.exists?'\nThis will overwrite the existing project file.':''}\n\nThe isolated workspace copy will remain unchanged.`);if(!overwrite)return;try{const r=await api('/api/file/write',{path:a.path,content:a.content,overwrite,authorized:true});toast(r.message||'Applied to project')}catch(e){toast(e.message)}}}return card}
+function artifactCard(a){const promptCard=a.kind==='system_prompt';const card=document.createElement('div');card.className='artifact open'+(a.validation?.ok?'':' bad');card.innerHTML=`<div class="artifact-top"><div class="file-icon"><svg class="ic"><use href="#i-file"/></svg></div><div class="file-name">${esc(a.path)}</div><div class="file-check">${esc(a.validation?.message||'Saved in temporary workspace')}</div><span class="artifact-chev"><svg class="ic"><use href="#i-chev"/></svg></span></div><div class="artifact-body"><div class="codebox"><div class="codehead"><span>${promptCard?'SYSTEM PROMPT':esc((a.path.split('.').pop()||'FILE').toUpperCase())}</span><button class="copy-mini copy-artifact">Copy</button></div><pre><code></code></pre></div><div class="artifact-actions">${promptCard?(a.preview_only?'':'<button class="primary apply-prompt">Apply prompt to Kurt</button>'):'<button class="download-artifact">Download file</button><button class="primary apply-artifact">Apply to project</button>'}</div></div>`;card.querySelector('code').textContent=a.content;card.querySelector('.artifact-top').onclick=()=>card.classList.toggle('open');card.querySelectorAll('.copy-artifact').forEach(button=>button.onclick=()=>navigator.clipboard.writeText(a.content).then(()=>toast('Content copied')));if(promptCard&&!a.preview_only){card.querySelector('.apply-prompt').onclick=async()=>{if(!await confirmInApp('Apply system prompt','Replace Kurt’s editable system prompt with this proposed version?','Apply',true))return;try{await api('/api/settings',{system_prompt:a.content});await refreshBootstrap();toast('Kurt system prompt updated')}catch(error){toast(error.message)}}}else if(!promptCard){card.querySelector('.download-artifact').onclick=()=>{const blob=new Blob([a.content],{type:'application/octet-stream'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=a.path.split('/').pop();link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};card.querySelector('.apply-artifact').onclick=async()=>{if(!a.validation?.ok){toast('Fix validation errors before applying');return}if(!state.settings.allow_project_writes){toast('Enable project writes in Settings first');return}const message=`Apply ${a.path} to ${state.projectRoot}?${a.exists?'\nThis will overwrite the existing project file.':''}\n\nThe isolated workspace copy will remain unchanged.`;if(!await confirmInApp('Apply file to project',message,'Apply file',true))return;try{const result=await api('/api/file/write',{path:a.path,content:a.content,overwrite:!!a.exists,authorized:true});toast(result.message||'Applied to project')}catch(error){toast(error.message)}}}return card}
 const SUGGESTIONS=[['Understand my project','Inspect the current project structure and explain its architecture.'],['Build a feature','Help me plan and implement a new feature. Ask for any missing requirements first.'],['Generate a file','Write a small utility script and return it as a file card.'],['Debug code','Help me debug this issue. Start by asking for the relevant error and files.']];
 function showWelcome(){clearArtifactPane();setEmpty(true);follow=true;$('messages').innerHTML='<div class="welcome"><svg class="mark xl" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><h1>What are we building?</h1></div>';$('chips').innerHTML=SUGGESTIONS.map(s=>'<button class="chip" data-prompt="'+esc(s[1])+'">'+esc(s[0])+'</button>').join('');document.querySelectorAll('#chips [data-prompt]').forEach(b=>b.onclick=()=>{$('prompt').value=b.dataset.prompt;autosize();updateSend();$('prompt').focus()})}
-function renderChats(){const el=$('chatList');el.innerHTML='';const chats=state.chats.slice().sort((a,b)=>{if(!!a.pinned!==!!b.pinned)return a.pinned?-1:1;return state.sort==='oldest'?(a.updated||0)-(b.updated||0):(b.updated||0)-(a.updated||0)});chats.forEach(c=>{const row=document.createElement('div');row.className='chat-row'+(c.id===state.chatId?' active':'');const title=document.createElement('button');title.type='button';title.className='chat-item';title.title=c.title||'New conversation';title.innerHTML=(c.pinned?'<span class="pin-indicator">◆</span>':'')+esc(c.title||'New conversation');title.onclick=()=>loadChat(c.id);const actions=document.createElement('div');actions.className='chat-actions';const pin=document.createElement('button');pin.className='chat-action';pin.title=c.pinned?'Unpin chat':'Pin chat';pin.setAttribute('aria-label',pin.title);pin.textContent=c.pinned?'◆':'◇';pin.onclick=e=>{e.stopPropagation();togglePinChat(c.id,!c.pinned)};const rename=document.createElement('button');rename.className='chat-action';rename.title='Rename chat';rename.setAttribute('aria-label','Rename chat');rename.textContent='✎';rename.onclick=e=>{e.stopPropagation();renameChat(c.id,c.title||'')};const del=document.createElement('button');del.className='chat-action danger';del.title='Delete chat';del.setAttribute('aria-label','Delete chat');del.textContent='×';del.onclick=e=>{e.stopPropagation();deleteChat(c.id)};actions.append(pin,rename,del);row.append(title,actions);el.appendChild(row)})}
-async function renameChat(id,current){const next=prompt('Rename chat:',current);if(next===null)return;const title=next.trim();if(!title){toast('Chat title cannot be empty');return}try{await api('/api/chats/'+encodeURIComponent(id),{rename:title});await refreshChats();if(id===state.chatId)setTitle(title,$('chatMeta').textContent)}catch(e){toast(e.message)}}
-async function togglePinChat(id,pinned){try{await api('/api/chats/'+encodeURIComponent(id),{pin:!!pinned});await refreshChats()}catch(e){toast(e.message)}}
-async function deleteChat(id){const chat=state.chats.find(c=>c.id===id);if(!confirm('Delete “'+(chat?.title||'this chat')+'” and its temporary workspace? This cannot be undone.'))return;if(state.chatId===id)cancelRun();try{await api('/api/chats/'+encodeURIComponent(id),{delete:true});if(state.chatId===id){state.chatId=null;resetComposer();showWelcome();setTitle('New chat','')}await refreshChats();toast('Chat deleted')}catch(e){toast(e.message)}}
-async function refreshBootstrap(){const d=await api('/api/bootstrap');state.models=d.models||[];state.providers=d.providers||[];state.keys=d.keys||[];state.remoteModels=d.remote_models||[];state.settings=d.settings||{};state.projectRoot=d.project_root||'';$('projectRoot').value=state.projectRoot;$('systemPrompt').value=state.settings.system_prompt||'';$('allowProjectWrites').checked=!!state.settings.allow_project_writes;fillModels();renderKeys();renderRemoteModels();fillProviders()}
-function fillProviders(){const opts=state.providers.map(p=>`<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');$('keyProvider').innerHTML=opts;$('remoteProvider').innerHTML=opts;const groups=[...new Set(state.keys.map(k=>k.group||'default'))].sort();$('keyPoolOptions').innerHTML=groups.map(g=>`<option value="${esc(g)}"></option>`).join('')}
-function renderLocalModels(){const el=$('localModelList');if(!el)return;el.innerHTML='';const local=state.models.filter(m=>m.type==='local');if(!local.length){el.innerHTML='<div class="empty">No Ollama models are installed yet.</div>';return}local.forEach(m=>{const row=document.createElement('div');row.className='local-model-row';const grow=document.createElement('div');grow.className='grow';grow.innerHTML=`<b>${esc(m.label||m.name)}</b><small>${esc(m.size?String(m.size):'Ollama local model')}${m.current?' · active':''}</small>`;const set=document.createElement('button');set.textContent=m.current?'Current':'Set active';set.disabled=!!m.current;set.onclick=async()=>{try{await api('/api/settings',{model:m.ref});await refreshBootstrap();toast('Active model changed')}catch(e){toast(e.message)}};row.append(grow,set);el.appendChild(row)})}
-function renderKeys(){const el=$('keysList');el.innerHTML='';if(!state.keys.length){el.innerHTML='<div class="empty">No API keys configured yet.</div>';fillProviders();return}const groups=new Map();state.keys.forEach(k=>{const provider=k.provider||'unknown',group=k.group||'default',key=provider+'\u0000'+group;if(!groups.has(key))groups.set(key,{provider,group,keys:[]});groups.get(key).keys.push(k)});[...groups.values()].sort((a,b)=>(a.provider+a.group).localeCompare(b.provider+b.group)).forEach(pool=>{const card=document.createElement('div');card.className='pool-card';const head=document.createElement('div');head.className='pool-head';const grow=document.createElement('div');grow.className='grow';grow.innerHTML=`<b>${esc(pool.provider)} · ${esc(pool.group)}</b><small>${pool.keys.length} key(s) · automatic failover enabled for this pool</small>`;const actions=document.createElement('div');actions.className='pool-actions';const rename=document.createElement('button');rename.textContent='Rename group';rename.onclick=async()=>{const next=prompt('New group name (all keys and linked models in this pool will move):',pool.group);if(next===null||!next.trim()||next.trim()===pool.group)return;try{await api('/api/settings',{key_action:'rename_group',provider:pool.provider,old_group:pool.group,new_group:next.trim()});await refreshBootstrap();toast('Key group renamed')}catch(e){toast(e.message)}};actions.append(rename);head.append(grow,actions);card.append(head);pool.keys.forEach(k=>{const row=document.createElement('div');row.className='key-row';row.innerHTML=`<div class="grow"><b>${esc(k.label)}</b><small>${esc(k.masked)}</small></div><button class="edit-key">Edit</button><button class="danger">Remove</button>`;row.querySelector('.edit-key').onclick=async()=>{const label=prompt('Account label:',k.label);if(label===null)return;const group=prompt('Move this key to a different pool (use Rename group to move the whole pool):',k.group);if(group===null)return;const value=prompt('New API key (leave blank to keep current):','');if(value===null)return;try{await api('/api/settings',{key_action:'edit',id:k.id,label,group,value});await refreshBootstrap();toast('API key updated')}catch(e){toast(e.message)}};row.querySelector('.danger').onclick=async()=>{if(!confirm('Remove this API key?'))return;try{await api('/api/settings',{key_action:'remove',id:k.id});await refreshBootstrap()}catch(e){toast(e.message)}};card.append(row)});el.append(card)});fillProviders()}
-
-function renderRemoteModels(){const el=$('remoteList');el.innerHTML='';state.remoteModels.forEach(m=>{const d=document.createElement('div');d.className='model-row';d.innerHTML=`<div class="grow"><b>${esc(m.label||m.model)}</b><small>${esc(m.provider)} · ${esc(m.model)} · pool ${esc(m.key_group||'default')}</small></div><button class="edit-model">Edit</button><button class="danger">Remove</button>`;d.querySelector('.edit-model').onclick=async()=>{const model=prompt('API model ID:',m.model);if(model===null)return;const label=prompt('Display name:',m.label||m.model);if(label===null)return;const group=prompt('Key pool:',m.key_group||'default');if(group===null)return;const base=prompt('API base URL:',m.base_url||'');if(base===null)return;try{await api('/api/settings',{model_action:'edit',id:m.id,model,label,key_group:group,base_url:base});await refreshBootstrap();toast('Model settings updated')}catch(e){toast(e.message)}};d.querySelector('.danger').onclick=async()=>{if(!confirm('Remove this remote model?'))return;await api('/api/settings',{model_action:'remove',id:m.id});await refreshBootstrap()};el.appendChild(d)})}
+function closeChatMenu(){const menu=$('chatContextMenu');menu.classList.remove('open');menu.replaceChildren();menu.removeAttribute('data-chat-id')}
+function openChatMenu(chatId,x,y){const chat=state.chats.find(item=>item.id===chatId);if(!chat)return;const menu=$('chatContextMenu');menu.replaceChildren();menu.dataset.chatId=chatId;const add=(label,action,cls='')=>{const button=document.createElement('button');button.type='button';button.className=cls;button.textContent=label;button.onclick=()=>{closeChatMenu();action()};menu.appendChild(button)};add(chat.pinned?'Unpin chat':'Pin chat',()=>togglePinChat(chatId,!chat.pinned));add('Rename chat',()=>renameChat(chatId,chat.title||''));const divider=document.createElement('div');divider.className='menu-divider';menu.appendChild(divider);add('Delete chat',()=>deleteChat(chatId),'danger');menu.classList.add('open');const rect=menu.getBoundingClientRect();menu.style.left=Math.max(8,Math.min(x,innerWidth-rect.width-8))+'px';menu.style.top=Math.max(8,Math.min(y,innerHeight-rect.height-8))+'px'}
+function renderChats(){const el=$('chatList');el.replaceChildren();const chats=state.chats.slice().sort((a,b)=>{if(!!a.pinned!==!!b.pinned)return a.pinned?-1:1;return state.sort==='oldest'?(a.updated||0)-(b.updated||0):(b.updated||0)-(a.updated||0)});chats.forEach(chat=>{const row=document.createElement('div');row.className='chat-row'+(chat.id===state.chatId?' active':'');row.dataset.chatId=chat.id;const title=document.createElement('button');title.type='button';title.className='chat-item';title.title=chat.title||'New conversation';title.innerHTML=(chat.pinned?'<span class="pin-indicator">◆</span>':'')+esc(chat.title||'New conversation');title.onclick=()=>loadChat(chat.id);const actions=document.createElement('div');actions.className='chat-actions';const more=document.createElement('button');more.type='button';more.className='chat-more';more.title='Chat options';more.setAttribute('aria-label','Chat options');more.textContent='···';more.onclick=event=>{event.stopPropagation();const rect=more.getBoundingClientRect();openChatMenu(chat.id,rect.right-176,rect.bottom+4)};actions.append(more);row.append(title,actions);row.addEventListener('contextmenu',event=>{event.preventDefault();openChatMenu(chat.id,event.clientX,event.clientY)});el.append(row)})}
+async function renameChat(id,current){const result=await inAppDialog({title:'Rename conversation',message:'Choose a clear title for this chat.',confirmText:'Rename',fields:[{name:'title',label:'Chat title',value:current,required:true,maxLength:100}]});if(!result)return;const title=result.title.trim();if(!title){toast('Chat title cannot be empty');return}try{await api('/api/chats/'+encodeURIComponent(id),{rename:title});await refreshChats();if(id===state.chatId)setTitle(title,$('chatMeta').textContent)}catch(error){toast(error.message)}}
+async function togglePinChat(id,pinned){try{await api('/api/chats/'+encodeURIComponent(id),{pin:!!pinned});await refreshChats()}catch(error){toast(error.message)}}
+async function deleteChat(id){const chat=state.chats.find(item=>item.id===id);if(!await confirmInApp('Delete conversation',`Delete “${chat?.title||'this chat'}” and its temporary workspace? This cannot be undone.`,'Delete chat',true))return;if(state.chatId===id)cancelRun();try{await api('/api/chats/'+encodeURIComponent(id),{delete:true});if(state.chatId===id){state.chatId=null;resetComposer();showWelcome();setTitle('New chat','')}await refreshChats();toast('Chat deleted')}catch(error){toast(error.message)}}
+async function refreshBootstrap(){const data=await api('/api/bootstrap');state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.settings=data.settings||{};state.projectRoot=data.project_root||'';$('projectRoot').value=state.projectRoot;$('systemPrompt').value=state.settings.system_prompt||'';$('allowProjectWrites').checked=!!state.settings.allow_project_writes;fillProviders();fillModels();renderKeys();renderApiGroups();enhanceAllSelects()}
+function fillProviders(){const providers=state.providers.map(item=>({value:item.id,label:item.label}));setSelectOptions($('keyProvider'),providers,'Choose provider');setSelectOptions($('groupProvider'),providers,'Choose provider');const local=state.models.filter(model=>model.type==='local').sort((a,b)=>(a.label||a.name).localeCompare(b.label||b.name)).map(model=>({value:model.ref,label:model.label||model.name}));setSelectOptions($('groupLocalModel'),local,'Choose local model');updateGroupPoolOptions();}
+function updateGroupPoolOptions(){const provider=$('groupProvider')?.value||'';const groups=[...new Set(state.keys.filter(key=>key.provider===provider).map(key=>key.group||'default'))].sort((a,b)=>a.localeCompare(b));const options=groups.map(group=>({value:provider+'|'+group,label:group+' · '+state.keys.filter(key=>key.provider===provider&&(key.group||'default')===group).length+' key(s)'}));setSelectOptions($('groupPool'),options,'Choose saved key group');updateGroupKeyOptions()}
+function updateGroupKeyOptions(){const parts=String($('groupPool')?.value||'').split('|');const provider=parts[0],group=parts.slice(1).join('|');const keys=state.keys.filter(key=>key.provider===provider&&(key.group||'default')===group);setSelectOptions($('groupKeyId'),[{value:'pool',label:'All keys · automatic failover'},...keys.map(key=>({value:key.id,label:key.label+' · '+key.masked}))],'Choose key');}
+function renderLocalModels(){const root=$('localModelList');if(!root)return;root.replaceChildren();const local=state.models.filter(model=>model.type==='local').sort((a,b)=>(a.label||a.name).localeCompare(b.label||b.name));if(!local.length){root.innerHTML='<div class="empty">No Ollama models are installed yet.</div>';return}local.forEach(model=>{const row=document.createElement('div');row.className='local-model-row';const grow=document.createElement('div');grow.className='grow';grow.innerHTML=`<b>${esc(model.label||model.name)}</b><small>${esc(model.size?String(model.size):'Ollama local model')}${model.current?' · currently active':''}</small>`;const use=document.createElement('button');use.textContent='Use in chat';use.onclick=()=>{const route='model|'+model.ref;$('topModel').value=route;syncSelect($('topModel'));$('topModel').dispatchEvent(new Event('change',{bubbles:true}));activateSettingsTab('general');toast('Local model selected for new chats')};row.append(grow,use);root.append(row)})}
+function renderKeys(){const root=$('keysList');if(!root)return;root.replaceChildren();if(!state.keys.length){root.innerHTML='<div class="empty">No API keys saved yet.</div>';return}const groups=new Map();state.keys.forEach(key=>{const provider=key.provider||'unknown',group=key.group||'default',id=provider+'\u0000'+group;if(!groups.has(id))groups.set(id,{provider,group,keys:[]});groups.get(id).keys.push(key)});const sortMode=$('keySort')?.value||state.keySort||'name';[...groups.values()].sort((a,b)=>(a.provider+a.group).localeCompare(b.provider+b.group)).forEach(pool=>{pool.keys.sort((a,b)=>sortMode==='date'?(Number(b.created_at)||0)-(Number(a.created_at)||0):(a.label||'').localeCompare(b.label||''));const card=document.createElement('div');card.className='pool-card';const heading=document.createElement('div');heading.className='pool-head';const grow=document.createElement('div');grow.className='grow';grow.innerHTML=`<b>${esc(pool.provider)} · ${esc(pool.group)}</b><small>${pool.keys.length} key(s) · available to linked groups</small>`;const actions=document.createElement('div');actions.className='pool-actions';const rename=document.createElement('button');rename.textContent='Rename group';rename.onclick=async()=>{const result=await inAppDialog({title:'Rename API key group',message:'All keys in this provider group and their linked routes will be updated.',confirmText:'Rename',fields:[{name:'name',label:'New group name',value:pool.group,required:true,maxLength:50}]});if(!result)return;try{await api('/api/settings',{key_action:'rename_group',provider:pool.provider,old_group:pool.group,new_group:result.name.trim()});await refreshBootstrap();toast('Key group renamed')}catch(error){toast(error.message)}};actions.append(rename);heading.append(grow,actions);card.append(heading);pool.keys.forEach(key=>{const row=document.createElement('div');row.className='key-row';const added=Number(key.created_at)?new Date(Number(key.created_at)*1000).toLocaleDateString():'Date unavailable';row.innerHTML=`<div class="grow"><b>${esc(key.label)}</b><small>${esc(key.masked)} · Added ${esc(added)}</small></div><button class="edit-key">Edit</button><button class="danger remove-key">Remove</button>`;row.querySelector('.edit-key').onclick=async()=>{const result=await inAppDialog({title:'Edit API key',message:'The stored key is never shown. Leave the replacement blank to keep it unchanged.',confirmText:'Save key',fields:[{name:'label',label:'Account label',value:key.label,required:true,maxLength:80},{name:'group',label:'Key group',value:key.group,required:true,maxLength:50},{name:'value',label:'Replacement API key',type:'password',value:'',placeholder:'Leave blank to keep current'}]});if(!result)return;try{await api('/api/settings',{key_action:'edit',id:key.id,label:result.label,group:result.group,value:result.value});await refreshBootstrap();toast('API key updated')}catch(error){toast(error.message)}};row.querySelector('.remove-key').onclick=async()=>{if(!await confirmInApp('Remove API key',`Remove “${key.label}” from local storage?`, 'Remove',true))return;try{await api('/api/settings',{key_action:'remove',id:key.id});await refreshBootstrap();toast('API key removed')}catch(error){toast(error.message)}};card.append(row)});root.append(card)});}
+function resetApiGroupForm(){state.editingGroup=null;$('groupName').value='';$('groupSource').value='local';$('groupModelId').value='';$('groupLabel').value='';$('groupBase').value='';$('saveApiGroup').textContent='Create group';$('cancelApiGroup').hidden=true;$('groupLocalFields').hidden=false;$('groupApiFields').hidden=true;syncSelect($('groupSource'))}
+function editApiGroup(id){const group=state.apiGroups.find(item=>item.id===id);if(!group)return;state.editingGroup=id;$('groupName').value=group.name||'';$('groupSource').value=group.source||'api';if(group.source==='local'){$('groupLocalFields').hidden=false;$('groupApiFields').hidden=true;$('groupLocalModel').value=group.local_model||'';syncSelect($('groupLocalModel'))}else{$('groupLocalFields').hidden=true;$('groupApiFields').hidden=false;$('groupProvider').value=group.provider||'';syncSelect($('groupProvider'));updateGroupPoolOptions();$('groupPool').value=(group.provider||'')+'|'+(group.key_group||'default');syncSelect($('groupPool'));updateGroupKeyOptions();$('groupKeyId').value=group.key_id||'pool';syncSelect($('groupKeyId'));$('groupModelId').value=group.model||'';$('groupLabel').value=group.label||'';$('groupBase').value=group.base_url||''}$('saveApiGroup').textContent='Save changes';$('cancelApiGroup').hidden=false;activateSettingsTab('api-keys');$('groupName').focus()}
+function renderApiGroups(){const root=$('apiGroupsList');if(!root)return;root.replaceChildren();const groups=state.apiGroups.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));if(!groups.length){root.innerHTML='<div class="empty">No groups yet. Add a local-model group or connect an API model to a saved key group.</div>';return}groups.forEach(group=>{const card=document.createElement('div');card.className='pool-card';const head=document.createElement('div');head.className='pool-head';const info=document.createElement('div');info.className='grow';const description=group.source==='local'?`Local model · ${group.local_model||'not selected'}`:`${group.provider} · ${group.label||group.model} · ${group.model} · ${group.key_group||'default'} · ${group.key_id&&group.key_id!=='pool'?'one key':'key rotation'}`;info.innerHTML=`<b>${esc(group.name)}</b><small>${esc(description)}</small>`;const actions=document.createElement('div');actions.className='pool-actions';const edit=document.createElement('button');edit.textContent='Edit';edit.onclick=()=>editApiGroup(group.id);const remove=document.createElement('button');remove.className='danger';remove.textContent='Remove';remove.onclick=async()=>{if(!await confirmInApp('Remove group',`Remove “${group.name}”? Saved API keys will remain available.`,'Remove',true))return;try{await api('/api/settings',{api_group_action:'remove',id:group.id});await refreshBootstrap();resetApiGroupForm()}catch(error){toast(error.message)}};actions.append(edit,remove);head.append(info,actions);card.append(head);root.append(card)})}
 async function refreshChats(){const d=await api('/api/chats');state.chats=d.chats||[];renderChats()}
 function resetComposer(){$('prompt').value='';autosize();state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads=[];state.contextCount=0;renderPendingUploads();hint();updateSend()}
 async function ensureChat(){if(!state.chatId){const d=await api('/api/chats',{create:true});state.chatId=d.id}return state.chatId}
-async function newChat(){cancelRun();state.chatId=null;resetComposer();showWelcome();setTitle('New chat','');renderChats();follow=true;window.scrollTo({top:0,behavior:'auto'});document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();clearArtifactPane();const d=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=d.effort||'thinking';state.mode=d.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;try{const c=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=c.files||0}catch(e){}hint();$('messages').innerHTML='';const list=d.messages||[];if(list.length){setEmpty(false);list.forEach(m=>renderMessage(m.role,m.content,m.artifacts||[],{worklog:m.worklog||[]}));follow=true;scrollEnd(true)}else showWelcome();setTitle(d.title||'Conversation',[d.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
-async function send(){const text=$('prompt').value.trim();if(!text||state.busy)return;const run=++state.run;state.effort=$('effortSelect').value;state.mode=$('operationMode').value;setBusy(true);try{await ensureChat()}catch(e){if(run===state.run)setBusy(false);toast(e.message);return}if(run!==state.run)return;$('prompt').value='';autosize();hint();if($('main').classList.contains('empty')){setEmpty(false);$('messages').innerHTML=''}follow=true;renderMessage('user',text);const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Preparing…';scrollEnd(true);$('chatMeta').textContent=state.effort+' · '+state.mode+' · Generating…';const contentEl=node.querySelector('.content');let raw='',pending=false;const controller=new AbortController();state.abort=controller;
-const paint=()=>{pending=false;if(run!==state.run)return;const safeAnswer=stripUnsupportedActions(raw);contentEl.innerHTML=safeAnswer?renderMarkdown(safeAnswer):'';if(safeAnswer)bindCopy(node);node.dataset.raw=safeAnswer;scrollEnd()};
-const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
-try{const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,model:$('topModel').value,effort:state.effort,mode:state.mode}),signal:controller.signal});if(!res.ok){const x=await res.json().catch(()=>({}));throw new Error(x.error||res.statusText)}const reader=res.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;if(run!==state.run)return;buffer+=decoder.decode(value,{stream:true});let sep;while((sep=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,sep);buffer=buffer.slice(sep+2);const dataLine=frame.split('\n').find(x=>x.startsWith('data:'));if(!dataLine)continue;const event=JSON.parse(dataLine.slice(5).trim());if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail);node.querySelector('.assistant-status').textContent=event.status||'Working…';queue()}else if(event.type==='token'){raw+=event.text;node.querySelector('.assistant-status').textContent='Writing…';queue()}else if(event.type==='done'){pending=false;raw=event.content||'';const safeFinal=stripUnsupportedActions(raw);contentEl.innerHTML=safeFinal?renderMarkdown(safeFinal):'';bindCopy(node);node.dataset.raw=safeFinal;setThink(node,event.worklog||node.__worklog||[]);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats()}else if(event.type==='error')throw new Error(event.message)}}}catch(e){if(run===state.run){if(e.name==='AbortError'){paint();refreshChats().catch(()=>{})}else{contentEl.classList.add('err');contentEl.textContent='Error: '+e.message;toast(e.message)}}}finally{node.classList.remove('live');endThink(node);if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent.includes('Generating…'))meta.textContent=[state.effort,state.mode,'Ready'].join(' · ')}}}
-$('messages').addEventListener('scroll',()=>{if(!document.body.classList.contains('compact-scroll'))return;const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});
-window.addEventListener('scroll',()=>{if(document.body.classList.contains('compact-scroll'))return;follow=window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))},{passive:true});
-$('toBottom').onclick=()=>{follow=true;scrollEnd(true);$('toBottom').classList.remove('show')};
+async function newChat(){cancelRun();state.chatId=null;resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred;syncSelect($('topModel'))}showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
+async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=data.effort==='expert'?'expert':'thinking';state.mode=data.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;syncSelect($('effortSelect'));syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route;syncSelect($('topModel'))}try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0}catch(error){}hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',stats:message.stats||null,model:message.model||data.model||null}));follow=true;scrollEnd(true)}else showWelcome();setTitle(data.title||'Conversation',[data.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
+async function send(){const text=$('prompt').value.trim();if(!text||state.busy)return;const run=++state.run;state.effort=$('effortSelect').value;state.mode=$('operationMode').value;const route=$('topModel').value;setBusy(true);try{await ensureChat()}catch(error){if(run===state.run)setBusy(false);toast(error.message);return}if(run!==state.run)return;$('prompt').value='';autosize();hint();if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}follow=true;renderMessage('user',text);const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);$('chatMeta').textContent=state.effort+' · '+state.mode+' · Generating…';const contentEl=node.querySelector('.content');let raw='',reasoning='',pending=false;const controller=new AbortController();state.abort=controller;const paint=()=>{pending=false;if(run!==state.run)return;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
+ try{const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,route,effort:state.effort,mode:state.mode}),signal:controller.signal});if(!response.ok){const result=await response.json().catch(()=>({}));throw new Error(result.error||response.statusText)}node.querySelector('.assistant-status').textContent='Thinking…';const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const packet=await reader.read();if(packet.done)break;if(run!==state.run)return;buffer+=decoder.decode(packet.value,{stream:true});let separator;while((separator=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,separator);buffer=buffer.slice(separator+2);const line=frame.split('\n').find(value=>value.startsWith('data:'));if(!line)continue;const event=JSON.parse(line.slice(5).trim());if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail);node.querySelector('.assistant-status').textContent=event.status||'Working…'}else if(event.type==='reasoning'){reasoning+=event.text||'';setReasoning(node,reasoning,true)}else if(event.type==='token'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}else if(event.type==='done'){pending=false;raw=event.content||'';reasoning=event.reasoning||reasoning;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);node.dataset.raw=safe;setReasoning(node,reasoning,false);setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats()}else if(event.type==='error')throw new Error(event.message||'The model request failed')}}}catch(error){if(run===state.run){if(error.name==='AbortError'){paint();refreshChats().catch(()=>{})}else{contentEl.classList.add('err');contentEl.textContent='Error: '+error.message;toast(error.message)}}}finally{node.classList.remove('live');endThink(node);if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent.includes('Generating…'))meta.textContent=[state.effort,state.mode,'Ready'].join(' · ')}}}
+$('messages').addEventListener('scroll',()=>{const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});$('toBottom').onclick=()=>{follow=true;scrollEnd(true);$('toBottom').classList.remove('show')};
 $('closeArtifactPane').onclick=closeArtifactPane;
-$('scrollModeBtn').onclick=()=>{setScrollMode(!document.body.classList.contains('compact-scroll'));follow=true;scrollEnd(true)};
 $('sendBtn').onclick=()=>{if(state.busy){if(state.abort)state.abort.abort()}else send()};
 $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!state.busy)send()}});
 $('prompt').addEventListener('input',()=>{autosize();updateSend()});
 $('newChat').onclick=newChat;$('chatSort').onchange=()=>{state.sort=$('chatSort').value;renderChats()};$('effortSelect').onchange=()=>{state.effort=$('effortSelect').value};$('operationMode').onchange=()=>{state.mode=$('operationMode').value;hint()};
-function activateSettingsTab(tab){document.querySelectorAll('[data-settings-tab]').forEach(b=>b.classList.toggle('active',b.dataset.settingsTab===tab));document.querySelectorAll('[data-settings-panel]').forEach(p=>p.classList.toggle('active',p.dataset.settingsPanel===tab));const area=document.querySelector('.settings-panel-area');if(area)area.scrollTop=0}
+function activateSettingsTab(tab){document.querySelectorAll('[data-settings-tab]').forEach(button=>button.classList.toggle('active',button.dataset.settingsTab===tab));document.querySelectorAll('[data-settings-panel]').forEach(panel=>panel.classList.toggle('active',panel.dataset.settingsPanel===tab));const area=document.querySelector('.settings-panel-area');if(area)area.scrollTop=0}
 document.querySelectorAll('[data-settings-tab]').forEach(b=>b.onclick=()=>activateSettingsTab(b.dataset.settingsTab));
 async function openSettings(){await refreshBootstrap();activateSettingsTab('general');$('settingsModal').classList.add('show')}
-async function saveSettings(){const payload={project_root:$('projectRoot').value,system_prompt:$('systemPrompt').value,allow_project_writes:$('allowProjectWrites').checked};if($('settingsModel').value)payload.model=$('settingsModel').value;const d=await api('/api/settings',payload);state.settings=d.settings||{};state.settings.allow_project_writes=$('allowProjectWrites').checked;state.projectRoot=d.project_root;if(d.model){$('topModel').value=d.model;$('settingsModel').value=d.model}toast('Settings saved')}
+async function saveSettings(){const payload={project_root:$('projectRoot').value,system_prompt:$('systemPrompt').value,allow_project_writes:$('allowProjectWrites').checked,default_route:$('settingsModel').value};const data=await api('/api/settings',payload);state.settings=data.settings||{};state.settings.allow_project_writes=$('allowProjectWrites').checked;state.projectRoot=data.project_root;await refreshBootstrap();toast('Settings saved')}
 async function browseFiles(){const path=$('fileFolder').value.trim();const d=await api('/api/files?path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()}}el.appendChild(row)})}
 function renderPendingUploads(){const labels=[];if(state.selectedFiles.length)labels.push(state.selectedFiles.length+' project file(s)');if(state.selectedFolders.length)labels.push(state.selectedFolders.length+' project folder(s)');if(state.pendingUploads.length)labels.push(state.pendingUploads.length+' computer file(s), including images');$('uploadList').textContent=labels.length?labels.join(' · '):'No files selected.'}
 function stageLocalFiles(input){const files=Array.from(input.files||[]);for(const file of files){const path=(file.webkitRelativePath||file.name).replace(/\\/g,'/');if(!state.pendingUploads.some(x=>x.path===path))state.pendingUploads.push({file,path})}input.value='';renderPendingUploads()}
@@ -634,14 +763,15 @@ function bytesToBase64(buffer){const bytes=new Uint8Array(buffer);let binary='';
 async function attachFiles(){try{await ensureChat();const selectedFiles=state.selectedFiles.slice();const uploads=[];let total=0;for(const item of state.pendingUploads){total+=item.file.size;if(total>20*1024*1024)throw new Error('Local file selection exceeds the 20 MB import limit.');uploads.push({path:item.path,content:bytesToBase64(await item.file.arrayBuffer())})}const result=await api('/api/context/import',{chat_id:state.chatId,selected_files:state.selectedFiles,selected_folders:state.selectedFolders,uploads});state.contextCount=(state.contextCount||0)+Number(result.files||0);state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads=[];renderPendingUploads();$('filesModal').classList.remove('show');hint();toast(result.message||'Context added to isolated workspace')}catch(e){toast(e.message)}}
 async function startDownload(){const model=$('downloadModel').value.trim();if(!model){toast('Enter an Ollama model ID');return}try{const d=await api('/api/download',{model});$('downloadCaption').textContent='Queued: '+model;$('localDownloadStatus').textContent='Download queued: '+model;$('downloadModel').value='';toast('Download started in background');pollDownload()}catch(e){toast(e.message)}}
 async function pollDownload(){try{const d=await api('/api/download/status');const job=d.job;if(!job)return;const percent=job.total?job.completed/job.total*100:0;$('downloadFill').style.width=(job.state==='done'?100:percent)+'%';$('downloadCaption').textContent=job.state==='running'?`${job.model} · ${percent.toFixed(1)}% · ${job.human}`:`${job.model} · ${job.state}${job.error?' · '+job.error:''}`;if(job.state==='done'){await refreshBootstrap();$('localDownloadStatus').textContent=job.model+' installed successfully.';toast('Model download complete')}else if(job.state==='error'){$('localDownloadStatus').textContent=job.error||'Download failed';toast(job.error||'Download failed')}else{$('localDownloadStatus').textContent=job.model+' · '+percent.toFixed(1)+'% · '+job.human;setTimeout(pollDownload,1000)}}catch(e){console.error(e)}}
-$('sidebarSettings').onclick=openSettings;$('openFiles').onclick=$('contextBtn').onclick=()=>{$('filesModal').classList.add('show');renderPendingUploads();browseFiles()};$('topModel').onchange=async()=>{try{await api('/api/settings',{model:$('topModel').value});$('settingsModel').value=$('topModel').value;await refreshBootstrap();toast('Active model changed')}catch(e){toast(e.message)}};$('settingsModel').onchange=async()=>{const model=$('settingsModel').value;$('topModel').value=model;try{await api('/api/settings',{model});await refreshBootstrap();toast('Active model changed')}catch(e){toast(e.message)}};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=refreshBootstrap;$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:$('keyGroup').value,label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')};$('addRemote').onclick=async()=>{const d=await api('/api/settings',{model_action:'add',provider:$('remoteProvider').value,model:$('remoteModelId').value,label:$('remoteLabel').value,key_group:$('remoteGroup').value,base_url:$('remoteBase').value});await refreshBootstrap();toast(d.message||'Model added')};$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;$('clearChat').onclick=async()=>{if(!state.chatId)return;if(!confirm('Clear this conversation?'))return;cancelRun();await api('/api/chats/'+encodeURIComponent(state.chatId),{clear:true});state.contextCount=0;hint();showWelcome();$('chatTitle').textContent='New conversation';await refreshChats()};document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$(b.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(m=>m.onclick=e=>{if(e.target===m)m.classList.remove('show')});
-$('menuBtn').onclick=()=>document.body.classList.toggle('nav-open');$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',e=>{if(e.target.closest('.chat-item,#newChat,#openFiles,#sidebarSettings'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const t=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=t;try{localStorage.setItem('kurt-theme',t)}catch(e){}};
-try{setScrollMode(localStorage.getItem('kurt-compact-scroll')==='1')}catch(e){setScrollMode(false)}
+$('sidebarSettings').onclick=openSettings;$('openFiles').onclick=$('contextBtn').onclick=()=>{$('filesModal').classList.add('show');renderPendingUploads();browseFiles()};$('topModel').onchange=async()=>{try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;syncSelect($('topModel'));$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=refreshBootstrap;$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:$('keyGroup').value,label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('groupSource').onchange=()=>{const local=$('groupSource').value==='local';$('groupLocalFields').hidden=!local;$('groupApiFields').hidden=local;syncSelect($('groupSource'))};$('groupProvider').onchange=()=>updateGroupPoolOptions();$('groupPool').onchange=()=>updateGroupKeyOptions();$('saveApiGroup').onclick=async()=>{const name=$('groupName').value.trim();if(!name){toast('Enter a group name');return}const source=$('groupSource').value;const payload={api_group_action:state.editingGroup?'edit':'add',id:state.editingGroup,name,source};if(source==='local')payload.local_model=$('groupLocalModel').value;else{const pair=$('groupPool').value.split('|');payload.provider=pair.shift();payload.key_group=pair.join('|');payload.model=$('groupModelId').value.trim();payload.label=$('groupLabel').value.trim();payload.base_url=$('groupBase').value.trim();payload.key_id=$('groupKeyId').value}try{await api('/api/settings',payload);await refreshBootstrap();resetApiGroupForm();toast('Group saved')}catch(error){toast(error.message)}};$('cancelApiGroup').onclick=resetApiGroupForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;$('clearChat').onclick=async()=>{if(!state.chatId)return;if(!await confirmInApp('Clear conversation','Remove all messages and reset this chat’s temporary workspace?','Clear conversation',true))return;cancelRun();await api('/api/chats/'+encodeURIComponent(state.chatId),{clear:true});state.contextCount=0;hint();showWelcome();$('chatTitle').textContent='New conversation';await refreshChats()};document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects()}});
+$('menuBtn').onclick=()=>document.body.classList.toggle('nav-open');$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',event=>{if(event.target.closest('.chat-item,#newChat,#openFiles,#sidebarSettings'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const theme=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=theme;try{localStorage.setItem('kurt-theme',theme)}catch(error){}};enhanceAllSelects();
+document.body.classList.add('compact-scroll')
 (async()=>{try{await refreshBootstrap();await refreshChats();showWelcome();pollDownload()}catch(e){toast(e.message)}})();
 </script></body></html>'''
 
 
 THINKING_KINDS = ("thinking", "reasoning", "thought")
+MODEL_SUMMARY_KINDS = ("reasoning_summary", "summary", "summary_text", "analysis_summary")
 THINK_OPEN_RE = re.compile(r"<think(?:ing)?>", re.I)
 THINK_CLOSE_RE = re.compile(r"</think(?:ing)?>", re.I)
 THINK_TAG_RE = re.compile(r"<(/)?think(?:ing)?>", re.I)
@@ -773,7 +903,13 @@ class KurtWebApp:
         self.settings.setdefault("model", K.MODEL)
         self.settings.setdefault("allow_project_writes", False)
         self.settings.setdefault("default_effort", "thinking")
+        if self.settings.get("default_effort") == "flash":
+            self.settings["default_effort"] = "thinking"
+            self.save_settings()
         self.settings.setdefault("default_mode", "normal")
+        self.settings.setdefault("api_groups", [])
+        self.model_lock = threading.RLock()
+        self.migrate_legacy_api_groups()
         configured_root = Path(self.settings.get("project_root") or Path.cwd()).expanduser()
         if not configured_root.exists() or not configured_root.is_dir():
             self.settings["project_root"] = str(Path.cwd().resolve())
@@ -781,6 +917,147 @@ class KurtWebApp:
         self.chats = _load_json(CHATS_FILE, [])
         self.download_job = None
         self.download_thread = None
+
+    def migrate_legacy_api_groups(self):
+        groups = self.settings.setdefault("api_groups", [])
+        known = {str(item.get("remote_id") or "") for item in groups if isinstance(item, dict)}
+        changed = False
+        for remote in K.REMOTE_MODELS:
+            remote_id = str(remote.get("id") or "")
+            if not remote_id or remote_id in known:
+                continue
+            groups.append({
+                "id": "legacy_" + remote_id, "name": remote.get("label") or remote.get("model") or "API model",
+                "source": "api", "provider": remote.get("provider"), "model": remote.get("model"),
+                "label": remote.get("label") or remote.get("model"), "key_group": remote.get("key_group") or "default",
+                "key_id": "pool", "base_url": remote.get("base_url") or "", "remote_id": remote_id,
+            })
+            known.add(remote_id)
+            changed = True
+        if changed:
+            self.save_settings()
+
+    def sync_api_groups(self):
+        for group in self.settings.get("api_groups", []):
+            if group.get("source") != "api":
+                continue
+            remote_id = str(group.get("remote_id") or uuid.uuid4().hex[:12])
+            group["remote_id"] = remote_id
+            entry = next((item for item in K.REMOTE_MODELS if item.get("id") == remote_id), None)
+            payload = {
+                "id": remote_id, "provider": group.get("provider"), "model": group.get("model"),
+                "label": group.get("label") or group.get("model"),
+                "key_group": group.get("key_group") or "default",
+                "base_url": group.get("base_url") or K.default_base_url(group.get("provider")),
+            }
+            if entry is None:
+                K.REMOTE_MODELS.append(payload)
+            else:
+                entry.update(payload)
+
+    def list_chat_routes(self):
+        self.sync_api_groups()
+        routes = []
+        local_models = []
+        try:
+            local_models = [item for item in self.list_models() if item.get("type") == "local"]
+        except Exception:
+            pass
+        for model in sorted(local_models, key=lambda item: (item.get("label") or "").lower()):
+            routes.append({"value": "model|" + model["ref"], "label": "Local · " + (model.get("label") or model["name"]), "kind": "local"})
+        for group in sorted(self.settings.get("api_groups", []), key=lambda item: str(item.get("name") or "").lower()):
+            group_id = str(group.get("id") or "")
+            if not group_id:
+                continue
+            if group.get("source") == "local":
+                model_ref = str(group.get("local_model") or "")
+                if any(item.get("ref") == model_ref for item in local_models):
+                    routes.append({"value": "group|" + group_id, "label": "Group · " + str(group.get("name") or "Local") + " · local", "kind": "group"})
+                continue
+            provider = str(group.get("provider") or "").lower()
+            pool = str(group.get("key_group") or "default")
+            keys = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider and str(item.get("group") or "default") == pool]
+            if group.get("key_id") and group.get("key_id") != "pool":
+                keys = [item for item in keys if str(item.get("id")) == str(group.get("key_id"))]
+            remote = next((item for item in K.REMOTE_MODELS if item.get("id") == group.get("remote_id")), None)
+            if remote is None or not keys:
+                continue
+            label = str(group.get("name") or group.get("label") or group.get("model") or "API group")
+            routes.append({"value": "group|" + group_id, "label": "Group · " + label + " · " + str(group.get("label") or group.get("model")), "kind": "group"})
+            for key in keys:
+                routes.append({"value": "key|{}|{}".format(group_id, key.get("id")), "label": "Key · {} · {} · {}".format(label, group.get("label") or group.get("model"), key.get("label") or "Account"), "kind": "key"})
+        return routes
+
+    def resolve_chat_route(self, route, legacy_model=None):
+        route = str(route or "").strip()
+        if not route and legacy_model:
+            if str(legacy_model).startswith("remote:"):
+                route = next(("group|" + str(group.get("id")) for group in self.settings.get("api_groups", []) if group.get("source") == "api" and (group.get("remote_id") and K.remote_model_ref(next((item for item in K.REMOTE_MODELS if item.get("id") == group.get("remote_id")), {})) == legacy_model)), "")
+            if not route:
+                route = "model|" + str(legacy_model)
+        if route.startswith("model|"):
+            model_ref = route.split("|", 1)[1]
+            if not any(item.get("ref") == model_ref and item.get("type") == "local" for item in self.list_models()):
+                raise ValueError("That local model is not installed.")
+            return {"model": model_ref, "key_id": None, "route": route}
+        parts = route.split("|")
+        if len(parts) not in (2, 3) or parts[0] not in ("group", "key"):
+            raise ValueError("Choose a local model, API key, or configured group first.")
+        group_id = parts[1]
+        group = next((item for item in self.settings.get("api_groups", []) if str(item.get("id")) == group_id), None)
+        if not group:
+            raise ValueError("That chat group no longer exists. Choose another route.")
+        if group.get("source") == "local":
+            if parts[0] == "key":
+                raise ValueError("A local-model group does not use API keys.")
+            model_ref = str(group.get("local_model") or "")
+            if not any(item.get("ref") == model_ref and item.get("type") == "local" for item in self.list_models()):
+                raise ValueError("The local model in this group is no longer installed.")
+            return {"model": model_ref, "key_id": None, "route": route}
+        self.sync_api_groups()
+        remote = next((item for item in K.REMOTE_MODELS if item.get("id") == group.get("remote_id")), None)
+        if remote is None:
+            raise ValueError("The API model for this group is not configured.")
+        provider = str(group.get("provider") or "").lower()
+        pool = str(group.get("key_group") or "default")
+        keys = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider and str(item.get("group") or "default") == pool]
+        key_id = None
+        if parts[0] == "key":
+            if len(parts) != 3:
+                raise ValueError("Choose the specific API key.")
+            key_id = parts[2]
+            configured_key = str(group.get("key_id") or "pool")
+            if configured_key != "pool" and configured_key != key_id:
+                raise ValueError("This group is restricted to a different API key.")
+            keys = [item for item in keys if str(item.get("id")) == key_id]
+        elif len(parts) == 3:
+            raise ValueError("Invalid group route.")
+        elif group.get("key_id") and group.get("key_id") != "pool":
+            key_id = str(group.get("key_id"))
+            keys = [item for item in keys if str(item.get("id")) == key_id]
+        if not keys:
+            raise ValueError("No API key is available for this group and provider.")
+        return {"model": K.remote_model_ref(remote), "key_id": key_id, "route": route}
+
+    def generate_chat_title(self, user_text, assistant_text, model):
+        prompt = [
+            {"role": "system", "content": "Create a concise chat title of 3–7 words. Return only the title, with no quotes, numbering, or explanation. Reflect the user's request, not the assistant's reply."},
+            {"role": "user", "content": "User message:\n" + str(user_text)[:1200] + "\n\nAssistant response:\n" + str(assistant_text)[:600]},
+        ]
+        try:
+            chunks = []
+            stream = K.stream_chat(prompt, model=model, think=False, temperature=0.2, max_tokens=32)
+            for kind, chunk in stream:
+                kind_name = str(kind or "").lower().replace("-", "_")
+                if kind_name == "content" and chunk:
+                    chunks.append(str(chunk))
+            title = " ".join("".join(chunks).strip().strip("\"'`* ").split())
+            title = re.sub(r"^(title|chat title)\s*:\s*", "", title, flags=re.I).strip(" \"'`.-")
+            if title:
+                return title[:58].rstrip()
+        except Exception:
+            pass
+        return re.sub(r"\s+", " ", str(user_text or "")).strip()[:58] or "New conversation"
 
     def save_settings(self):
         _atomic_json(WEB_SETTINGS_FILE, self.settings)
@@ -854,7 +1131,7 @@ class KurtWebApp:
         return [{
             "id": item.get("id"), "provider": item.get("provider"),
             "group": item.get("group") or "default", "label": item.get("label") or "Account",
-            "masked": K.mask_key(item.get("value")),
+            "masked": K.mask_key(item.get("value")), "created_at": item.get("created_at"),
         } for item in K.PROVIDER_KEYS]
 
     def editable_system_prompt(self):
@@ -1301,8 +1578,9 @@ class KurtWebApp:
         now = time.time()
         chat = {
             "id": uuid.uuid4().hex, "title": "New conversation", "model": K.MODEL,
-            "effort": self.settings.get("default_effort", "thinking"),
+            "effort": "thinking" if self.settings.get("default_effort") == "flash" else self.settings.get("default_effort", "thinking"),
             "mode": self.settings.get("default_mode", "normal"),
+            "route": self.settings.get("default_route", ""),
             "pinned": False, "created": now, "updated": now, "messages": [],
         }
         with self.lock:
@@ -1445,9 +1723,9 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/bootstrap":
                 providers = [{"id": key, "label": value.get("label", key)} for key, value in K.PROVIDER_SPECS.items()]
                 self._json({
-                    "models": self.app.list_models(), "providers": providers,
-                    "keys": self.app.sanitized_keys(), "remote_models": K.REMOTE_MODELS,
-                    "settings": {"model": K.MODEL, "system_prompt": self.app.editable_system_prompt(), "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False))},
+                    "models": self.app.list_models(), "routes": self.app.list_chat_routes(), "providers": providers,
+                    "keys": self.app.sanitized_keys(), "api_groups": self.app.settings.get("api_groups", []),
+                    "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""), "system_prompt": self.app.editable_system_prompt(), "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False))},
                     "project_root": str(self.app.workspace()),
                 })
             elif parsed.path == "/api/chats":
@@ -1464,8 +1742,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": "Conversation not found."}, 404)
                 else:
                     self._json({
-                        "id": chat["id"], "title": chat.get("title"), "model": chat.get("model"),
-                        "effort": chat.get("effort", "thinking"), "mode": chat.get("mode", "normal"),
+                        "id": chat["id"], "title": chat.get("title"), "model": chat.get("model"), "route": chat.get("route", ""),
+                        "effort": "thinking" if chat.get("effort") == "flash" else chat.get("effort", "thinking"), "mode": chat.get("mode", "normal"),
                         "pinned": bool(chat.get("pinned", False)), "messages": chat.get("messages", []),
                     })
             elif parsed.path == "/api/download/status":
@@ -1590,8 +1868,16 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def _settings(self, data):
-        if "model" in data and not data.get("model_action"):
+        with self.app.model_lock:
+            self._settings_locked(data)
+
+    def _settings_locked(self, data):
+        if "model" in data and not data.get("api_group_action"):
             self.app.set_model(str(data.get("model") or ""))
+        if "default_route" in data:
+            route_info = self.app.resolve_chat_route(data.get("default_route"))
+            self.app.set_model(route_info["model"])
+            self.app.settings["default_route"] = route_info["route"]
         if "project_root" in data:
             root = Path(str(data.get("project_root") or "")).expanduser().resolve()
             if not root.exists() or not root.is_dir():
@@ -1607,14 +1893,16 @@ class Handler(BaseHTTPRequestHandler):
         if "default_effort" in data:
             value = str(data.get("default_effort") or "thinking")
             if value not in EFFORT_INSTRUCTIONS:
-                raise ValueError("Choose Flash, Thinking, or Expert effort.")
+                raise ValueError("Choose Thinking or Expert effort.")
             self.app.settings["default_effort"] = value
         if "default_mode" in data:
             value = str(data.get("default_mode") or "normal")
             if value not in ("normal", "code"):
                 raise ValueError("Choose Normal or Code mode.")
             self.app.settings["default_mode"] = value
+
         key_action = data.get("key_action")
+        keys_changed = False
         if key_action == "add":
             provider = str(data.get("provider", "")).lower()
             group = str(data.get("group") or "default").strip()
@@ -1622,11 +1910,13 @@ class Handler(BaseHTTPRequestHandler):
             if provider not in K.PROVIDER_SPECS:
                 raise ValueError("Unknown provider.")
             if not group or len(group) > 50 or len(value) < 10 or any(ch.isspace() for ch in value):
-                raise ValueError("Enter a valid key, and a pool name of 1–50 characters.")
+                raise ValueError("Enter a valid key, and a group name of 1–50 characters.")
             if any(item.get("value") == value for item in K.PROVIDER_KEYS):
                 raise ValueError("That API key is already saved.")
             K.PROVIDER_KEYS.append({"id": uuid.uuid4().hex[:12], "provider": provider, "group": group,
-                                    "label": str(data.get("label") or "Account")[:80], "value": value})
+                                    "label": str(data.get("label") or "Account")[:80], "value": value,
+                                    "created_at": time.time()})
+            keys_changed = True
         elif key_action == "edit":
             key_id = data.get("id")
             item = next((entry for entry in K.PROVIDER_KEYS if entry.get("id") == key_id), None)
@@ -1635,7 +1925,7 @@ class Handler(BaseHTTPRequestHandler):
             group = str(data.get("group") or item.get("group") or "default").strip()
             value = str(data.get("value") or "").strip()
             if not group or len(group) > 50:
-                raise ValueError("Key pool must be 1–50 characters.")
+                raise ValueError("Key group must be 1–50 characters.")
             if value and (len(value) < 10 or any(ch.isspace() for ch in value)):
                 raise ValueError("That API key does not look valid.")
             if value and any(entry.get("value") == value and entry.get("id") != key_id for entry in K.PROVIDER_KEYS):
@@ -1644,60 +1934,100 @@ class Handler(BaseHTTPRequestHandler):
             item["group"] = group
             if value:
                 item["value"] = value
+            keys_changed = True
         elif key_action == "remove":
-            key_id = data.get("id")
-            K.PROVIDER_KEYS[:] = [item for item in K.PROVIDER_KEYS if item.get("id") != key_id]
+            key_id = str(data.get("id") or "")
+            K.PROVIDER_KEYS[:] = [item for item in K.PROVIDER_KEYS if str(item.get("id")) != key_id]
+            for group in self.app.settings.get("api_groups", []):
+                if str(group.get("key_id") or "") == key_id:
+                    group["key_id"] = "pool"
+            keys_changed = True
         elif key_action == "rename_group":
-            provider = str(data.get("provider") or '').lower()
-            old_group = str(data.get("old_group") or 'default').strip()
-            new_group = str(data.get("new_group") or '').strip()
+            provider = str(data.get("provider") or "").lower()
+            old_group = str(data.get("old_group") or "default").strip()
+            new_group = str(data.get("new_group") or "").strip()
             if provider not in K.PROVIDER_SPECS or not old_group or not new_group or len(new_group) > 50:
-                raise ValueError('Enter a valid provider and group name (1–50 characters).')
-            matched = [item for item in K.PROVIDER_KEYS if str(item.get('provider', '')).lower() == provider and str(item.get('group') or 'default') == old_group]
+                raise ValueError("Enter a valid provider and group name (1–50 characters).")
+            matched = [item for item in K.PROVIDER_KEYS if str(item.get("provider", "")).lower() == provider and str(item.get("group") or "default") == old_group]
             if not matched:
-                raise ValueError('No API keys exist in that group.')
+                raise ValueError("No API keys exist in that group.")
             for item in matched:
-                item['group'] = new_group
-            for model in K.REMOTE_MODELS:
-                if str(model.get('provider', '')).lower() == provider and str(model.get('key_group') or 'default') == old_group:
-                    model['key_group'] = new_group
-        model_action = data.get("model_action")
-        if model_action == "add":
-            provider = str(data.get("provider", "")).lower()
-            model_id = str(data.get("model") or "").strip()
-            if provider not in K.PROVIDER_SPECS or not model_id:
-                raise ValueError("Choose a provider and enter its exact API model ID.")
-            group = str(data.get("key_group") or "default").strip() or "default"
-            base_url = str(data.get("base_url") or K.default_base_url(provider)).strip().rstrip("/")
-            if not base_url.startswith(("https://", "http://")):
-                raise ValueError("The API base URL must start with http:// or https://.")
-            K.REMOTE_MODELS.append({"id": uuid.uuid4().hex[:12], "provider": provider, "model": model_id,
-                                    "label": str(data.get("label") or model_id)[:100],
-                                    "key_group": group, "base_url": base_url})
-        elif model_action == "edit":
-            model_id = data.get("id")
-            item = next((entry for entry in K.REMOTE_MODELS if entry.get("id") == model_id), None)
-            if item is None:
-                raise ValueError("Remote model not found.")
-            model_name = str(data.get("model") or item.get("model") or "").strip()
-            label = str(data.get("label") or model_name).strip()
-            group = str(data.get("key_group") or item.get("key_group") or "default").strip()
-            base_url = str(data.get("base_url") or K.default_base_url(item.get("provider"))).strip().rstrip("/")
-            if not model_name or not group or not base_url.startswith(("https://", "http://")):
-                raise ValueError("Enter a model ID, key pool, and valid HTTP(S) endpoint.")
-            item.update({"model": model_name, "label": label[:100], "key_group": group, "base_url": base_url})
-        elif model_action == "remove":
-            model_id = data.get("id")
-            K.REMOTE_MODELS[:] = [item for item in K.REMOTE_MODELS if item.get("id") != model_id]
-            if K.MODEL.startswith("remote:") and not K.get_remote_model(K.MODEL):
-                K.MODEL = K.SAVED_MODEL = K.DEFAULT_MODEL
-                self.app.settings["model"] = K.MODEL
-        if key_action or model_action:
+                item["group"] = new_group
+            for group in self.app.settings.get("api_groups", []):
+                if str(group.get("provider", "")).lower() == provider and str(group.get("key_group") or "default") == old_group:
+                    group["key_group"] = new_group
+            for remote in K.REMOTE_MODELS:
+                if str(remote.get("provider", "")).lower() == provider and str(remote.get("key_group") or "default") == old_group:
+                    remote["key_group"] = new_group
+            keys_changed = True
+
+        group_action = data.get("api_group_action")
+        if group_action in ("add", "edit"):
+            group_id = str(data.get("id") or "")
+            groups = self.app.settings.setdefault("api_groups", [])
+            current = next((item for item in groups if str(item.get("id")) == group_id), None) if group_action == "edit" else None
+            if group_action == "edit" and current is None:
+                raise ValueError("API group not found.")
+            name = str(data.get("name") or "").strip()
+            source = str(data.get("source") or "local").lower()
+            if not name or len(name) > 60:
+                raise ValueError("Group name must contain 1–60 characters.")
+            if source not in ("local", "api"):
+                raise ValueError("Choose a local model or an API model.")
+            if any(item is not current and str(item.get("name", "")).casefold() == name.casefold() for item in groups):
+                raise ValueError("A group with that name already exists.")
+            payload = {"id": group_id or uuid.uuid4().hex[:12], "name": name, "source": source}
+            if source == "local":
+                local_model = str(data.get("local_model") or "")
+                if not any(item.get("ref") == local_model and item.get("type") == "local" for item in self.app.list_models()):
+                    raise ValueError("Choose an installed local model.")
+                payload["local_model"] = local_model
+                if current and current.get("remote_id"):
+                    K.REMOTE_MODELS[:] = [item for item in K.REMOTE_MODELS if item.get("id") != current.get("remote_id")]
+            else:
+                provider = str(data.get("provider") or "").lower()
+                model_id = str(data.get("model") or "").strip()
+                key_group = str(data.get("key_group") or "default").strip()
+                key_id = str(data.get("key_id") or "pool")
+                label = str(data.get("label") or model_id).strip()[:100]
+                base_url = str(data.get("base_url") or K.default_base_url(provider)).strip().rstrip("/")
+                if provider not in K.PROVIDER_SPECS or not model_id:
+                    raise ValueError("Choose a provider and enter its exact API model ID.")
+                if not base_url.startswith(("https://", "http://")):
+                    raise ValueError("The API base URL must start with http:// or https://.")
+                matches = [item for item in K.PROVIDER_KEYS if str(item.get("provider", "")).lower() == provider and str(item.get("group") or "default") == key_group]
+                if key_id != "pool" and not any(str(item.get("id")) == key_id for item in matches):
+                    raise ValueError("Choose a key from the selected provider and group, or use the whole key pool.")
+                if not matches:
+                    raise ValueError("Add an API key for this provider and group before saving the route.")
+                payload.update({"provider": provider, "model": model_id, "label": label, "key_group": key_group,
+                                "key_id": key_id, "base_url": base_url,
+                                "remote_id": (current or {}).get("remote_id") or uuid.uuid4().hex[:12]})
+            if current:
+                current.clear()
+                current.update(payload)
+            else:
+                groups.append(payload)
+            self.app.sync_api_groups()
+        elif group_action == "remove":
+            group_id = str(data.get("id") or "")
+            group = next((item for item in self.app.settings.get("api_groups", []) if str(item.get("id")) == group_id), None)
+            if group is None:
+                raise ValueError("API group not found.")
+            if group.get("remote_id"):
+                K.REMOTE_MODELS[:] = [item for item in K.REMOTE_MODELS if item.get("id") != group.get("remote_id")]
+            self.app.settings["api_groups"] = [item for item in self.app.settings.get("api_groups", []) if str(item.get("id")) != group_id]
+            if str(self.app.settings.get("default_route") or "") == "group|" + group_id:
+                self.app.settings["default_route"] = ""
+
+        if keys_changed or group_action:
             K.save_config()
         self.app.settings["model"] = K.MODEL
         self.app.save_settings()
         self._json({"ok": True, "model": K.MODEL, "project_root": str(self.app.workspace()),
-                    "settings": {"model": K.MODEL, "system_prompt": self.app.editable_system_prompt(), "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False))}})
+                    "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""),
+                                 "system_prompt": self.app.editable_system_prompt(),
+                                 "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False))}})
 
     def _write_file(self, data):
         if not self.app.settings.get('allow_project_writes') or data.get('authorized') is not True:
@@ -1729,8 +2059,11 @@ class Handler(BaseHTTPRequestHandler):
     def _chat(self, data):
         chat_id = str(data.get("chat_id") or "")
         user_text = str(data.get("text") or "").strip()
-        model = str(data.get("model") or K.MODEL)
+        requested_route = str(data.get("route") or "")
+        legacy_model = str(data.get("model") or "")
         effort = str(data.get("effort") or "thinking").lower()
+        if effort == "flash":
+            effort = "thinking"
         mode = str(data.get("mode") or "normal").lower()
         if not user_text:
             self._json({"error": "Message is empty."}, 400)
@@ -1739,7 +2072,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "Message is too long."}, 400)
             return
         if effort not in EFFORT_INSTRUCTIONS:
-            self._json({"error": "Choose Flash, Thinking, or Expert effort."}, 400)
+            self._json({"error": "Choose Thinking or Expert effort."}, 400)
             return
         if mode not in ("normal", "code"):
             self._json({"error": "Choose Normal or Code mode."}, 400)
@@ -1749,7 +2082,8 @@ class Handler(BaseHTTPRequestHandler):
             chat = self.app.create_chat()
             chat_id = chat["id"]
         try:
-            self.app.set_model(model)
+            route_info = self.app.resolve_chat_route(requested_route, legacy_model or None)
+            model = route_info["model"]
         except Exception as exc:
             self._json({"error": str(exc)}, 400)
             return
@@ -1770,18 +2104,49 @@ class Handler(BaseHTTPRequestHandler):
         chat["messages"].append({"role": "user", "content": user_text})
         chat["updated"] = time.time()
         if chat.get("title") in (None, "New conversation"):
-            chat["title"] = re.sub(r"\s+", " ", user_text)[:58] or "New conversation"
+            chat["title"] = "New conversation"
         chat["model"] = model
+        chat["route"] = route_info["route"]
         chat["effort"] = effort
         chat["mode"] = mode
         self.app.save_chats()
 
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Connection", "close")
-        self.send_header("X-Accel-Buffering", "no")
-        self.end_headers()
+        self.app.model_lock.acquire()
+        try:
+            route_info = self.app.resolve_chat_route(requested_route, legacy_model or None)
+            model = route_info["model"]
+        except Exception as exc:
+            self.app.model_lock.release()
+            self._json({"error": str(exc)}, 400)
+            return
+        original_provider_keys = list(K.PROVIDER_KEYS)
+        if route_info.get("key_id"):
+            selected_key = next((item for item in K.PROVIDER_KEYS if str(item.get("id")) == route_info["key_id"]), None)
+            if selected_key is None:
+                K.PROVIDER_KEYS[:] = original_provider_keys
+                self.app.model_lock.release()
+                self._json({"error": "The selected API key is no longer available."}, 400)
+                return
+            K.PROVIDER_KEYS[:] = [selected_key]
+        try:
+            self.app.set_model(model)
+        except Exception as exc:
+            K.PROVIDER_KEYS[:] = original_provider_keys
+            self.app.model_lock.release()
+            self._json({"error": str(exc)}, 400)
+            return
+
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            K.PROVIDER_KEYS[:] = original_provider_keys
+            self.app.model_lock.release()
+            return
 
         def emit(event):
             payload = json.dumps(event, ensure_ascii=False).encode("utf-8")
@@ -1792,10 +2157,16 @@ class Handler(BaseHTTPRequestHandler):
         artifacts_by_path = {}
         finished = False
         disconnected = False
-        temperature = {"flash": 0.25, "thinking": 0.2, "expert": 0.15}[effort]
-        max_tokens = {"flash": 4096, "thinking": 8192, "expert": 16384}[effort]
-        use_thinking = effort in ("thinking", "expert")
-        reasoning_effort = {"flash": "none", "thinking": "medium", "expert": "high"}[effort]
+        temperature = {"thinking": 0.2, "expert": 0.15}[effort]
+        max_tokens = {"thinking": 8192, "expert": 16384}[effort]
+        use_thinking = True
+        reasoning_effort = {"thinking": "medium", "expert": "high"}[effort]
+        generation_seconds = 0.0
+        generation_calls = 0
+        usage_calls = 0
+        provider_output_tokens = 0
+        output_chars = 0
+        model_summary_chunks = []
 
         def log_step(text, ok=None, status="Working…", detail=None):
             item = {"text": str(text), "ok": ok, "detail": str(detail or "")[:12000]}
@@ -1805,7 +2176,12 @@ class Handler(BaseHTTPRequestHandler):
             emit({"type": "phase", "text": item["text"], "ok": ok, "detail": item["detail"], "status": status})
 
         def generate_response():
+            nonlocal generation_seconds, generation_calls, usage_calls
+            nonlocal provider_output_tokens, output_chars
             chunks = []
+            usage_tokens_this_call = None
+            started_at = time.monotonic()
+            generation_calls += 1
             stream = K.stream_chat(
                 messages,
                 model=model,
@@ -1818,11 +2194,32 @@ class Handler(BaseHTTPRequestHandler):
                 for kind, chunk in stream:
                     if not chunk:
                         continue
-                    if kind in THINKING_KINDS:
+                    kind_name = str(kind or "").strip().lower().replace("-", "_")
+                    if kind_name in MODEL_SUMMARY_KINDS:
+                        if isinstance(chunk, str):
+                            model_summary_chunks.append(chunk)
+                            emit({"type": "reasoning", "text": chunk})
                         continue
-                    if kind == "content":
-                        chunks.append(chunk)
+                    if kind_name in ("usage", "stats", "metadata") and isinstance(chunk, dict):
+                        usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else chunk
+                        token_value = next((usage.get(key) for key in ("completion_tokens", "output_tokens", "completionTokens", "outputTokens") if usage.get(key) is not None), None)
+                        try:
+                            if token_value is not None:
+                                usage_tokens_this_call = max(int(token_value), usage_tokens_this_call or 0)
+                        except (TypeError, ValueError):
+                            pass
+                        continue
+                    if kind_name in THINKING_KINDS:
+                        continue
+                    if kind_name == "content":
+                        text_chunk = chunk if isinstance(chunk, str) else str(chunk)
+                        chunks.append(text_chunk)
+                        output_chars += len(text_chunk)
             finally:
+                generation_seconds += max(0.0, time.monotonic() - started_at)
+                if usage_tokens_this_call is not None:
+                    usage_calls += 1
+                    provider_output_tokens += usage_tokens_this_call
                 close = getattr(stream, "close", None)
                 if callable(close):
                     try:
@@ -1830,6 +2227,23 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
             return "".join(chunks).strip()
+
+        def response_stats():
+            seconds = max(generation_seconds, 0.0)
+            has_exact_usage = generation_calls > 0 and usage_calls == generation_calls
+            if has_exact_usage:
+                token_count = provider_output_tokens
+                estimated = False
+            else:
+                token_count = max(1, round(output_chars / 4)) if output_chars else 0
+                estimated = True
+            rate = token_count / seconds if seconds > 0 and token_count > 0 else 0.0
+            return {
+                "thought_seconds": round(seconds, 1),
+                "output_tokens": int(token_count),
+                "tokens_per_second": round(rate, 1),
+                "tokens_estimated": estimated,
+            }
 
         def search_result_text(query, result):
             if not result.get("ok"):
@@ -1842,7 +2256,6 @@ class Handler(BaseHTTPRequestHandler):
             return "\n\n".join(lines)
 
         try:
-            log_step("Starting {} mode with {} effort.".format(mode.title(), effort.title()), status="Preparing…", detail="Operating mode: {}. Effort: {}. The selected mode determines whether developer commands are permitted; the effort setting controls supported provider reasoning parameters. No file has been modified at this stage.".format(mode.title(), effort.title()))
             final_raw = ""
             validation_errors = []
             max_rounds = 4
@@ -1871,11 +2284,6 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     final_raw = raw
                     break
-                log_step(
-                    "Reviewing the request and available workspace files." if round_index == 0 else "Continuing with tool results and verification feedback.",
-                    status="Thinking…" if use_thinking else "Working…",
-                    detail=("Kurt is matching the request against the selected conversation history and readable workspace files. No edits or terminal commands have been accepted yet." if round_index == 0 else "Kurt is incorporating the actual results from the previous action round and deciding whether another targeted action or a final response is needed."),
-                )
                 raw = generate_response()
                 if not raw:
                     final_raw = "Kurt did not return any response text. Check the selected model and provider configuration."
@@ -1940,7 +2348,6 @@ class Handler(BaseHTTPRequestHandler):
                         final_raw = "Kurt proposed file changes but did not provide the required file-by-file Change summary. No files from that response were accepted."
                         break
 
-                log_step("Checking generated file syntax before returning artifacts.", status="Validating files…", detail="Each proposed file is checked with the validator appropriate to its file type where an available parser or compiler exists. Failed checks are sent back to Kurt for repair before the artifact is returned.")
                 new_artifacts, validation_errors = self.app.artifacts_from_answer(raw, chat_id)
                 for artifact in new_artifacts:
                     artifacts_by_path[artifact["path"]] = artifact
@@ -1972,6 +2379,7 @@ class Handler(BaseHTTPRequestHandler):
                     log_step("Validation warning: " + error, False, status="Finishing with warnings…", detail="This artifact did not pass the configured check and is withheld from the accepted artifact list.")
 
             artifacts = list(artifacts_by_path.values())
+            stats = response_stats()
             _inline_thinking, reply = split_thinking(final_raw)
             reply = strip_unsupported_actions(reply)
             reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
@@ -1979,12 +2387,16 @@ class Handler(BaseHTTPRequestHandler):
                 warning = "\n\n**Validation warning:** " + "; ".join(validation_errors)
                 reply = (reply + warning).strip()
             visible = K.BLOCK_RE.sub("", reply).strip()
+            if visible and chat.get("title") in (None, "New conversation"):
+                chat["title"] = self.app.generate_chat_title(user_text, visible, model)
             if not visible and not artifacts:
                 visible = "Kurt completed the request without a text response or validated file artifact. Check the work log for tool and validation results."
             if visible or artifacts:
                 record = {
                     "role": "assistant", "content": visible, "artifacts": artifacts,
-                    "worklog": worklog, "effort": effort, "mode": mode,
+                    "worklog": worklog, "reasoning": "".join(model_summary_chunks).strip(),
+                    "effort": effort, "mode": mode, "route": route_info["route"],
+                    "model": model, "stats": stats,
                 }
                 chat["messages"].append(record)
                 chat["updated"] = time.time()
@@ -1997,8 +2409,9 @@ class Handler(BaseHTTPRequestHandler):
             finished = True
             emit({
                 "type": "done", "content": visible, "artifacts": artifacts,
-                "worklog": worklog, "chat_id": chat_id, "title": chat["title"],
-                "model": model, "effort": effort, "mode": mode,
+                "worklog": worklog, "reasoning": "".join(model_summary_chunks).strip(),
+                "chat_id": chat_id, "title": chat["title"], "route": route_info["route"],
+                "model": model, "effort": effort, "mode": mode, "stats": stats,
             })
         except (BrokenPipeError, ConnectionResetError):
             disconnected = True
@@ -2009,6 +2422,8 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
         finally:
+            K.PROVIDER_KEYS[:] = original_provider_keys
+            self.app.model_lock.release()
             if not disconnected:
                 try:
                     self.wfile.flush()
