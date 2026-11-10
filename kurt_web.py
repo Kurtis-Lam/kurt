@@ -71,8 +71,7 @@ KURT WEB WORKSPACE RULES:
 - Do not emit provider tool-call markers or invent tool results. Do not claim a command or
   test ran unless the interface supplied its actual result.
 - Use the workspace tree and readable file contents already supplied in the system
-  messages. They are the source of truth for what is available. If the workspace is empty
-  or lacks the files needed, ask the user to add the project through Workspace files.
+  messages. They are the source of truth for what is available. If the workspace is empty or lacks the files needed, ask the user to attach the files using the composer attachment control or configure the project directory in Settings.
 - Do not claim to have inspected files that were not attached or whose contents were not
   supplied. Keep paths relative to this conversation's temporary workspace. Never target
   paths outside it or claim that the original project was changed.
@@ -563,6 +562,66 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 .chat-row:hover .chat-actions,.chat-row:focus-within .chat-actions,.chat-row.active .chat-actions{opacity:1}
 @media(max-width:700px){.main.has-artifacts .chat-area{height:100%;min-height:0}.artifact-pane{top:54px;bottom:0}.chat-actions{opacity:1}}
 @media(prefers-reduced-motion:reduce){.think-body,.work-log-body,.artifact-body,.work-detail,.settings-panel{transition:none!important}}
+
+/* Compact chat list and bulk selection. */
+.side-heading{padding:8px 6px 3px;gap:5px}
+.chat-heading-actions{display:flex;align-items:center;gap:3px;min-width:0}
+.chat-sort{max-width:94px}
+.chat-select-toggle{padding:3px 6px;border:0;background:transparent;color:var(--muted);font-size:11px;white-space:nowrap}
+.chat-select-toggle:hover,.chat-select-toggle[aria-pressed=true]{background:var(--raise);color:var(--text);border-color:var(--line2)}
+.chat-heading-actions{gap:1px}
+.chat-context-menu{min-width:154px;padding:3px}
+.chat-context-menu button{gap:7px;padding:6px 8px;font-size:12px}
+.chat-context-menu .menu-divider{margin:2px 1px}
+.chat-select-bar{display:flex;align-items:center;gap:5px;padding:3px 6px 5px;color:var(--muted);font-size:11px}
+.chat-select-bar[hidden]{display:none}
+.chat-select-bar label{display:flex;align-items:center;gap:4px;white-space:nowrap}
+.chat-select-bar input,.chat-row-select{width:13px;height:13px;margin:0;accent-color:var(--green);flex:none}
+.chat-select-bar span{flex:1;min-width:0;white-space:nowrap}
+.chat-select-bar button{padding:3px 7px;font-size:11px}
+.chat-list{min-height:60px}
+.chat-row{margin:0;padding:1px 2px;gap:2px;border-radius:7px}
+.chat-item{padding:4px 6px;font-size:12.5px;line-height:1.35}
+.chat-more{width:26px;height:26px;font-size:18px}
+.chat-row-select{margin:0 3px 0 4px}
+.chat-row.selected{background:var(--green-soft);outline:1px solid var(--line2)}
+.chat-row .chat-actions{gap:1px}
+
+/* The composer shows the chosen model; categories and choices open as adjacent panes. */
+.route-picker{min-width:0;max-width:min(260px,32vw)}
+.route-current{display:flex;align-items:center;gap:8px;max-width:100%;min-width:0;padding:6px 9px;border:1px solid transparent;background:transparent;color:var(--muted);font-size:12px;border-radius:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.route-current:after{content:"";width:6px;height:6px;flex:none;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg) translateY(-2px)}
+.route-current:hover,.route-current[aria-expanded=true]{background:var(--raise);border-color:var(--line2);color:var(--text)}
+.route-flyout{display:grid;grid-template-columns:minmax(112px,.8fr) minmax(0,1.35fr);gap:5px;width:min(430px,calc(100vw - 20px));max-height:min(390px,calc(100vh - 24px));overflow:hidden;padding:6px}
+.route-flyout-column{min-width:0;max-height:min(376px,calc(100vh - 38px));overflow-y:auto;overscroll-behavior:contain}
+.route-flyout-categories{padding-right:4px;border-right:1px solid var(--line)}
+.route-flyout-category{display:flex;align-items:center;justify-content:space-between;width:100%;padding:8px 9px;border:0;border-radius:7px;background:transparent;color:var(--muted);text-align:left;font-size:12.5px}
+.route-flyout-category:after{content:"›";font-size:17px;line-height:1;color:var(--muted)}
+.route-flyout-category:hover,.route-flyout-category.active{background:var(--raise);color:var(--text)}
+.route-flyout-options{display:grid;align-content:start;gap:2px}
+.route-flyout-item{padding:8px 9px;font-size:12px}
+.route-flyout-empty{padding:9px;color:var(--muted);font-size:12px}
+
+/* Let the settings content, including long group forms, scroll inside its own pane. */
+.settings-modal{overscroll-behavior:contain}
+.settings-panel-area{overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;min-height:0}
+.settings-panel.active{max-height:none;overflow:visible}
+.settings-panel:not(.active){overflow:hidden}
+#failoverMembers{display:grid;gap:7px;min-width:0}
+.failover-member-row{margin:0;min-width:0;grid-template-columns:minmax(0,1.2fr) minmax(0,.95fr) auto}
+.failover-member-row select{min-width:0;max-width:100%}
+.local-model-row .model-actions{display:flex;gap:6px;flex:none}
+.local-model-row .model-actions button{padding:6px 9px;font-size:12px}
+.key-row{min-width:0}
+.key-row .key-provider{color:var(--muted);font-size:11px}
+@media(max-width:700px){
+ .route-picker{max-width:30vw}
+ .route-current{max-width:30vw;padding:5px 5px;font-size:10.5px}
+ .route-flyout{width:min(360px,calc(100vw - 20px));grid-template-columns:minmax(100px,.8fr) minmax(0,1.3fr)}
+ .chat-select-bar{gap:4px}
+ .settings-panel-area{overflow-y:auto;min-height:0}
+ .failover-member-row{grid-template-columns:minmax(0,1fr) minmax(0,.9fr) auto}
+}
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -585,8 +644,8 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <aside class="sidebar">
 <div class="brand"><span class="logo"><svg viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg></span><b>Kurt</b></div>
 <button class="nav-btn new" id="newChat"><span class="ico"><svg class="ic"><use href="#i-plus"/></svg></span>New chat</button>
-<button class="nav-btn" id="openFiles"><span class="ico"><svg class="ic"><use href="#i-file"/></svg></span>Workspace files</button>
-<div class="side-heading"><div class="side-title">Chats</div><select id="chatSort" class="chat-sort" aria-label="Sort chats"><option value="newest">Newest</option><option value="oldest">Oldest</option></select></div>
+<div class="side-heading"><div class="side-title">Chats</div><div class="chat-heading-actions"><select id="chatSort" class="chat-sort" aria-label="Sort chats"><option value="newest">Newest</option><option value="oldest">Oldest</option></select><button id="selectChats" class="chat-select-toggle" type="button" aria-pressed="false">Select</button></div></div>
+<div class="chat-select-bar" id="chatSelectBar" hidden><label><input id="selectAllChats" type="checkbox"> All</label><span id="selectedChatCount">0 selected</span><button id="deleteSelectedChats" type="button" class="danger" disabled>Delete</button><button id="cancelChatSelect" type="button" class="ghost">Done</button></div>
 <div id="chatList" class="chat-list"></div>
 <div class="side-bottom">
 <button class="nav-btn" id="sidebarSettings"><span class="ico"><svg class="ic"><use href="#i-sliders"/></svg></span>Settings</button>
@@ -598,7 +657,6 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <button class="icon-btn menu-btn" id="menuBtn" aria-label="Open menu"><svg class="ic"><use href="#i-menu"/></svg></button>
 <div class="titles"><div id="chatTitle" class="chat-title">New chat</div><div id="chatMeta" class="chat-meta"></div></div>
 
-<button class="icon-btn" id="clearChat" title="Clear conversation messages" aria-label="Clear conversation messages"><svg class="ic"><use href="#i-trash"/></svg></button>
 <button class="icon-btn" id="themeBtn" title="Switch colour theme" aria-label="Switch colour theme"><svg class="ic"><use href="#i-theme"/></svg></button>
 </header>
 <div class="download-strip" title="Background model download"><div id="downloadFill" class="download-fill"></div><div id="downloadCaption" class="download-caption"></div></div>
@@ -615,7 +673,7 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <span class="spacer"></span>
 <select id="effortSelect" class="mode-pill" title="Response effort" aria-label="Response effort"><option value="thinking" selected>Thinking</option><option value="expert">Expert</option></select>
 <select id="operationMode" class="mode-pill" title="Operating mode" aria-label="Operating mode"><option value="normal" selected>Normal</option><option value="code">Code</option></select>
-<div class="route-picker" id="routePicker" aria-label="Choose model route"><button class="route-category" type="button" data-route-category="local">Local</button><button class="route-category" type="button" data-route-category="key">Key</button><button class="route-category" type="button" data-route-category="group">Group</button></div><select id="topModel" hidden aria-label="Selected model route"></select><input id="composerFiles" type="file" multiple hidden>
+<div class="route-picker" id="routePicker" aria-label="Choose model route"><button class="route-current" id="routeCurrent" type="button" aria-haspopup="true" aria-expanded="false">Choose model</button></div><select id="topModel" hidden aria-label="Selected model route"></select><input id="composerFiles" type="file" multiple hidden>
 <button class="send" id="sendBtn" title="Send message" aria-label="Send message" disabled><svg class="ic"><use href="#i-up"/></svg></button>
 </div>
 </div>
@@ -632,7 +690,7 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <nav class="settings-nav" aria-label="Settings sections">
 <div class="settings-nav-caption">Settings</div>
 <button class="settings-nav-btn active" type="button" data-settings-tab="general">General</button>
-<button class="settings-nav-btn" type="button" data-settings-tab="local-models">Local models</button>
+<button class="settings-nav-btn" type="button" data-settings-tab="local-models">Models</button>
 <button class="settings-nav-btn" type="button" data-settings-tab="keys">Keys</button>
 <button class="settings-nav-btn" type="button" data-settings-tab="groups">Groups</button>
 </nav>
@@ -645,30 +703,30 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <div class="row"><button class="primary" id="saveSettings">Save settings</button><button id="reloadSettings">Reload from disk</button></div>
 </section>
 <section class="settings-panel" data-settings-panel="local-models">
-<h3>Local models</h3><div class="inline-note">Installed Ollama models and model downloads.</div>
+<h3>Models</h3><div class="inline-note">Manage installed Ollama models and configured API models. Removing an Ollama model uninstalls its downloaded weights; removing an API model keeps its saved keys.</div>
 <div id="localModelList"></div>
 <div class="model-download-card"><h4>Download a model</h4><p>Enter an Ollama model ID, for example <code>qwen2.5-coder:7b</code>. Downloads run in the background and progress appears at the top of Kurt.</p><div class="row"><input id="downloadModel" aria-label="Ollama model name" placeholder="Model ID, e.g. qwen2.5-coder:7b"><button id="startDownload" class="primary">Download model</button></div><div class="inline-note" id="localDownloadStatus">No model download started.</div></div>
 </section>
 <section class="settings-panel" data-settings-panel="keys">
-<h3>Keys</h3><div class="inline-note">Add and manage provider API keys. Keys are stored locally and can be used by individual routes or failover groups.</div>
-<div class="settings-grid"><div class="field"><label>Provider</label><select id="keyProvider"></select></div><div class="field"><label>Key group</label><input id="keyGroup" value="default" placeholder="e.g. personal"></div><div class="field"><label>Account label</label><input id="keyLabel" placeholder="Personal account"></div><div class="field"><label>API key</label><input id="keyValue" type="password" autocomplete="off" placeholder="Paste API key (stored locally)"></div></div><button id="addKey" class="primary">Add key</button>
+<h3>Keys</h3><div class="inline-note">Add and manage provider API keys. Each key is listed independently and can be selected for compatible models.</div>
+<div class="settings-grid"><div class="field"><label>Provider</label><select id="keyProvider"></select></div><div class="field"><label>Account label</label><input id="keyLabel" placeholder="Personal account"></div><div class="field"><label>API key</label><input id="keyValue" type="password" autocomplete="off" placeholder="Paste API key (stored locally)"></div></div><button id="addKey" class="primary">Add key</button>
 <div class="row key-sort-row"><span class="inline-note">Sort keys</span><select id="keySort" aria-label="Sort API keys"><option value="name">Name</option><option value="date">Date added</option></select></div><div id="keysList"></div>
 </section>
 <section class="settings-panel" data-settings-panel="groups">
-<h3>Groups</h3><div class="inline-note">Create a fallback order. Kurt tries each model and its selected key, then switches to the next entry if a request fails before a response is produced. Add at least two entries.</div>
+<h3>Groups</h3><div class="inline-note">Create a fallback order. A group can contain one or more entries: choose a local model, or choose an API model and its key. Kurt moves to the next entry only when a request fails before a response is produced.</div>
 <div class="field"><label>Group name</label><input id="failoverGroupName" placeholder="e.g. Reliable, Coding fallback"></div>
 <div id="failoverMembers"></div>
-<div class="row"><button id="addFailoverMember" type="button">Add model / key</button><button id="saveFailoverGroup" class="primary" type="button">Create group</button><button id="cancelFailoverGroup" type="button" hidden>Cancel edit</button></div>
+<div class="row"><button id="addFailoverMember" type="button">Add local model / API key</button><button id="saveFailoverGroup" class="primary" type="button">Create group</button><button id="cancelFailoverGroup" type="button" hidden>Cancel edit</button></div>
 <div class="section"><h3>Saved groups</h3><div id="apiGroupsList"></div></div>
 </section>
 </div></div></div></div>
 <div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files</h2><button class="ghost" data-close="filesModal">Close</button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Choose files or a folder from your computer. This opens the standard macOS Finder or Windows File Explorer picker. Images and other binary files are kept in this chat workspace; readable source files are added to Kurt’s context. Your original files are not changed.</p><div class="file-source"><h3>From this computer</h3><div class="file-actions"><button id="chooseLocalFiles" class="primary">Choose files</button><button id="chooseLocalFolder">Choose folder</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList">No files selected.</div></div><div class="file-source"><h3>From the configured project</h3><div class="row"><input id="fileFolder" value="" placeholder="Project folder path"><button id="refreshFiles">Open</button><button id="selectCurrentFolder">Add this folder</button></div><div class="file-picker" id="filePicker"></div></div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
 <div class="toast" id="toast"></div>
-<div class="route-flyout" id="routeFlyout" hidden></div>
+<div class="route-flyout" id="routeFlyout" hidden><div class="route-flyout-column route-flyout-categories"></div><div class="route-flyout-column route-flyout-options"></div></div>
 <div class="chat-context-menu" id="chatContextMenu" role="menu"></div>
 <div class="dialog-backdrop" id="appDialogBackdrop"><form class="app-dialog" id="appDialogForm"><h2 id="appDialogTitle"></h2><p class="dialog-message" id="appDialogMessage"></p><div class="dialog-fields" id="appDialogFields"></div><div class="dialog-actions"><button type="button" id="appDialogCancel">Cancel</button><button type="submit" class="primary" id="appDialogConfirm">Save</button></div></form></div>
 <script>
-const TOKEN='__TOKEN__';const HINT='Kurt can make mistakes. Attachments are copied into an isolated chat workspace; the project stays unchanged unless you explicitly apply a file.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null};
+const TOKEN='__TOKEN__';const HINT='Kurt can make mistakes. Attachments are copied into an isolated chat workspace; the project stays unchanged unless you explicitly apply a file.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[]};
 const $=id=>document.getElementById(id);const api=async(path,body)=>{const res=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:body?JSON.stringify(body):undefined});const data=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(data.error||res.statusText);return data};
 function toast(msg){const el=$('toast');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600)}
 
@@ -704,8 +762,14 @@ function fillModels(){
  setSelectOptions($('topModel'),options,'No routes configured');
  setSelectOptions($('settingsModel'),options,'No routes configured');
  const preferred=state.settings.default_route||'';
- if(options.some(item=>item.value===preferred)){$('topModel').value=preferred;$('settingsModel').value=preferred}
- else if(options.length){$('settingsModel').value=$('topModel').value}
+ let selected=options.find(item=>item.value===preferred)?.value||'';
+ if(!selected&&state.settings.model){
+  const saved=String(state.settings.model);
+  selected=options.find(item=>item.value==='model|'+saved)?.value||
+   options.find(item=>item.value.startsWith('keymodel|'+saved+'|'))?.value||'';
+ }
+ if(!selected)selected=options[0]?.value||'';
+ if(selected){$('topModel').value=selected;$('settingsModel').value=selected}
  syncSelect($('settingsModel'));renderRoutePicker();renderLocalModels();
 }
 function routeCategoryForValue(value){
@@ -715,35 +779,68 @@ function routeCategoryForValue(value){
  if(String(value||'').startsWith('key'))return 'key';
  return 'group';
 }
-function renderRoutePicker(){
- const root=$('routePicker');if(!root)return;
- const active=routeCategoryForValue($('topModel').value);
- root.querySelectorAll('[data-route-category]').forEach(button=>{
-  const category=button.dataset.routeCategory;
-  button.classList.toggle('active',category===active);
-  button.setAttribute('aria-pressed',String(category===active));
-  button.onclick=event=>{event.stopPropagation();openRouteFlyout(category,button)};
-  button.onmouseenter=()=>openRouteFlyout(category,button);
- });
+function routeChoiceLabel(value){
+ const route=(state.routes||[]).find(item=>item.value===value);
+ if(route)return String(route.label||'').replace(/^(?:Local|Key|Group)\s*·\s*/,'')||route.label;
+ return routeLabel(value);
 }
-function closeRouteFlyout(){const menu=$('routeFlyout');if(menu){menu.hidden=true;menu.replaceChildren()}}
-function openRouteFlyout(category,trigger){
- const menu=$('routeFlyout');if(!menu||!trigger)return;
+function routeLabel(value){
+ const route=(state.routes||[]).find(item=>item.value===value);
+ const parts=String(value||'').split('|');
+ if(parts[0]==='model'||parts[0]==='keymodel'){
+  const model=state.models.find(item=>item.ref===parts[1]);
+  if(model)return model.label||model.name||'Choose model';
+ }
+ if(route)return String(route.label||'').replace(/^(?:Local|Key|Group)\s*·\s*/,'').replace(/\s*·\s*key pool$/i,'')||route.label;
+ return 'Choose model';
+}
+function renderRoutePicker(){
+ const trigger=$('routeCurrent');if(!trigger)return;
+ let selected=String($('topModel').value||'');
+ if(selected&&!state.routes.some(route=>route.value===selected))selected='';
+ if(!selected){const preferred=state.settings.default_route||'';selected=state.routes.find(route=>route.value===preferred)?.value||state.routes[0]?.value||''}
+ if(selected!==$('topModel').value)$('topModel').value=selected;
+ const route=(state.routes||[]).find(item=>item.value===selected);
+ trigger.textContent=routeLabel(selected);
+ trigger.title=route?.label||routeLabel(selected);
+ trigger.setAttribute('aria-label','Current model: '+trigger.title+'. Choose another model');
+ trigger.onclick=event=>{event.stopPropagation();openRouteFlyout(trigger)};
+ trigger.onmouseenter=()=>{if($('routeFlyout').hidden)openRouteFlyout(trigger)};
+}
+function closeRouteFlyout(){const menu=$('routeFlyout');if(menu){menu.hidden=true;menu.setAttribute('aria-hidden','true');$('routeCurrent')?.setAttribute('aria-expanded','false')}}
+function showRouteOptions(category){
+ const menu=$('routeFlyout');if(!menu)return;
+ const categories=menu.querySelector('.route-flyout-categories');const options=menu.querySelector('.route-flyout-options');
+ categories.querySelectorAll('[data-route-kind]').forEach(button=>button.classList.toggle('active',button.dataset.routeKind===category));
+ options.replaceChildren();
  const routes=(state.routes||[]).filter(route=>route.kind===category);
- menu.replaceChildren();
- if(!routes.length){const empty=document.createElement('div');empty.className='route-flyout-empty';empty.textContent=category==='local'?'No local models are installed.':category==='key'?'No compatible model keys are available.':'No groups have been created.';menu.appendChild(empty)}
+ if(!routes.length){const empty=document.createElement('div');empty.className='route-flyout-empty';empty.textContent=category==='local'?'No local models are installed.':category==='key'?'No API keys are available for configured models.':'No groups have been created.';options.appendChild(empty);return}
  routes.forEach(route=>{
-  const item=document.createElement('button');item.type='button';item.className='route-flyout-item';item.textContent=route.label;item.title=route.label;
+  const item=document.createElement('button');item.type='button';item.className='route-flyout-item';item.textContent=routeChoiceLabel(route.value);item.title=route.label;
   if(route.value===$('topModel').value)item.setAttribute('aria-current','true');
   item.onclick=event=>{event.stopPropagation();$('topModel').value=route.value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}));closeRouteFlyout()};
-  menu.appendChild(item);
+  options.appendChild(item);
  });
- menu.hidden=false;
- const width=Math.min(360,window.innerWidth-20);menu.style.width=width+'px';
+}
+function openRouteFlyout(trigger){
+ const menu=$('routeFlyout');if(!menu||!trigger)return;
+ const categories=menu.querySelector('.route-flyout-categories');categories.replaceChildren();
+ const categoryLabels=[['local','Local'],['key','Key'],['group','Group']];
+ const first=routeCategoryForValue($('topModel').value);
+ categoryLabels.forEach(([kind,label])=>{
+  const button=document.createElement('button');button.type='button';button.className='route-flyout-category';button.dataset.routeKind=kind;button.textContent=label;
+  button.onmouseenter=()=>showRouteOptions(kind);
+  button.onfocus=()=>showRouteOptions(kind);
+  button.onclick=event=>{event.stopPropagation();showRouteOptions(kind)};
+  categories.appendChild(button);
+ });
+ showRouteOptions(first);
+ menu.hidden=false;menu.setAttribute('aria-hidden','false');$('routeCurrent').setAttribute('aria-expanded','true');
  const rect=trigger.getBoundingClientRect();
- const left=rect.right+8+width<=window.innerWidth-10?rect.right+8:Math.max(10,rect.left-width-8);
- const maxHeight=Math.min(360,window.innerHeight-24);menu.style.maxHeight=maxHeight+'px';
- const height=Math.min(menu.scrollHeight,maxHeight);const top=Math.max(12,Math.min(window.innerHeight-height-12,rect.bottom-height));
+ const width=Math.min(430,window.innerWidth-20);menu.style.width=width+'px';
+ const height=Math.min(menu.scrollHeight,390,window.innerHeight-24);
+ const left=Math.max(10,Math.min(window.innerWidth-width-10,rect.right-width));
+ const top=Math.max(12,Math.min(window.innerHeight-height-12,rect.top-height-8));
  menu.style.left=left+'px';menu.style.top=top+'px';
 }
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -785,17 +882,107 @@ const SUGGESTIONS=[['Understand my project','Inspect the current project structu
 function showWelcome(){clearArtifactPane();setEmpty(true);follow=true;$('messages').innerHTML='<div class="welcome"><svg class="mark xl" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><h1>What are we building?</h1></div>';$('chips').innerHTML=SUGGESTIONS.map(s=>'<button class="chip" data-prompt="'+esc(s[1])+'">'+esc(s[0])+'</button>').join('');document.querySelectorAll('#chips [data-prompt]').forEach(b=>b.onclick=()=>{$('prompt').value=b.dataset.prompt;autosize();updateSend();$('prompt').focus()})}
 function closeChatMenu(){const menu=$('chatContextMenu');menu.classList.remove('open');menu.replaceChildren();menu.removeAttribute('data-chat-id')}
 function openChatMenu(chatId,x,y){const chat=state.chats.find(item=>item.id===chatId);if(!chat)return;const menu=$('chatContextMenu');menu.replaceChildren();menu.dataset.chatId=chatId;const add=(label,action,cls='')=>{const button=document.createElement('button');button.type='button';button.className=cls;button.textContent=label;button.onclick=()=>{closeChatMenu();action()};menu.appendChild(button)};add(chat.pinned?'Unpin chat':'Pin chat',()=>togglePinChat(chatId,!chat.pinned));add('Rename chat',()=>renameChat(chatId,chat.title||''));const divider=document.createElement('div');divider.className='menu-divider';menu.appendChild(divider);add('Delete chat',()=>deleteChat(chatId),'danger');menu.classList.add('open');const rect=menu.getBoundingClientRect();menu.style.left=Math.max(8,Math.min(x,innerWidth-rect.width-8))+'px';menu.style.top=Math.max(8,Math.min(y,innerHeight-rect.height-8))+'px'}
-function renderChats(){const el=$('chatList');el.replaceChildren();const chats=state.chats.slice().sort((a,b)=>{if(!!a.pinned!==!!b.pinned)return a.pinned?-1:1;return state.sort==='oldest'?(a.updated||0)-(b.updated||0):(b.updated||0)-(a.updated||0)});chats.forEach(chat=>{const row=document.createElement('div');row.className='chat-row'+(chat.id===state.chatId?' active':'');row.dataset.chatId=chat.id;const title=document.createElement('button');title.type='button';title.className='chat-item';title.title=chat.title||'New conversation';title.innerHTML=(chat.pinned?'<span class="pin-indicator">◆</span>':'')+esc(chat.title||'New conversation');title.onclick=()=>loadChat(chat.id);const actions=document.createElement('div');actions.className='chat-actions';const more=document.createElement('button');more.type='button';more.className='chat-more';more.title='Chat options';more.setAttribute('aria-label','Chat options');more.textContent='···';more.onclick=event=>{event.stopPropagation();const rect=more.getBoundingClientRect();openChatMenu(chat.id,rect.right-176,rect.bottom+4)};actions.append(more);row.append(title,actions);row.addEventListener('contextmenu',event=>{event.preventDefault();openChatMenu(chat.id,event.clientX,event.clientY)});el.append(row)})}
+function updateChatSelectionToolbar(){
+ const bar=$('chatSelectBar');if(!bar)return;
+ bar.hidden=!state.selectingChats;
+ const selected=state.selectedChatIds.length;
+ $('selectedChatCount').textContent=selected+' selected';
+ $('deleteSelectedChats').disabled=!selected;
+ const all=state.chats.length>0&&selected===state.chats.length;
+ $('selectAllChats').checked=all;
+ $('selectAllChats').indeterminate=selected>0&&!all;
+ $('selectChats').textContent=state.selectingChats?'Cancel':'Select';
+ $('selectChats').setAttribute('aria-pressed',String(state.selectingChats));
+}
+function setChatSelectionMode(enabled){
+ state.selectingChats=!!enabled;
+ if(!state.selectingChats)state.selectedChatIds=[];
+ updateChatSelectionToolbar();renderChats();
+}
+function toggleChatSelection(id,checked){
+ const selected=new Set(state.selectedChatIds);
+ if(checked)selected.add(id);else selected.delete(id);
+ state.selectedChatIds=state.chats.map(chat=>chat.id).filter(chatId=>selected.has(chatId));
+ updateChatSelectionToolbar();renderChats();
+}
+function selectAllChats(checked){
+ state.selectedChatIds=checked?state.chats.map(chat=>chat.id):[];
+ updateChatSelectionToolbar();renderChats();
+}
+async function deleteSelectedChats(){
+ const ids=state.selectedChatIds.slice();if(!ids.length)return;
+ if(!await confirmInApp('Delete selected chats',`Delete ${ids.length} selected conversation${ids.length===1?'':'s'} and their temporary workspaces? This cannot be undone.`,'Delete chats',true))return;
+ if(ids.includes(state.chatId))cancelRun();
+ try{
+  await api('/api/chats/bulk-delete',{ids});
+  if(ids.includes(state.chatId)){state.chatId=null;resetComposer();showWelcome();setTitle('New chat','')}
+  state.selectedChatIds=[];state.selectingChats=false;await refreshChats();updateChatSelectionToolbar();toast('Selected chats deleted');
+ }catch(error){toast(error.message)}
+}
+
+function renderChats(){
+ const el=$('chatList');el.replaceChildren();
+ const chats=state.chats.slice().sort((a,b)=>{if(!!a.pinned!==!!b.pinned)return a.pinned?-1:1;return state.sort==='oldest'?(a.updated||0)-(b.updated||0):(b.updated||0)-(a.updated||0)});
+ chats.forEach(chat=>{
+  const row=document.createElement('div');row.className='chat-row'+(chat.id===state.chatId?' active':'')+(state.selectedChatIds.includes(chat.id)?' selected':'');row.dataset.chatId=chat.id;
+  if(state.selectingChats){const check=document.createElement('input');check.type='checkbox';check.className='chat-row-select';check.checked=state.selectedChatIds.includes(chat.id);check.setAttribute('aria-label','Select '+(chat.title||'conversation'));check.onchange=()=>toggleChatSelection(chat.id,check.checked);row.append(check)}
+  const title=document.createElement('button');title.type='button';title.className='chat-item';title.title=chat.title||'New conversation';title.innerHTML=(chat.pinned?'<span class="pin-indicator">◆</span>':'')+esc(chat.title||'New conversation');title.onclick=()=>state.selectingChats?toggleChatSelection(chat.id,!state.selectedChatIds.includes(chat.id)):loadChat(chat.id);
+  row.append(title);
+  if(!state.selectingChats){const actions=document.createElement('div');actions.className='chat-actions';const more=document.createElement('button');more.type='button';more.className='chat-more';more.title='Chat options';more.setAttribute('aria-label','Chat options');more.textContent='···';more.onclick=event=>{event.stopPropagation();const rect=more.getBoundingClientRect();openChatMenu(chat.id,rect.right-176,rect.bottom+4)};actions.append(more);row.append(actions)}
+  row.addEventListener('contextmenu',event=>{event.preventDefault();openChatMenu(chat.id,event.clientX,event.clientY)});el.append(row);
+ });
+ updateChatSelectionToolbar();
+}
 async function renameChat(id,current){const result=await inAppDialog({title:'Rename conversation',message:'Choose a clear title for this chat.',confirmText:'Rename',fields:[{name:'title',label:'Chat title',value:current,required:true,maxLength:100}]});if(!result)return;const title=result.title.trim();if(!title){toast('Chat title cannot be empty');return}try{await api('/api/chats/'+encodeURIComponent(id),{rename:title});await refreshChats();if(id===state.chatId)setTitle(title,$('chatMeta').textContent)}catch(error){toast(error.message)}}
 async function togglePinChat(id,pinned){try{await api('/api/chats/'+encodeURIComponent(id),{pin:!!pinned});await refreshChats()}catch(error){toast(error.message)}}
 async function deleteChat(id){const chat=state.chats.find(item=>item.id===id);if(!await confirmInApp('Delete conversation',`Delete “${chat?.title||'this chat'}” and its temporary workspace? This cannot be undone.`,'Delete chat',true))return;if(state.chatId===id)cancelRun();try{await api('/api/chats/'+encodeURIComponent(id),{delete:true});if(state.chatId===id){state.chatId=null;resetComposer();showWelcome();setTitle('New chat','')}await refreshChats();toast('Chat deleted')}catch(error){toast(error.message)}}
 async function refreshBootstrap(){const data=await api('/api/bootstrap');state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.settings=data.settings||{};state.projectRoot=data.project_root||'';$('projectRoot').value=state.projectRoot;$('systemPrompt').value=state.settings.system_prompt||'';$('allowProjectWrites').checked=!!state.settings.allow_project_writes;fillProviders();fillModels();renderKeys();renderApiGroups();refreshFailoverMemberOptions();enhanceAllSelects()}
 function fillProviders(){const providers=state.providers.map(item=>({value:item.id,label:item.label}));setSelectOptions($('keyProvider'),providers,'Choose provider')}
-function renderLocalModels(){const root=$('localModelList');if(!root)return;root.replaceChildren();const local=state.models.filter(model=>model.type==='local').sort((a,b)=>(a.label||a.name).localeCompare(b.label||b.name));if(!local.length){root.innerHTML='<div class="empty">No Ollama models are installed yet.</div>';return}local.forEach(model=>{const row=document.createElement('div');row.className='local-model-row';const grow=document.createElement('div');grow.className='grow';grow.innerHTML=`<b>${esc(model.label||model.name)}</b><small>${esc(model.size?String(model.size):'Ollama local model')}${model.current?' · currently active':''}</small>`;const use=document.createElement('button');use.textContent='Use in chat';use.onclick=()=>{const route='model|'+model.ref;$('topModel').value=route;$('topModel').dispatchEvent(new Event('change',{bubbles:true}));activateSettingsTab('general');toast('Local model selected for new chats')};row.append(grow,use);root.append(row)})}
-function renderKeys(){const root=$('keysList');if(!root)return;root.replaceChildren();if(!state.keys.length){root.innerHTML='<div class="empty">No API keys saved yet.</div>';return}const groups=new Map();state.keys.forEach(key=>{const provider=key.provider||'unknown',group=key.group||'default',id=provider+'\u0000'+group;if(!groups.has(id))groups.set(id,{provider,group,keys:[]});groups.get(id).keys.push(key)});const sortMode=$('keySort')?.value||state.keySort||'name';[...groups.values()].sort((a,b)=>(a.provider+a.group).localeCompare(b.provider+b.group)).forEach(pool=>{pool.keys.sort((a,b)=>sortMode==='date'?(Number(b.created_at)||0)-(Number(a.created_at)||0):(a.label||'').localeCompare(b.label||''));const card=document.createElement('div');card.className='pool-card';const heading=document.createElement('div');heading.className='pool-head';const grow=document.createElement('div');grow.className='grow';grow.innerHTML=`<b>${esc(pool.provider)} · ${esc(pool.group)}</b><small>${pool.keys.length} key(s) · available to linked groups</small>`;const actions=document.createElement('div');actions.className='pool-actions';const rename=document.createElement('button');rename.textContent='Rename group';rename.onclick=async()=>{const result=await inAppDialog({title:'Rename API key group',message:'All keys in this provider group and their linked routes will be updated.',confirmText:'Rename',fields:[{name:'name',label:'New group name',value:pool.group,required:true,maxLength:50}]});if(!result)return;try{await api('/api/settings',{key_action:'rename_group',provider:pool.provider,old_group:pool.group,new_group:result.name.trim()});await refreshBootstrap();toast('Key group renamed')}catch(error){toast(error.message)}};actions.append(rename);heading.append(grow,actions);card.append(heading);pool.keys.forEach(key=>{const row=document.createElement('div');row.className='key-row';const added=Number(key.created_at)?new Date(Number(key.created_at)*1000).toLocaleDateString():'Date unavailable';row.innerHTML=`<div class="grow"><b>${esc(key.label)}</b><small>${esc(key.masked)} · Added ${esc(added)}</small></div><button class="edit-key">Edit</button><button class="danger remove-key">Remove</button>`;row.querySelector('.edit-key').onclick=async()=>{const result=await inAppDialog({title:'Edit API key',message:'The stored key is never shown. Leave the replacement blank to keep it unchanged.',confirmText:'Save key',fields:[{name:'label',label:'Account label',value:key.label,required:true,maxLength:80},{name:'group',label:'Key group',value:key.group,required:true,maxLength:50},{name:'value',label:'Replacement API key',type:'password',value:'',placeholder:'Leave blank to keep current'}]});if(!result)return;try{await api('/api/settings',{key_action:'edit',id:key.id,label:result.label,group:result.group,value:result.value});await refreshBootstrap();toast('API key updated')}catch(error){toast(error.message)}};row.querySelector('.remove-key').onclick=async()=>{if(!await confirmInApp('Remove API key',`Remove “${key.label}” from local storage?`, 'Remove',true))return;try{await api('/api/settings',{key_action:'remove',id:key.id});await refreshBootstrap();toast('API key removed')}catch(error){toast(error.message)}};card.append(row)});root.append(card)});}
+function renderLocalModels(){
+ const root=$('localModelList');if(!root)return;root.replaceChildren();
+ const models=state.models.slice().sort((a,b)=>(a.type===b.type?0:a.type==='local'?-1:1)||(a.label||a.name).localeCompare(b.label||b.name));
+ if(!models.length){root.innerHTML='<div class="empty">No models are configured yet.</div>';return}
+ models.forEach(model=>{
+  const row=document.createElement('div');row.className='local-model-row';
+  const grow=document.createElement('div');grow.className='grow';
+  const type=model.type==='local'?'Ollama local model':(model.provider||'API model');
+  grow.innerHTML=`<b>${esc(model.label||model.name)}</b><small>${esc(model.size?String(model.size):type)}${model.current?' · currently active':''}</small>`;
+  const actions=document.createElement('div');actions.className='model-actions';
+  const route=state.routes.find(item=>item.value==='model|'+model.ref)||state.routes.find(item=>item.value.startsWith('keymodel|'+model.ref+'|'));
+  const use=document.createElement('button');use.textContent='Use in chat';use.disabled=!route;use.onclick=()=>{if(!route)return;$('topModel').value=route.value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}));activateSettingsTab('general');toast('Model selected for new chats')};
+  const remove=document.createElement('button');remove.type='button';remove.className='danger';remove.textContent='Delete';remove.onclick=async()=>{
+   const local=model.type==='local';
+   const message=local?`Uninstall “${model.label||model.name}” from Ollama? Its downloaded model weights will be deleted.`:`Remove “${model.label||model.name}” from Kurt? Its saved API keys will remain.`;
+   if(!await confirmInApp(local?'Uninstall local model':'Remove API model',message,local?'Uninstall model':'Remove model',true))return;
+   try{await api('/api/models/delete',{model_ref:model.ref});await refreshBootstrap();toast(local?'Local model uninstalled':'API model removed')}catch(error){toast(error.message)}
+  };
+  actions.append(use,remove);row.append(grow,actions);root.append(row);
+ });
+}
+function renderKeys(){
+ const root=$('keysList');if(!root)return;root.replaceChildren();
+ if(!state.keys.length){root.innerHTML='<div class="empty">No API keys saved yet.</div>';return}
+ const sortMode=$('keySort')?.value||state.keySort||'name';
+ const keys=state.keys.slice().sort((a,b)=>sortMode==='date'?(Number(b.created_at)||0)-(Number(a.created_at)||0):(a.label||'').localeCompare(b.label||''));
+ keys.forEach(key=>{
+  const row=document.createElement('div');row.className='key-row';
+  const added=Number(key.created_at)?new Date(Number(key.created_at)*1000).toLocaleDateString():'Date unavailable';
+  row.innerHTML=`<div class="grow"><b>${esc(key.label)}</b><small><span class="key-provider">${esc(key.provider||'Provider')}</span> · ${esc(key.masked)} · Added ${esc(added)}</small></div><button class="edit-key">Edit</button><button class="danger remove-key">Remove</button>`;
+  row.querySelector('.edit-key').onclick=async()=>{
+   const result=await inAppDialog({title:'Edit API key',message:'The stored key is never shown. Leave the replacement blank to keep it unchanged.',confirmText:'Save key',fields:[{name:'label',label:'Account label',value:key.label,required:true,maxLength:80},{name:'value',label:'Replacement API key',type:'password',value:'',placeholder:'Leave blank to keep current'}]});
+   if(!result)return;
+   try{await api('/api/settings',{key_action:'edit',id:key.id,label:result.label,value:result.value});await refreshBootstrap();toast('API key updated')}catch(error){toast(error.message)}
+  };
+  row.querySelector('.remove-key').onclick=async()=>{
+   if(!await confirmInApp('Remove API key',`Remove “${key.label}” from local storage?`,'Remove',true))return;
+   try{await api('/api/settings',{key_action:'remove',id:key.id});await refreshBootstrap();toast('API key removed')}catch(error){toast(error.message)}
+  };
+  root.append(row);
+ });
+}
 function failoverKeyOptions(model){
  if(!model||model.type!=='remote')return [];
- return state.keys.filter(key=>key.provider===model.provider_id&&(key.group||'default')===(model.key_group||'default'));
+ return state.keys.filter(key=>key.provider===model.provider_id);
 }
 function addFailoverMember(member={}){
  const root=$('failoverMembers');if(!root)return;
@@ -829,21 +1016,21 @@ function refreshFailoverMemberOptions(){
 }
 function resetFailoverForm(){
  state.editingGroup=null;$('failoverGroupName').value='';$('failoverMembers').replaceChildren();
- addFailoverMember();addFailoverMember();
+ addFailoverMember();
  $('saveFailoverGroup').textContent='Create group';$('cancelFailoverGroup').hidden=true;
 }
 function editFailoverGroup(id){
  const group=state.apiGroups.find(item=>item.id===id&&item.source==='failover');if(!group)return;
  state.editingGroup=id;$('failoverGroupName').value=group.name||'';$('failoverMembers').replaceChildren();
  (group.members||[]).forEach(member=>addFailoverMember(member));
- while($('failoverMembers').children.length<2)addFailoverMember();
+ if(!$('failoverMembers').children.length)addFailoverMember();
  $('saveFailoverGroup').textContent='Save changes';$('cancelFailoverGroup').hidden=false;
  activateSettingsTab('groups');$('failoverGroupName').focus();
 }
 function renderApiGroups(){
  const root=$('apiGroupsList');if(!root)return;root.replaceChildren();
  const groups=state.apiGroups.filter(item=>item.source==='failover').slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));
- if(!groups.length){root.innerHTML='<div class="empty">No failover groups yet. Create one above and add at least two model/key entries.</div>';return}
+ if(!groups.length){root.innerHTML='<div class="empty">No failover groups yet. Create one above and add a local model or API key.</div>';return}
  groups.forEach(group=>{
   const card=document.createElement('div');card.className='pool-card';
   const head=document.createElement('div');head.className='pool-head';
@@ -869,7 +1056,7 @@ async function saveFailoverGroup(){
  const name=$('failoverGroupName').value.trim();
  const members=Array.from($('failoverMembers').querySelectorAll('.failover-member-row')).map(row=>({model:row.querySelector('.member-model').value,key_id:row.querySelector('.member-key').hidden?'pool':row.querySelector('.member-key').value})).filter(item=>item.model);
  if(!name){toast('Enter a group name');return}
- if(members.length<2){toast('Add at least two model/key entries');return}
+ if(members.length<1){toast('Add at least one local model or API key');return}
  try{
   await api('/api/settings',{failover_action:state.editingGroup?'edit':'add',id:state.editingGroup,name,members});
   await refreshBootstrap();resetFailoverForm();toast('Failover group saved');
@@ -877,17 +1064,55 @@ async function saveFailoverGroup(){
 }
 async function refreshChats(){const d=await api('/api/chats');state.chats=d.chats||[];renderChats()}
 function resetComposer(){$('prompt').value='';autosize();state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads=[];state.contextCount=0;renderPendingUploads();hint();updateSend()}
-async function ensureChat(){if(!state.chatId){const d=await api('/api/chats',{create:true});state.chatId=d.id}return state.chatId}
-async function newChat(){cancelRun();state.chatId=null;resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
+async function ensureChat(initialMessage){
+ if(!state.chatId){const body={create:true};if(initialMessage)body.initial_message=initialMessage;const d=await api('/api/chats',body);state.chatId=d.id}
+ else if(initialMessage){await api('/api/chats/'+encodeURIComponent(state.chatId),{append_user_message:initialMessage})}
+ return state.chatId;
+}
+async function newChat(){cancelRun();state.chatId=null;state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
 async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=data.effort==='expert'?'expert':'thinking';state.mode=data.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;syncSelect($('effortSelect'));syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0}catch(error){}hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',stats:message.stats||null,model:message.model||data.model||null}));follow=true;scrollEnd(true)}else showWelcome();setTitle(data.title||'Conversation',[data.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
-async function send(){const text=$('prompt').value.trim();if(!text||state.busy)return;const run=++state.run;state.effort=$('effortSelect').value;state.mode=$('operationMode').value;const route=$('topModel').value;setBusy(true);try{await ensureChat()}catch(error){if(run===state.run)setBusy(false);toast(error.message);return}if(run!==state.run)return;$('prompt').value='';autosize();hint();if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}follow=true;renderMessage('user',text);const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);$('chatMeta').textContent=state.effort+' · '+state.mode+' · Generating…';const contentEl=node.querySelector('.content');let raw='',reasoning='',pending=false;const controller=new AbortController();state.abort=controller;const paint=()=>{pending=false;if(run!==state.run)return;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
- try{const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,route,effort:state.effort,mode:state.mode}),signal:controller.signal});if(!response.ok){const result=await response.json().catch(()=>({}));throw new Error(result.error||response.statusText)}node.querySelector('.assistant-status').textContent='Thinking…';const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const packet=await reader.read();if(packet.done)break;if(run!==state.run)return;buffer+=decoder.decode(packet.value,{stream:true});let separator;while((separator=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,separator);buffer=buffer.slice(separator+2);const line=frame.split('\n').find(value=>value.startsWith('data:'));if(!line)continue;const event=JSON.parse(line.slice(5).trim());if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail);node.querySelector('.assistant-status').textContent=event.status||'Working…'}else if(event.type==='reasoning'){reasoning+=event.text||'';setReasoning(node,reasoning,true)}else if(event.type==='token'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}else if(event.type==='done'){pending=false;raw=event.content||'';reasoning=event.reasoning||reasoning;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);node.dataset.raw=safe;setReasoning(node,reasoning,false);setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats()}else if(event.type==='error')throw new Error(event.message||'The model request failed')}}}catch(error){if(run===state.run){if(error.name==='AbortError'){paint();refreshChats().catch(()=>{})}else{contentEl.classList.add('err');contentEl.textContent='Error: '+error.message;toast(error.message)}}}finally{node.classList.remove('live');endThink(node);if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent.includes('Generating…'))meta.textContent=[state.effort,state.mode,'Ready'].join(' · ')}}}
+async function send(){
+ const text=$('prompt').value.trim();if(!text||state.busy)return;
+ const run=++state.run;state.effort=$('effortSelect').value;state.mode=$('operationMode').value;const route=$('topModel').value;
+ const messageId=(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2));
+ setBusy(true);
+ try{await ensureChat({id:messageId,content:text,effort:state.effort,mode:state.mode,route})}catch(error){if(run===state.run)setBusy(false);toast(error.message);return}
+ if(run!==state.run)return;
+ $('prompt').value='';autosize();hint();
+ if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
+ follow=true;renderMessage('user',text);const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
+ $('chatMeta').textContent=state.effort+' · '+state.mode+' · Generating…';
+ await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
+ const contentEl=node.querySelector('.content');let raw='',reasoning='',pending=false;
+ const controller=new AbortController();state.abort=controller;
+ const paint=()=>{pending=false;if(run!==state.run)return;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
+ const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
+ try{
+  const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,route,effort:state.effort,mode:state.mode,message_id:messageId}),signal:controller.signal});
+  if(!response.ok){const result=await response.json().catch(()=>({}));throw new Error(result.error||response.statusText)}
+  node.querySelector('.assistant-status').textContent='Thinking…';const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
+  while(true){const packet=await reader.read();if(packet.done)break;if(run!==state.run)return;buffer+=decoder.decode(packet.value,{stream:true});let separator;
+   while((separator=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,separator);buffer=buffer.slice(separator+2);const line=frame.split('\n').find(value=>value.startsWith('data:'));if(!line)continue;const event=JSON.parse(line.slice(5).trim());
+    if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail);node.querySelector('.assistant-status').textContent=event.status||'Working…'}
+    else if(event.type==='reasoning'){reasoning+=event.text||'';setReasoning(node,reasoning,true)}
+    else if(event.type==='token'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}
+    else if(event.type==='done'){pending=false;raw=event.content||'';reasoning=event.reasoning||reasoning;const safe=stripUnsupportedActions(raw);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);node.dataset.raw=safe;setReasoning(node,reasoning,false);setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='error')throw new Error(event.message||'The model request failed');
+   }
+  }
+ }catch(error){
+  if(run===state.run){if(error.name==='AbortError'){paint();refreshChats().catch(()=>{})}else{contentEl.classList.add('err');contentEl.textContent='Error: '+error.message;toast(error.message)}}
+ }finally{
+  node.classList.remove('live');endThink(node);
+  if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent.includes('Generating…'))meta.textContent=[state.effort,state.mode,'Ready'].join(' · ')}
+ }
+}
 $('messages').addEventListener('scroll',()=>{const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});$('toBottom').onclick=()=>{follow=true;scrollEnd(true);$('toBottom').classList.remove('show')};
 $('closeArtifactPane').onclick=closeArtifactPane;
 $('sendBtn').onclick=()=>{if(state.busy){if(state.abort)state.abort.abort()}else send()};
 $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!state.busy)send()}});
 $('prompt').addEventListener('input',()=>{autosize();updateSend()});
-$('newChat').onclick=newChat;$('chatSort').onchange=()=>{state.sort=$('chatSort').value;renderChats()};$('effortSelect').onchange=()=>{state.effort=$('effortSelect').value};$('operationMode').onchange=()=>{state.mode=$('operationMode').value;hint()};
+$('newChat').onclick=newChat;$('chatSort').onchange=()=>{state.sort=$('chatSort').value;renderChats()};$('selectChats').onclick=()=>setChatSelectionMode(!state.selectingChats);$('selectAllChats').onchange=()=>selectAllChats($('selectAllChats').checked);$('deleteSelectedChats').onclick=deleteSelectedChats;$('cancelChatSelect').onclick=()=>setChatSelectionMode(false);$('effortSelect').onchange=()=>{state.effort=$('effortSelect').value};$('operationMode').onchange=()=>{state.mode=$('operationMode').value;hint()};
 function activateSettingsTab(tab){document.querySelectorAll('[data-settings-tab]').forEach(button=>button.classList.toggle('active',button.dataset.settingsTab===tab));document.querySelectorAll('[data-settings-panel]').forEach(panel=>panel.classList.toggle('active',panel.dataset.settingsPanel===tab));const area=document.querySelector('.settings-panel-area');if(area)area.scrollTop=0}
 document.querySelectorAll('[data-settings-tab]').forEach(b=>b.onclick=()=>activateSettingsTab(b.dataset.settingsTab));
 async function openSettings(){await refreshBootstrap();activateSettingsTab('general');$('settingsModal').classList.add('show')}
@@ -901,8 +1126,8 @@ function openComposerFilePicker(){const picker=$('composerFiles');if(!picker)ret
 async function handleComposerFiles(){const picker=$('composerFiles');if(!picker.files||!picker.files.length)return;stageLocalFiles(picker);await attachFiles()}
 async function startDownload(){const model=$('downloadModel').value.trim();if(!model){toast('Enter an Ollama model ID');return}try{const d=await api('/api/download',{model});$('downloadCaption').textContent='Queued: '+model;$('localDownloadStatus').textContent='Download queued: '+model;$('downloadModel').value='';toast('Download started in background');pollDownload()}catch(e){toast(e.message)}}
 async function pollDownload(){try{const d=await api('/api/download/status');const job=d.job;if(!job)return;const percent=job.total?job.completed/job.total*100:0;$('downloadFill').style.width=(job.state==='done'?100:percent)+'%';$('downloadCaption').textContent=job.state==='running'?`${job.model} · ${percent.toFixed(1)}% · ${job.human}`:`${job.model} · ${job.state}${job.error?' · '+job.error:''}`;if(job.state==='done'){await refreshBootstrap();$('localDownloadStatus').textContent=job.model+' installed successfully.';toast('Model download complete')}else if(job.state==='error'){$('localDownloadStatus').textContent=job.error||'Download failed';toast(job.error||'Download failed')}else{$('localDownloadStatus').textContent=job.model+' · '+percent.toFixed(1)+'% · '+job.human;setTimeout(pollDownload,1000)}}catch(e){console.error(e)}}
-$('sidebarSettings').onclick=openSettings;$('openFiles').onclick=()=>{$('filesModal').classList.add('show');renderPendingUploads();browseFiles().catch(error=>toast(error.message))};$('contextBtn').onclick=openComposerFilePicker;$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=refreshBootstrap;$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:$('keyGroup').value,label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;$('clearChat').onclick=async()=>{if(!state.chatId)return;if(!await confirmInApp('Clear conversation','Remove all messages and reset this chat’s temporary workspace?','Clear conversation',true))return;cancelRun();await api('/api/chats/'+encodeURIComponent(state.chatId),{clear:true});state.contextCount=0;hint();showWelcome();$('chatTitle').textContent='New conversation';await refreshChats()};document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout()}});
-$('menuBtn').onclick=()=>document.body.classList.toggle('nav-open');$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',event=>{if(event.target.closest('.chat-item,#newChat,#openFiles,#sidebarSettings'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const theme=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=theme;try{localStorage.setItem('kurt-theme',theme)}catch(error){}};enhanceAllSelects();
+$('sidebarSettings').onclick=openSettings;$('contextBtn').onclick=openComposerFilePicker;$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=refreshBootstrap;$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:'default',label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout()}});
+$('menuBtn').onclick=()=>document.body.classList.toggle('nav-open');$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',event=>{if(event.target.closest('.chat-item,#newChat,#sidebarSettings'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const theme=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=theme;try{localStorage.setItem('kurt-theme',theme)}catch(error){}};enhanceAllSelects();
 document.body.classList.add('compact-scroll');
 showWelcome();
 resetFailoverForm();
@@ -1114,7 +1339,7 @@ class KurtWebApp:
             model_ref = K.remote_model_ref(remote)
             provider = str(remote.get("provider") or "").lower()
             key_group = str(remote.get("key_group") or "default")
-            keys = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider and str(item.get("group") or "default") == key_group]
+            keys = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider]
             model_label = str(remote.get("label") or remote.get("model") or model_ref)
             for key in sorted(keys, key=lambda item: str(item.get("label") or "Account").lower()):
                 routes.append({
@@ -1138,7 +1363,7 @@ class KurtWebApp:
                 continue
             provider = str(group.get("provider") or "").lower()
             pool = str(group.get("key_group") or "default")
-            keys = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider and str(item.get("group") or "default") == pool]
+            keys = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider]
             if group.get("key_id") and group.get("key_id") != "pool":
                 keys = [item for item in keys if str(item.get("id")) == str(group.get("key_id"))]
             remote = next((item for item in K.REMOTE_MODELS if item.get("id") == group.get("remote_id")), None)
@@ -1159,8 +1384,7 @@ class KurtWebApp:
         if remote is None:
             raise ValueError("The selected model is no longer configured: " + (model_ref or "(empty model)"))
         provider = str(remote.get("provider") or "").lower()
-        key_group = str(remote.get("key_group") or "default")
-        matches = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider and str(item.get("group") or "default") == key_group]
+        matches = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider]
         if key_id != "pool":
             matches = [item for item in matches if str(item.get("id")) == key_id]
         if not matches:
@@ -1182,8 +1406,7 @@ class KurtWebApp:
                     remote = next((item for item in K.REMOTE_MODELS if K.remote_model_ref(item) == legacy_model), None)
                     if remote:
                         provider = str(remote.get("provider") or "").lower()
-                        key_group = str(remote.get("key_group") or "default")
-                        first_key = next((item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider and str(item.get("group") or "default") == key_group), None)
+                        first_key = next((item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider), None)
                         if first_key:
                             route = "keymodel|{}|{}".format(legacy_model, first_key.get("id"))
             if not route:
@@ -1345,7 +1568,7 @@ class KurtWebApp:
     def sanitized_keys(self):
         return [{
             "id": item.get("id"), "provider": item.get("provider"),
-            "group": item.get("group") or "default", "label": item.get("label") or "Account",
+            "label": item.get("label") or "Account",
             "masked": K.mask_key(item.get("value")), "created_at": item.get("created_at"),
         } for item in K.PROVIDER_KEYS]
 
@@ -1789,7 +2012,7 @@ class KurtWebApp:
                     archive.write(path, path.relative_to(root).as_posix())
         return buffer.getvalue()
 
-    def create_chat(self):
+    def create_chat(self, initial_message=None):
         now = time.time()
         chat = {
             "id": uuid.uuid4().hex, "title": "New conversation", "model": K.MODEL,
@@ -1798,6 +2021,16 @@ class KurtWebApp:
             "route": self.settings.get("default_route", ""),
             "pinned": False, "created": now, "updated": now, "messages": [],
         }
+        if isinstance(initial_message, dict):
+            content = str(initial_message.get("content") or "").strip()
+            message_id = str(initial_message.get("id") or "").strip()
+            if content and message_id:
+                chat["messages"].append({"role": "user", "content": content, "message_id": message_id})
+                chat["effort"] = initial_message.get("effort") if initial_message.get("effort") in EFFORT_INSTRUCTIONS else chat["effort"]
+                chat["mode"] = initial_message.get("mode") if initial_message.get("mode") in ("normal", "code") else chat["mode"]
+                if initial_message.get("route"):
+                    chat["route"] = str(initial_message.get("route"))
+                chat["updated"] = now
         with self.lock:
             self.chats.insert(0, chat)
             self.save_chats()
@@ -2018,9 +2251,31 @@ class Handler(BaseHTTPRequestHandler):
             data = self._body()
             if parsed.path == "/api/settings":
                 self._settings(data)
+            elif parsed.path == "/api/models/delete":
+                self._delete_model(data)
             elif parsed.path == "/api/chats":
-                chat = self.app.create_chat()
+                initial = data.get("initial_message")
+                if isinstance(initial, dict):
+                    message_id = str(initial.get("id") or "").strip()
+                    content = str(initial.get("content") or "").strip()
+                    if not message_id or len(message_id) > 100 or not content or len(content) > 100000:
+                        raise ValueError("Enter a valid user message before sending.")
+                chat = self.app.create_chat(initial_message=initial if isinstance(initial, dict) else None)
                 self._json({"id": chat["id"]})
+            elif parsed.path == "/api/chats/bulk-delete":
+                ids = data.get("ids") if isinstance(data.get("ids"), list) else []
+                valid_ids = {str(value) for value in ids if re.fullmatch(r"[0-9a-fA-F]{32}", str(value))}
+                if not valid_ids:
+                    raise ValueError("Select at least one conversation to delete.")
+                with self.app.lock:
+                    before = len(self.app.chats)
+                    self.app.chats = [chat for chat in self.app.chats if chat.get("id") not in valid_ids]
+                    deleted = before - len(self.app.chats)
+                    self.app.save_chats()
+                for chat_id in valid_ids:
+                    shutil.rmtree(self.app.chat_workspace(chat_id, create=False), ignore_errors=True)
+                    shutil.rmtree(CONFIG_DIR / "web_envs" / chat_id, ignore_errors=True)
+                self._json({"ok": True, "deleted": deleted})
             elif parsed.path.startswith("/api/chats/"):
                 chat_id = unquote(parsed.path.rsplit("/", 1)[-1])
                 chat = self.app.get_chat(chat_id)
@@ -2044,6 +2299,22 @@ class Handler(BaseHTTPRequestHandler):
                     chat["updated"] = time.time()
                     self.app.save_chats()
                     self._json({"ok": True, "title": title})
+                elif isinstance(data.get("append_user_message"), dict):
+                    incoming = data["append_user_message"]
+                    message_id = str(incoming.get("id") or "").strip()
+                    content = str(incoming.get("content") or "").strip()
+                    if not message_id or len(message_id) > 100 or not content or len(content) > 100000:
+                        raise ValueError("Enter a valid user message before sending.")
+                    with self.app.lock:
+                        if not any(item.get("message_id") == message_id for item in chat.get("messages", [])):
+                            chat.setdefault("messages", []).append({"role": "user", "content": content, "message_id": message_id})
+                            chat["effort"] = incoming.get("effort") if incoming.get("effort") in EFFORT_INSTRUCTIONS else chat.get("effort", "thinking")
+                            chat["mode"] = incoming.get("mode") if incoming.get("mode") in ("normal", "code") else chat.get("mode", "normal")
+                            if incoming.get("route"):
+                                chat["route"] = str(incoming.get("route"))
+                            chat["updated"] = time.time()
+                            self.app.save_chats()
+                    self._json({"ok": True, "message_id": message_id})
                 elif "pin" in data:
                     chat["pinned"] = bool(data.get("pin"))
                     chat["updated"] = time.time()
@@ -2081,6 +2352,72 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, 400)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+
+    def _delete_model(self, data):
+        model_ref = str(data.get("model_ref") or "").strip()
+        if not model_ref:
+            raise ValueError("Choose a model to delete.")
+        with self.app.model_lock:
+            models = self.app.list_models()
+            model = next((item for item in models if item.get("ref") == model_ref), None)
+            if model is None:
+                raise ValueError("That model is no longer installed or configured.")
+            removed_group_ids = set()
+            if model.get("type") == "local":
+                if not K.ollama_up():
+                    raise ValueError("Ollama is not running. Start Ollama before uninstalling a local model.")
+                K.http_json("/api/delete", {"name": model.get("name") or model_ref}, timeout=60)
+                api_groups = self.app.settings.get("api_groups", [])
+                kept_groups = []
+                for group in api_groups:
+                    if group.get("source") == "local" and str(group.get("local_model") or "") == model_ref:
+                        removed_group_ids.add(str(group.get("id") or ""))
+                        continue
+                    if group.get("source") == "failover":
+                        group["members"] = [member for member in group.get("members", []) if str(member.get("model") or "") != model_ref]
+                        if not group["members"]:
+                            removed_group_ids.add(str(group.get("id") or ""))
+                            continue
+                    kept_groups.append(group)
+                self.app.settings["api_groups"] = kept_groups
+            else:
+                remote = next((item for item in K.REMOTE_MODELS if K.remote_model_ref(item) == model_ref), None)
+                if remote is None:
+                    raise ValueError("That API model is no longer configured.")
+                remote_id = str(remote.get("id") or "")
+                K.REMOTE_MODELS[:] = [item for item in K.REMOTE_MODELS if str(item.get("id") or "") != remote_id]
+                kept_groups = []
+                for group in self.app.settings.get("api_groups", []):
+                    if group.get("source") == "api" and str(group.get("remote_id") or "") == remote_id:
+                        removed_group_ids.add(str(group.get("id") or ""))
+                        continue
+                    if group.get("source") == "failover":
+                        group["members"] = [member for member in group.get("members", []) if str(member.get("model") or "") != model_ref]
+                        if not group["members"]:
+                            removed_group_ids.add(str(group.get("id") or ""))
+                            continue
+                    kept_groups.append(group)
+                self.app.settings["api_groups"] = kept_groups
+
+            default_route = str(self.app.settings.get("default_route") or "")
+            direct_prefixes = ("model|" + model_ref, "keymodel|" + model_ref + "|")
+            if any(default_route == prefix or default_route.startswith(prefix) for prefix in direct_prefixes):
+                self.app.settings["default_route"] = ""
+            elif default_route.startswith(("group|", "pool|")):
+                group_id = default_route.split("|", 1)[1]
+                if group_id in removed_group_ids:
+                    self.app.settings["default_route"] = ""
+
+            if model_ref == K.MODEL or (model.get("type") == "local" and K.same_model(K.MODEL, model_ref)):
+                alternatives = [item for item in self.app.list_models() if item.get("ref") != model_ref]
+                if alternatives:
+                    K.MODEL = K.SAVED_MODEL = alternatives[0]["ref"]
+                else:
+                    K.MODEL = K.SAVED_MODEL = K.DEFAULT_MODEL
+            self.app.settings["model"] = K.MODEL
+            K.save_config()
+            self.app.save_settings()
+        self._json({"ok": True, "model_ref": model_ref, "model": K.MODEL})
 
     def _settings(self, data):
         with self.app.model_lock:
@@ -2120,12 +2457,12 @@ class Handler(BaseHTTPRequestHandler):
         keys_changed = False
         if key_action == "add":
             provider = str(data.get("provider", "")).lower()
-            group = str(data.get("group") or "default").strip()
+            group = "default"
             value = str(data.get("value") or "").strip()
             if provider not in K.PROVIDER_SPECS:
                 raise ValueError("Unknown provider.")
-            if not group or len(group) > 50 or len(value) < 10 or any(ch.isspace() for ch in value):
-                raise ValueError("Enter a valid key, and a group name of 1–50 characters.")
+            if len(value) < 10 or any(ch.isspace() for ch in value):
+                raise ValueError("Enter a valid API key.")
             if any(item.get("value") == value for item in K.PROVIDER_KEYS):
                 raise ValueError("That API key is already saved.")
             K.PROVIDER_KEYS.append({"id": uuid.uuid4().hex[:12], "provider": provider, "group": group,
@@ -2137,16 +2474,12 @@ class Handler(BaseHTTPRequestHandler):
             item = next((entry for entry in K.PROVIDER_KEYS if entry.get("id") == key_id), None)
             if item is None:
                 raise ValueError("API key not found.")
-            group = str(data.get("group") or item.get("group") or "default").strip()
             value = str(data.get("value") or "").strip()
-            if not group or len(group) > 50:
-                raise ValueError("Key group must be 1–50 characters.")
             if value and (len(value) < 10 or any(ch.isspace() for ch in value)):
                 raise ValueError("That API key does not look valid.")
             if value and any(entry.get("value") == value and entry.get("id") != key_id for entry in K.PROVIDER_KEYS):
                 raise ValueError("That API key is already saved.")
             item["label"] = str(data.get("label") or item.get("label") or "Account")[:80]
-            item["group"] = group
             if value:
                 item["value"] = value
             keys_changed = True
@@ -2189,8 +2522,8 @@ class Handler(BaseHTTPRequestHandler):
             if any(item is not current and item.get("source") == "failover" and str(item.get("name", "")).casefold() == name.casefold() for item in groups):
                 raise ValueError("A failover group with that name already exists.")
             submitted = data.get("members") if isinstance(data.get("members"), list) else []
-            if len(submitted) < 2 or len(submitted) > 12:
-                raise ValueError("Add between 2 and 12 model/key entries to a failover group.")
+            if len(submitted) < 1 or len(submitted) > 12:
+                raise ValueError("Add between 1 and 12 local model/API key entries to a group.")
             members = []
             seen = set()
             for member in submitted:
@@ -2204,8 +2537,8 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 seen.add(identity)
                 members.append({"model": model_ref, "key_id": identity[1]})
-            if len(members) < 2:
-                raise ValueError("A failover group needs at least two different model/key entries.")
+            if len(members) < 1:
+                raise ValueError("A group needs at least one valid local model or API key entry.")
             payload = {"id": group_id or uuid.uuid4().hex[:12], "name": name, "source": "failover", "members": members}
             if current:
                 current.clear()
@@ -2255,7 +2588,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Choose a provider and enter its exact API model ID.")
                 if not base_url.startswith(("https://", "http://")):
                     raise ValueError("The API base URL must start with http:// or https://.")
-                matches = [item for item in K.PROVIDER_KEYS if str(item.get("provider", "")).lower() == provider and str(item.get("group") or "default") == key_group]
+                matches = [item for item in K.PROVIDER_KEYS if str(item.get("provider", "")).lower() == provider]
                 if key_id != "pool" and not any(str(item.get("id")) == key_id for item in matches):
                     raise ValueError("Choose a key from the selected provider and group, or use the whole key pool.")
                 if not matches:
@@ -2341,6 +2674,8 @@ class Handler(BaseHTTPRequestHandler):
         if not chat:
             chat = self.app.create_chat()
             chat_id = chat["id"]
+        message_id = str(data.get("message_id") or "").strip()
+        already_saved = bool(message_id and any(item.get("message_id") == message_id for item in chat.get("messages", [])))
         try:
             route_info = self.app.resolve_chat_route(requested_route, legacy_model or None)
             model = route_info["model"]
@@ -2349,8 +2684,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         previous = chat.get("messages", [])[-MAX_MESSAGES_PER_CHAT:]
+        if already_saved:
+            previous = [item for item in previous if item.get("message_id") != message_id]
         self.app.chat_workspace(chat_id)
-        self.app.store_chat_input(chat_id, user_text, len(chat.get("messages", [])) + 1)
+        message_number = len(chat.get("messages", [])) if already_saved else len(chat.get("messages", [])) + 1
+        self.app.store_chat_input(chat_id, user_text, message_number)
         messages = [
             {"role": "system", "content": self.app.chat_system_prompt(chat_id, mode=mode, effort=effort)},
             {"role": "system", "content": self.app.context_contents(chat_id)},
@@ -2361,7 +2699,11 @@ class Handler(BaseHTTPRequestHandler):
         )
         messages.append({"role": "user", "content": user_text})
 
-        chat["messages"].append({"role": "user", "content": user_text})
+        if not already_saved:
+            user_record = {"role": "user", "content": user_text}
+            if message_id:
+                user_record["message_id"] = message_id
+            chat["messages"].append(user_record)
         chat["updated"] = time.time()
         if chat.get("title") in (None, "New conversation"):
             chat["title"] = "New conversation"
