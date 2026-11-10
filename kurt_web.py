@@ -697,6 +697,31 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 .failover-member-row{grid-template-columns:minmax(0,1fr) 36px}
 .reasoning-panel .think-body{border-left-color:var(--line2);color:var(--muted)}
 .reasoning-panel .think-label{font-size:13px}
+.custom-select.open .custom-select-menu{overflow-y:auto;max-height:var(--menu-max,min(300px,50vh));overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
+.custom-select.drop-up .custom-select-menu{top:auto;bottom:calc(100% + 6px);transform-origin:bottom center}
+.route-flyout-column,.key-checks,.group-members{overscroll-behavior:contain}
+.assistant-heading .think-head{padding:0 0 0 2px;font-size:12.5px;font-weight:400;white-space:nowrap}
+.assistant-heading .think-head[hidden]{display:none}
+.think-head.open .chev{transform:rotate(0deg)}
+.think-head.live .think-label{background:linear-gradient(90deg,var(--muted) 30%,var(--text) 50%,var(--muted) 70%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shimmer 1.8s linear infinite}
+.assistant-heading .think-head.live~.assistant-status{display:none}
+.reasoning-panel{margin:0}
+.key-checks{display:grid;gap:6px;max-height:190px;overflow-y:auto;padding:6px;border:1px solid var(--line2);border-radius:9px;background:var(--panel)}
+.key-check{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:7px;cursor:pointer;font-size:13px}
+.key-check:hover{background:var(--raise)}
+.key-check.disabled{opacity:.45;cursor:not-allowed}
+.key-check small{color:var(--muted)}
+.drag-handle{display:inline-flex;align-items:center;justify-content:center;width:20px;color:var(--muted);cursor:grab;user-select:none;font-size:15px;letter-spacing:-3px}
+.priority-badge{display:inline-flex;align-items:center;justify-content:center;padding:3px 8px;border-radius:999px;border:1px solid var(--line2);color:var(--muted);font-size:11px;font-weight:600;white-space:nowrap}
+.priority-badge.first{color:var(--green);border-color:var(--green)}
+#failoverMembers .failover-member-row{display:grid;grid-template-columns:20px 92px minmax(0,1fr) auto 36px;gap:8px;align-items:center}
+.member-move{display:flex;flex-direction:column;gap:2px}
+.member-move button{width:24px;height:16px;padding:0;font-size:9px;line-height:1}
+.group-members{display:grid;gap:6px;margin-top:10px}
+.group-member{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--line);border-radius:9px;background:var(--panel);cursor:grab;font-size:12.5px;min-width:0}
+.group-member .grow{flex:1;min-width:0;overflow-wrap:anywhere}
+.failover-member-row.dragging,.group-member.dragging{opacity:.45}
+@media(max-width:700px){#failoverMembers .failover-member-row{grid-template-columns:18px 78px minmax(0,1fr) auto 32px;gap:6px}}
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -766,8 +791,9 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <nav class="settings-nav" aria-label="Settings sections">
 <div class="settings-nav-caption">Settings</div>
 <button class="settings-nav-btn active" type="button" data-settings-tab="general">General</button>
-<button class="settings-nav-btn" type="button" data-settings-tab="local-models">Models</button>
-<button class="settings-nav-btn" type="button" data-settings-tab="keys">Keys</button>
+<button class="settings-nav-btn" type="button" data-settings-tab="local-models">Local models</button>
+<button class="settings-nav-btn" type="button" data-settings-tab="keys">API keys</button>
+<button class="settings-nav-btn" type="button" data-settings-tab="api-routes">API routes</button>
 <button class="settings-nav-btn" type="button" data-settings-tab="groups">Groups</button>
 </nav>
 <div class="settings-panel-area">
@@ -779,22 +805,30 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <div class="row"><button class="primary" id="saveSettings">Save settings</button><button id="reloadSettings">Reload from disk</button></div>
 </section>
 <section class="settings-panel" data-settings-panel="local-models">
-<h3>Models</h3><div class="inline-note">Manage installed Ollama models and configured API models. Removing an Ollama model uninstalls its downloaded weights; removing an API model keeps its saved keys.</div>
+<h3>Local models</h3><div class="inline-note">Models installed through Ollama. Removing one uninstalls its downloaded weights.</div>
 <div id="localModelList"></div>
-<div class="model-download-card"><h4>Add an API model</h4><p>Pick a provider you have added a key for and enter the exact model ID from that provider. The model then appears under Key in the model picker, together with your key.</p><div class="settings-grid"><div class="field"><label>Provider</label><select id="apiModelProvider"></select></div><div class="field"><label>Display name (optional)</label><input id="apiModelLabel" placeholder="e.g. My free model"></div></div><div class="row"><input id="apiModelId" aria-label="API model ID" placeholder="Exact model ID from the provider"><button id="addApiModel" class="primary" type="button">Add API model</button></div></div>
-<div class="model-download-card"><h4>Download a model</h4><p>Enter an Ollama model ID, for example <code>qwen2.5-coder:7b</code>. Downloads run in the background and progress appears at the top of Kurt.</p><div class="row"><input id="downloadModel" aria-label="Ollama model name" placeholder="Model ID, e.g. qwen2.5-coder:7b"><button id="startDownload" class="primary">Download model</button></div><div class="inline-note" id="localDownloadStatus">No model download started.</div></div>
+<div class="model-download-card"><h4>Download a model</h4><p>Choose where the model comes from. For Hugging Face, enter a GGUF repository such as <code>bartowski/Llama-3.2-3B-Instruct-GGUF</code> (add <code>:Q4_K_M</code> to pick a quantization) or paste its URL. For the Ollama library or another registry, enter an ID such as <code>qwen2.5-coder:7b</code>. Downloads run in the background and progress appears at the top of Kurt.</p><div class="field"><label>Source</label><select id="downloadSource" aria-label="Download source"><option value="ollama" selected>Ollama library / registry</option><option value="huggingface">Hugging Face (GGUF)</option></select></div><div class="row"><input id="downloadModel" aria-label="Model ID or URL" placeholder="Model ID, repository or URL"><button id="startDownload" class="primary">Download model</button></div><div class="inline-note" id="localDownloadStatus">No model download started.</div></div>
 </section>
 <section class="settings-panel" data-settings-panel="keys">
-<h3>Keys</h3><div class="inline-note">Add and manage provider API keys. Each key is listed independently and can be selected for compatible models.</div>
-<div class="settings-grid"><div class="field"><label>Provider</label><select id="keyProvider"></select></div><div class="field"><label>Account label</label><input id="keyLabel" placeholder="Personal account"></div><div class="field"><label>API key</label><input id="keyValue" type="password" autocomplete="off" placeholder="Paste API key (stored locally)"></div></div><button id="addKey" class="primary">Add key</button>
+<h3>API keys</h3><div class="inline-note">Add and manage provider API keys. Each key is listed independently; attach keys to models under API routes.</div>
+<div class="settings-grid"><div class="field"><label>Provider</label><select id="keyProvider"></select></div><div class="field"><label>Account label</label><input id="keyLabel" placeholder="Personal account"></div><div class="field"><label>API key</label><input id="keyValue" type="password" autocomplete="off" placeholder="Paste API key (stored locally)"></div></div><button id="addKey" class="primary">Create new key</button>
 <div class="row key-sort-row"><span class="inline-note">Sort keys</span><select id="keySort" aria-label="Sort API keys"><option value="name">Name</option><option value="date">Date added</option></select></div><div id="keysList"></div>
 </section>
+<section class="settings-panel" data-settings-panel="api-routes">
+<h3>API routes</h3><div class="inline-note">Models reached through a provider API. Each route links a model name or ID to the saved keys it may use.</div>
+<div class="row"><button id="showApiModelForm" class="primary" type="button">Add model</button></div>
+<div class="model-download-card" id="apiModelCard" hidden><h4 id="apiModelFormTitle">Add model</h4><p>Select the keys this model may use, then enter the model name or ID exactly as the provider lists it. Keys must belong to one provider.</p>
+<div class="field"><label>Keys</label><div id="apiModelKeys" class="key-checks"></div></div>
+<div class="settings-grid"><div class="field"><label>Model name / ID</label><input id="apiModelId" aria-label="API model name or ID" placeholder="Exact model ID from the provider"></div><div class="field"><label>Display name (optional)</label><input id="apiModelLabel" placeholder="e.g. My free model"></div></div>
+<div class="row"><button id="addApiModel" class="primary" type="button">Save model</button><button id="cancelApiModel" type="button">Cancel</button></div></div>
+<div id="apiModelList"></div>
+</section>
 <section class="settings-panel" data-settings-panel="groups">
-<h3>Groups</h3><div class="inline-note">Create a fallback order. Each entry is one choice: a local model, or a model with a specific API key. Kurt moves to the next entry only when a request fails before a response is produced.</div>
+<h3>Groups</h3><div class="inline-note">Add local models or API models. The first is the priority; the rest are fallbacks used in order (2, 3, 4…) only when a request fails before a response is produced. Drag entries by their handle or use the arrows to change the order.</div>
 <div class="field"><label>Group name</label><input id="failoverGroupName" placeholder="e.g. Reliable, Coding fallback"></div>
 <div id="failoverMembers"></div>
-<div class="row"><button id="addFailoverMember" type="button">Add fallback</button><button id="saveFailoverGroup" class="primary" type="button">Create group</button><button id="cancelFailoverGroup" type="button" hidden>Cancel edit</button></div>
-<div class="section"><h3>Saved groups</h3><div id="apiGroupsList"></div></div>
+<div class="row"><button id="addFailoverMember" type="button">Add model</button><button id="saveFailoverGroup" class="primary" type="button">Create group</button><button id="cancelFailoverGroup" type="button" hidden>Cancel edit</button></div>
+<div class="section"><h3>Saved groups</h3><div class="inline-note">Drag a saved entry to change its priority, or press Edit to rearrange and add models.</div><div id="apiGroupsList"></div></div>
 </section>
 </div></div></div></div>
 <div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files</h2><button class="ghost" data-close="filesModal">Close</button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Choose individual files or an entire folder from Finder or File Explorer. Images are retained as image files in this chat. Only a folder selection is packaged internally as a ZIP, then unpacked automatically. Large pasted text is attached as a .txt file. Your original files are never changed.</p><div class="file-source"><h3>From this computer</h3><div class="file-actions"><button id="chooseLocalFiles" class="primary">Choose files</button><button id="chooseLocalFolder">Choose folder</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList" aria-live="polite">No files selected.</div></div><div class="file-source"><h3>From the configured project</h3><div class="row"><input id="fileFolder" value="" placeholder="Project folder path"><button id="refreshFiles">Open</button><button id="selectCurrentFolder">Add this folder</button></div><div class="file-picker" id="filePicker"></div></div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
@@ -826,7 +860,7 @@ function syncSelect(select){const wrap=select?._customWrap;if(!wrap)return;const
 function enhanceSelect(select){
  if(!select||select.id==='topModel'||select._customWrap)return;const wrap=document.createElement('div');wrap.className='custom-select '+Array.from(select.classList).join(' ');const trigger=document.createElement('button');trigger.type='button';trigger.className='custom-select-trigger';trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');trigger.setAttribute('aria-label',select.getAttribute('aria-label')||select.title||'Choose an option');const menu=document.createElement('div');menu.className='custom-select-menu';menu.setAttribute('role','listbox');select.parentNode.insertBefore(wrap,select);wrap.append(select,trigger,menu);select.classList.add('custom-select-native');select._customWrap=wrap;
  const build=()=>{menu.replaceChildren();let group='';Array.from(select.options).forEach(option=>{const groupName=option.parentElement?.tagName==='OPTGROUP'?option.parentElement.label:'';if(groupName&&groupName!==group){group=groupName;const heading=document.createElement('div');heading.className='custom-select-group';heading.textContent=groupName;menu.appendChild(heading)}const button=document.createElement('button');button.type='button';button.className='custom-select-option';button.textContent=option.textContent;button.dataset.value=option.value;button.disabled=option.disabled;button.setAttribute('role','option');button.setAttribute('aria-selected',String(option.value===select.value));button.onclick=()=>{select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));wrap.classList.remove('open');trigger.setAttribute('aria-expanded','false');trigger.focus()};menu.appendChild(button)});syncSelect(select)};
- trigger.onclick=()=>{const open=!wrap.classList.contains('open');closeCustomSelects(wrap);wrap.classList.toggle('open',open);trigger.setAttribute('aria-expanded',String(open))};trigger.onkeydown=e=>{if(['ArrowDown','Enter',' '].includes(e.key)){e.preventDefault();wrap.classList.add('open');trigger.setAttribute('aria-expanded','true');menu.querySelector('.custom-select-option:not(:disabled)')?.focus()}else if(e.key==='Escape'){wrap.classList.remove('open');trigger.setAttribute('aria-expanded','false')}};select.addEventListener('change',build);const observer=new MutationObserver(build);observer.observe(select,{childList:true,subtree:true,attributes:true,characterData:true});select._customObserver=observer;build();
+ trigger.onclick=()=>{const open=!wrap.classList.contains('open');closeCustomSelects(wrap);if(open){const r=trigger.getBoundingClientRect();const pane=wrap.closest('.settings-panel-area');const limitBottom=Math.min(window.innerHeight,pane?pane.getBoundingClientRect().bottom:window.innerHeight);const limitTop=Math.max(0,pane?pane.getBoundingClientRect().top:0);const below=limitBottom-r.bottom-14,above=r.top-limitTop-14;const up=!!wrap.closest('.compose-bottom')||(below<180&&above>below);wrap.classList.toggle('drop-up',up);menu.style.setProperty('--menu-max',Math.max(120,Math.min(320,up?above:below))+'px')}wrap.classList.toggle('open',open);trigger.setAttribute('aria-expanded',String(open))};trigger.onkeydown=e=>{if(['ArrowDown','Enter',' '].includes(e.key)){e.preventDefault();wrap.classList.add('open');trigger.setAttribute('aria-expanded','true');menu.querySelector('.custom-select-option:not(:disabled)')?.focus()}else if(e.key==='Escape'){wrap.classList.remove('open');trigger.setAttribute('aria-expanded','false')}};select.addEventListener('change',build);const observer=new MutationObserver(build);observer.observe(select,{childList:true,subtree:true,attributes:true,characterData:true});select._customObserver=observer;build();
 }
 function enhanceAllSelects(root=document){root.querySelectorAll('select').forEach(enhanceSelect)}
 function setSelectOptions(select,items,placeholder=''){if(!select)return;const current=select.value;select.innerHTML='';if(placeholder){const option=document.createElement('option');option.value='';option.textContent=placeholder;option.disabled=true;select.appendChild(option)}items.forEach(item=>{const option=document.createElement('option');option.value=item.value;option.textContent=item.label;select.appendChild(option)});if(items.some(item=>item.value===current))select.value=current;else if(items.length)select.value=items[0].value;syncSelect(select)}
@@ -847,7 +881,7 @@ function fillModels(){
  }
  if(!selected)selected=options[0]?.value||'';
  if(selected){$('topModel').value=selected;$('settingsModel').value=selected}
- syncSelect($('settingsModel'));renderRoutePicker();renderLocalModels();
+ syncSelect($('settingsModel'));renderRoutePicker();renderLocalModels();renderApiModels();
 }
 function routeCategoryForValue(value){
  const route=(state.routes||[]).find(item=>item.value===value);
@@ -858,7 +892,7 @@ function routeCategoryForValue(value){
 }
 function routeChoiceLabel(value){
  const route=(state.routes||[]).find(item=>item.value===value);
- if(route)return String(route.label||'').replace(/^(?:Local|Key|Group)\s*·\s*/,'')||route.label;
+ if(route)return String(route.label||'').replace(/^(?:Local|Key|API|Group)\s*·\s*/,'')||route.label;
  return routeLabel(value);
 }
 function routeLabel(value){
@@ -868,7 +902,7 @@ function routeLabel(value){
   const model=state.models.find(item=>item.ref===parts[1]);
   if(model)return model.label||model.name||'Choose model';
  }
- if(route)return String(route.label||'').replace(/^(?:Local|Key|Group)\s*·\s*/,'').replace(/\s*·\s*key pool$/i,'')||route.label;
+ if(route)return String(route.label||'').replace(/^(?:Local|Key|API|Group)\s*·\s*/,'').replace(/\s*·\s*key pool$/i,'')||route.label;
  return 'Choose model';
 }
 function renderRoutePicker(){
@@ -902,7 +936,7 @@ function showRouteOptions(category){
  categories.querySelectorAll('[data-route-kind]').forEach(button=>button.classList.toggle('active',button.dataset.routeKind===category));
  options.replaceChildren();options.scrollTop=0;
  const routes=(state.routes||[]).filter(route=>route.kind===category);
- if(!routes.length){const empty=document.createElement('div');empty.className='route-flyout-empty';empty.textContent=category==='local'?'No local models are installed.':category==='key'?'No API model has a key yet. Add a model in Settings › Models and it will appear here with your key.':'No groups have been created.';options.appendChild(empty)}
+ if(!routes.length){const empty=document.createElement('div');empty.className='route-flyout-empty';empty.textContent=category==='local'?'No local models are installed.':category==='key'?'No API model has a key yet. Add a model in Settings › API routes and it will appear here with your key.':'No groups have been created.';options.appendChild(empty)}
  else routes.forEach(route=>{
   const item=document.createElement('button');item.type='button';item.className='route-flyout-item';item.textContent=routeChoiceLabel(route.value);item.title=route.label;
   if(route.value===$('topModel').value)item.setAttribute('aria-current','true');
@@ -915,7 +949,7 @@ function openRouteFlyout(trigger){
  const menu=$('routeFlyout');if(!menu||!trigger)return;
  const categories=menu.querySelector('.route-flyout-categories');categories.replaceChildren();
  menu.hidden=false;menu.setAttribute('aria-hidden','false');$('routeCurrent').setAttribute('aria-expanded','true');
- const categoryLabels=[['local','Local'],['key','Key'],['group','Group']];
+ const categoryLabels=[['local','Local'],['key','API'],['group','Group']];
  const first=routeCategoryForValue($('topModel').value);
  categoryLabels.forEach(([kind,label])=>{
   const button=document.createElement('button');button.type='button';button.className='route-flyout-category';button.dataset.routeKind=kind;button.textContent=label;
@@ -969,21 +1003,23 @@ function splitThink(raw,streaming){let think='',answer='',open=false;const close
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
 function bindCopy(root){root.querySelectorAll('[data-copy-code]').forEach(b=>b.onclick=()=>{const code=b.closest('.codebox').querySelector('code');navigator.clipboard.writeText(code?code.textContent:'').then(()=>toast('Code copied'))})}
 function formatThought(seconds){const s=Number(seconds);if(!Number.isFinite(s)||s<=0)return '';if(s<60)return Math.max(1,Math.round(s))+'s';const m=Math.floor(s/60),r=Math.round(s%60);return r?m+'m '+r+'s':m+'m'}
-function reasoningBlock(){const d=document.createElement('div');d.className='think reasoning-panel';d.hidden=true;d.innerHTML='<button class="think-head" type="button" aria-expanded="false"><svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Thinking…</span></button><div class="think-body"></div>';d.querySelector('.think-head').onclick=()=>{const open=d.classList.toggle('open');d.querySelector('.think-head').setAttribute('aria-expanded',String(open));d.dataset.userCollapsed=open?'':'1';d.dataset.userOpen=open?'1':''};return d}
+function setReasoningOpen(panel,open){panel.classList.toggle('open',open);if(panel._head){panel._head.classList.toggle('open',open);panel._head.setAttribute('aria-expanded',String(open))}}
+function reasoningBlock(){const d=document.createElement('div');d.className='think reasoning-panel';d.hidden=true;d.innerHTML='<div class="think-body"></div>';const head=document.createElement('button');head.type='button';head.className='think-head';head.hidden=true;head.setAttribute('aria-expanded','false');head.innerHTML='<svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Thinking…</span>';d._head=head;d._label=head.querySelector('.think-label');head.onclick=()=>{const open=!d.classList.contains('open');setReasoningOpen(d,open);d.dataset.userCollapsed=open?'':'1';d.dataset.userOpen=open?'1':''};return d}
 function thinkBlock(){const d=document.createElement('div');d.className='think work-log';d.hidden=true;d.innerHTML='<button class="work-log-head" type="button" aria-expanded="false"><svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Workspace activity</span></button><div class="work-log-body"></div>';d.querySelector('.work-log-head').onclick=()=>{const open=d.classList.toggle('open');d.querySelector('.work-log-head').setAttribute('aria-expanded',String(open))};return d}
 function setReasoning(node,text,live=false,seconds=0){
  const panel=node.querySelector('.reasoning-panel');if(!panel)return;
+ const head=panel._head,label=panel._label;
  const value=String(text||'').trim();
- if(!value){panel.hidden=true;return}
- panel.hidden=false;
- const body=panel.querySelector('.think-body'),head=panel.querySelector('.think-head'),label=panel.querySelector('.think-label');
- body.textContent=value;panel.classList.toggle('live',!!live);
- if(live){label.textContent='Thinking…';if(!panel.dataset.userCollapsed){panel.classList.add('open');head.setAttribute('aria-expanded','true')}body.scrollTop=body.scrollHeight}
- else{const t=formatThought(seconds);label.textContent=t?'Thought for '+t:'Thought process';if(panel.dataset.userOpen!=='1'){panel.classList.remove('open');head.setAttribute('aria-expanded','false')}}
+ if(!value){panel.hidden=true;if(head)head.hidden=true;return}
+ panel.hidden=false;if(head)head.hidden=false;
+ const body=panel.querySelector('.think-body');
+ body.textContent=value;panel.classList.toggle('live',!!live);if(head)head.classList.toggle('live',!!live);
+ if(live){label.textContent='Thinking…';if(!panel.dataset.userCollapsed)setReasoningOpen(panel,true);body.scrollTop=body.scrollHeight}
+ else{const t=formatThought(seconds);label.textContent=t?'Thought for '+t:'Thought process';if(panel.dataset.userOpen!=='1')setReasoningOpen(panel,false)}
 }
 function setThink(node,entries){const panel=node.querySelector('.work-log');if(!panel)return;const relevant=/^(Running command:|PASSED:|FAILED:|Searching the web:|Web search failed:|Syntax validation passed:|Basic file validation passed:|Prepared a Kurt system-prompt proposal|Retrieved the exact active Kurt system prompt|Validation warning:)/i;const items=(Array.isArray(entries)?entries:[]).filter(item=>relevant.test(String(typeof item==='string'?item:item?.text||'')));if(!items.length){panel.hidden=true;return}panel.hidden=false;const body=panel.querySelector('.work-log-body');const open=panel.dataset.initialized==='1'&&panel.classList.contains('open');panel.dataset.initialized='1';panel.classList.toggle('open',open);panel.querySelector('.work-log-head').setAttribute('aria-expanded',String(open));body.replaceChildren();items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const label=String(data.text||'Activity');const detail=String(data.detail||'');const row=document.createElement(detail&&detail!==label?'details':'div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');if(row.tagName==='DETAILS'){const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;body.appendChild(row)});panel.querySelector('.think-label').textContent='Workspace activity · '+items.length+' event(s)'}
 function pushWorkStep(node,text,ok,detail){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok&&last.detail===detail)return;entries.push({text,ok,detail:detail||''});if(entries.length>60)entries.shift();setThink(node,entries)}
-function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const panel=node.querySelector('.reasoning-panel');if(panel){panel.classList.remove('live');const label=panel.querySelector('.think-label');if(label&&label.textContent.indexOf('Thinking')===0)label.textContent='Thought process'}}
+function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const panel=node.querySelector('.reasoning-panel');if(panel){panel.classList.remove('live');if(panel._head)panel._head.classList.remove('live');const label=panel._label;if(label&&label.textContent.indexOf('Thinking')===0)label.textContent='Thought process'}}
 let follow=true;
 function scrollEnd(force){if(!force&&!follow)return;const m=$('messages');m.scrollTop=m.scrollHeight}
 function setEmpty(on){$('main').classList.toggle('empty',on);if(on)$('toBottom').classList.remove('show')}
@@ -995,7 +1031,7 @@ function setBusy(b){state.busy=b;const btn=$('sendBtn');btn.querySelector('use')
 function cancelRun(){if(state.abort)state.abort.abort();state.abort=null;state.run++;setBusy(false)}
 function responseModelLabel(ref){if(!ref)return'';const item=state.models.find(m=>m.ref===ref);return item?`${item.label||item.name||item.model} · ${item.provider}`:String(ref)}
 function setResponseMeta(node,stats,model){const el=node?.querySelector('.response-metrics');if(!el)return;const parts=[];const seconds=Number(stats?.thought_seconds);const speed=Number(stats?.tokens_per_second);if(Number.isFinite(seconds)&&seconds>0)parts.push(`Generated in ${seconds.toFixed(seconds<10?1:0)}s`);if(Number.isFinite(speed)&&speed>0)parts.push(`${stats?.tokens_estimated?'~':''}${speed.toFixed(speed<10?1:0)} tok/s`);const label=responseModelLabel(model);if(label)parts.push(label);el.textContent=parts.join(' · ');if(stats?.tokens_estimated)el.title='Token rate is estimated from generated text length because the provider did not report output-token usage.'}
-function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<think)/i.test(String(content||'')))safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.';wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user'){if(hasMathMarkup(safeContent)){const userContent=document.createElement('div');userContent.className='content user-content';userContent.innerHTML=renderMarkdown(safeContent);bubble.appendChild(userContent);typesetMath(userContent)}else bubble.textContent=content}else{bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');bubble.appendChild(reasoningBlock());bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindCopy(wrap);wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];setReasoning(wrap,extra?.reasoning||'',false,extra?.thinkingSeconds||0);setThink(wrap,extra?.worklog||[]);setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
+function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<think)/i.test(String(content||'')))safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.';wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user'){if(hasMathMarkup(safeContent)){const userContent=document.createElement('div');userContent.className='content user-content';userContent.innerHTML=renderMarkdown(safeContent);bubble.appendChild(userContent);typesetMath(userContent)}else bubble.textContent=content}else{bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');const reasoning=reasoningBlock();const headingRow=bubble.querySelector('.assistant-heading');headingRow.insertBefore(reasoning._head,headingRow.querySelector('.assistant-status'));bubble.appendChild(reasoning);bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindCopy(wrap);wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];setReasoning(wrap,extra?.reasoning||'',false,extra?.thinkingSeconds||0);setThink(wrap,extra?.worklog||[]);setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
 function clearArtifactPane(){const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';const main=$('main');if(main)main.classList.remove('has-artifacts');document.querySelectorAll('.artifact-trigger').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
 function closeArtifactPane(){const main=$('main');if(main)main.classList.remove('has-artifacts');const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';document.querySelectorAll('.artifact-trigger.selected').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
 function renderArtifactTriggers(container,artifacts){if(!container)return;container.innerHTML='';(artifacts||[]).forEach(a=>{const promptCard=a.kind==='system_prompt';const button=document.createElement('button');button.type='button';button.className='artifact-trigger';button.setAttribute('aria-controls','artifactPane');button.setAttribute('aria-expanded','false');button.innerHTML='<span class="artifact-trigger-icon"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span><span class="artifact-trigger-text"><span class="artifact-trigger-name"></span><span class="artifact-trigger-status"></span></span><span class="artifact-trigger-open">Preview →</span>';button.querySelector('.artifact-trigger-name').textContent=promptCard?'System prompt proposal':String(a.path||'Generated file');button.querySelector('.artifact-trigger-status').textContent=a.validation?.message||'Saved in the temporary workspace';button.setAttribute('aria-label','Preview '+(a.path||'generated file'));button.onclick=()=>openArtifactPreview(a,button);container.appendChild(button)})}
@@ -1083,12 +1119,12 @@ function renderChats(){
 async function renameChat(id,current){const result=await inAppDialog({title:'Rename conversation',message:'Choose a clear title for this chat.',confirmText:'Rename',fields:[{name:'title',label:'Chat title',value:current,required:true,maxLength:100}]});if(!result)return;const title=result.title.trim();if(!title){toast('Chat title cannot be empty');return}try{await api('/api/chats/'+encodeURIComponent(id),{rename:title});await refreshChats();if(id===state.chatId)setTitle(title,$('chatMeta').textContent)}catch(error){toast(error.message)}}
 async function togglePinChat(id,pinned){try{await api('/api/chats/'+encodeURIComponent(id),{pin:!!pinned});await refreshChats()}catch(error){toast(error.message)}}
 async function deleteChat(id){const chat=state.chats.find(item=>item.id===id);if(!await confirmInApp('Delete conversation',`Delete “${chat?.title||'this chat'}” and its temporary workspace? This cannot be undone.`,'Delete chat',true))return;if(state.chatId===id)cancelRun();try{await api('/api/chats/'+encodeURIComponent(id),{delete:true});if(state.chatId===id){state.chatId=null;resetComposer();showWelcome();setTitle('New chat','')}await refreshChats();toast('Chat deleted')}catch(error){toast(error.message)}}
-async function refreshBootstrap(){const data=await api('/api/bootstrap');state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.settings=data.settings||{};state.projectRoot=data.project_root||'';$('projectRoot').value=state.projectRoot;$('systemPrompt').value=state.settings.system_prompt||'';$('allowProjectWrites').checked=!!state.settings.allow_project_writes;fillProviders();fillModels();renderKeys();renderApiGroups();refreshFailoverMemberOptions();enhanceAllSelects()}
-function fillProviders(){const providers=state.providers.map(item=>({value:item.id,label:item.label}));setSelectOptions($('keyProvider'),providers,'Choose provider');setSelectOptions($('apiModelProvider'),providers,'Choose provider')}
+async function refreshBootstrap(){const data=await api('/api/bootstrap');state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.settings=data.settings||{};state.projectRoot=data.project_root||'';$('projectRoot').value=state.projectRoot;$('systemPrompt').value=state.settings.system_prompt||'';$('allowProjectWrites').checked=!!state.settings.allow_project_writes;fillProviders();fillModels();renderKeys();renderApiKeyChecks(currentApiKeySelection());renderApiModels();renderApiGroups();refreshFailoverMemberOptions();enhanceAllSelects()}
+function fillProviders(){const providers=state.providers.map(item=>({value:item.id,label:item.label}));setSelectOptions($('keyProvider'),providers,'Choose provider')}
 function renderLocalModels(){
  const root=$('localModelList');if(!root)return;root.replaceChildren();
- const models=state.models.slice().sort((a,b)=>(a.type===b.type?0:a.type==='local'?-1:1)||(a.label||a.name).localeCompare(b.label||b.name));
- if(!models.length){root.innerHTML='<div class="empty">No models are configured yet.</div>';return}
+ const models=state.models.filter(item=>item.type==='local').sort((a,b)=>(a.label||a.name).localeCompare(b.label||b.name));
+ if(!models.length){root.innerHTML='<div class="empty">No local models are installed yet. Download one below.</div>';return}
  models.forEach(model=>{
   const row=document.createElement('div');row.className='local-model-row';
   const grow=document.createElement('div');grow.className='grow';
@@ -1127,6 +1163,73 @@ function renderKeys(){
   root.append(row);
  });
 }
+function providerName(id){const p=(state.providers||[]).find(item=>item.id===String(id||'').toLowerCase());return p?p.label:(id||'Provider')}
+function currentApiKeySelection(){return Array.from(document.querySelectorAll('#apiModelKeys input:checked')).map(input=>input.value)}
+function syncApiKeyChecks(){
+ const boxes=Array.from(document.querySelectorAll('#apiModelKeys input'));
+ const chosen=boxes.find(box=>box.checked);const provider=chosen?chosen.dataset.provider:'';
+ boxes.forEach(box=>{box.disabled=!!provider&&box.dataset.provider!==provider;box.parentElement.classList.toggle('disabled',box.disabled)});
+}
+function renderApiKeyChecks(selected=[]){
+ const root=$('apiModelKeys');if(!root)return;root.replaceChildren();
+ if(!state.keys.length){root.innerHTML='<div class="empty">Add an API key first under API keys.</div>';return}
+ state.keys.slice().sort((a,b)=>(a.label||'').localeCompare(b.label||'')).forEach(key=>{
+  const label=document.createElement('label');label.className='key-check';
+  const input=document.createElement('input');input.type='checkbox';input.value=key.id;input.dataset.provider=String(key.provider||'').toLowerCase();input.checked=selected.includes(key.id);input.onchange=syncApiKeyChecks;
+  const text=document.createElement('span');text.innerHTML='<b>'+esc(key.label)+'</b> <small>'+esc(providerName(key.provider))+' · '+esc(key.masked)+'</small>';
+  label.append(input,text);root.append(label);
+ });
+ syncApiKeyChecks();
+}
+function openApiModelForm(group){
+ state.editingApiModel=group?group.id:null;
+ $('apiModelFormTitle').textContent=group?'Edit model':'Add model';
+ $('addApiModel').textContent=group?'Save changes':'Save model';
+ $('apiModelId').value=group?(group.model||''):'';$('apiModelLabel').value=group&&group.label&&group.label!==group.model?group.label:'';
+ let selected=[];
+ if(group){selected=Array.isArray(group.key_ids)?group.key_ids.slice():(group.key_id&&group.key_id!=='pool'?[group.key_id]:state.keys.filter(k=>String(k.provider||'').toLowerCase()===String(group.provider||'').toLowerCase()).map(k=>k.id))}
+ renderApiKeyChecks(selected);$('apiModelCard').hidden=false;$('apiModelId').focus();
+}
+function closeApiModelForm(){state.editingApiModel=null;$('apiModelCard').hidden=true;$('apiModelId').value='';$('apiModelLabel').value='';renderApiKeyChecks([])}
+function renderApiModels(){
+ const root=$('apiModelList');if(!root)return;root.replaceChildren();
+ const groups=(state.apiGroups||[]).filter(item=>item.source==='api').sort((a,b)=>String(a.label||a.model||'').localeCompare(String(b.label||b.model||'')));
+ if(!groups.length){root.innerHTML='<div class="empty">No API models yet. Press Add model, select keys, and enter a model name or ID.</div>';return}
+ groups.forEach(group=>{
+  const row=document.createElement('div');row.className='local-model-row';
+  const ids=Array.isArray(group.key_ids)?group.key_ids:(group.key_id&&group.key_id!=='pool'?[group.key_id]:null);
+  const names=ids===null?['all '+providerName(group.provider)+' keys']:ids.map(id=>(state.keys.find(k=>k.id===id)||{}).label).filter(Boolean);
+  const grow=document.createElement('div');grow.className='grow';
+  grow.innerHTML='<b>'+esc(group.label||group.model)+'</b><small>'+esc(group.model)+' · '+esc(providerName(group.provider))+' · '+esc(names.length?names.join(', '):'no key selected')+'</small>';
+  const actions=document.createElement('div');actions.className='model-actions';
+  const route=state.routes.find(item=>item.value==='model|'+group.model_ref)||state.routes.find(item=>item.value.startsWith('keymodel|'+group.model_ref+'|'));
+  const use=document.createElement('button');use.type='button';use.textContent='Use in chat';use.disabled=!route;use.onclick=()=>{if(!route)return;$('topModel').value=route.value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}));activateSettingsTab('general');toast('Model selected for new chats')};
+  const edit=document.createElement('button');edit.type='button';edit.textContent='Edit';edit.onclick=()=>openApiModelForm(group);
+  const remove=document.createElement('button');remove.type='button';remove.className='danger';remove.textContent='Delete';remove.onclick=async()=>{
+   if(!await confirmInApp('Remove API model','Remove “'+(group.label||group.model)+'” from Kurt? Your saved keys will remain.','Remove model',true))return;
+   try{await api('/api/models/delete',{model_ref:group.model_ref});await refreshBootstrap();toast('API model removed')}catch(error){toast(error.message)}
+  };
+  actions.append(use,edit,remove);row.append(grow,actions);root.append(row);
+ });
+}
+async function saveApiModel(){
+ const model=$('apiModelId').value.trim(),label=$('apiModelLabel').value.trim(),key_ids=currentApiKeySelection();
+ if(!key_ids.length){toast('Select at least one key');return}
+ if(!model){toast('Enter the model name or ID');return}
+ const editing=state.editingApiModel?(state.apiGroups||[]).find(item=>item.id===state.editingApiModel):null;
+ const body={api_group_action:editing?'edit':'add',source:'api',name:(label||model).slice(0,60),label:label||model,model,key_ids,key_group:'default'};
+ if(editing){body.id=editing.id;if(editing.base_url)body.base_url=editing.base_url}
+ try{await api('/api/settings',body);closeApiModelForm();await refreshBootstrap();toast(editing?'API model updated':'API model added')}catch(error){toast(error.message)}
+}
+function priorityText(index){return index===0?'1 · Priority':(index+1)+' · Fallback'}
+function applyPriorityBadges(container){Array.from(container.querySelectorAll('.priority-badge')).forEach((badge,index)=>{badge.textContent=priorityText(index);badge.classList.toggle('first',index===0)})}
+function makeSortable(container,itemSelector,onDrop){
+ let dragged=null;
+ container.addEventListener('dragstart',event=>{const item=event.target.closest(itemSelector);if(!item||!container.contains(item))return;dragged=item;item.classList.add('dragging');event.dataTransfer.effectAllowed='move';try{event.dataTransfer.setData('text/plain','kurt-model')}catch(error){}});
+ container.addEventListener('dragover',event=>{if(!dragged)return;event.preventDefault();const target=event.target.closest(itemSelector);if(!target||target===dragged||!container.contains(target))return;const rect=target.getBoundingClientRect();container.insertBefore(dragged,event.clientY>rect.top+rect.height/2?target.nextSibling:target)});
+ container.addEventListener('drop',event=>{if(dragged)event.preventDefault()});
+ container.addEventListener('dragend',()=>{if(!dragged)return;dragged.classList.remove('dragging');if(dragged.dataset.handleDrag)dragged.draggable=false;dragged=null;applyPriorityBadges(container);if(onDrop)onDrop()});
+}
 function memberRouteValue(member){
  const model=String(member?.model||'');if(!model)return '';
  const key=String(member?.key_id||'pool');
@@ -1139,25 +1242,37 @@ function memberFromRouteValue(value){
  if(parts[0]==='keymodel'&&parts[1]&&parts[2])return {model:parts[1],key_id:parts[2]};
  return null;
 }
+function moveFailoverMember(row,delta){
+ const root=$('failoverMembers');const rows=Array.from(root.children);const index=rows.indexOf(row);const target=index+delta;
+ if(index<0||target<0||target>=rows.length)return;
+ root.insertBefore(row,delta<0?rows[target]:rows[target].nextSibling);applyPriorityBadges(root);
+}
 function addFailoverMember(member={}){
  const root=$('failoverMembers');if(!root)return;
- if(root.children.length>=12){toast('A failover group can contain at most 12 entries');return}
+ if(root.children.length>=12){toast('A group can contain at most 12 models');return}
  const row=document.createElement('div');row.className='failover-member-row';
- const select=document.createElement('select');select.className='member-route';select.setAttribute('aria-label','Local model or API key');
+ const handle=document.createElement('span');handle.className='drag-handle';handle.textContent='⋮⋮';handle.title='Drag to change priority';
+ handle.addEventListener('mousedown',()=>{row.draggable=true;row.dataset.handleDrag='1'});handle.addEventListener('mouseup',()=>{row.draggable=false});
+ const badge=document.createElement('span');badge.className='priority-badge';
+ const select=document.createElement('select');select.className='member-route';select.setAttribute('aria-label','Local or API model');
  const locals=(state.routes||[]).filter(route=>String(route.value).startsWith('model|'));
  const keyed=(state.routes||[]).filter(route=>String(route.value).startsWith('keymodel|'));
- const placeholder=document.createElement('option');placeholder.value='';placeholder.disabled=true;placeholder.textContent=(locals.length||keyed.length)?'Choose a model or key':'No local models or keys available';select.appendChild(placeholder);
+ const placeholder=document.createElement('option');placeholder.value='';placeholder.disabled=true;placeholder.textContent=(locals.length||keyed.length)?'Choose a local or API model':'No local or API models available';select.appendChild(placeholder);
  const addGroup=(label,routes)=>{if(!routes.length)return;const group=document.createElement('optgroup');group.label=label;routes.forEach(route=>{const option=document.createElement('option');option.value=route.value;option.textContent=routeChoiceLabel(route.value);option.title=route.label;group.appendChild(option)});select.appendChild(group)};
- addGroup('Local',locals);addGroup('Key',keyed);
+ addGroup('Local models',locals);addGroup('API models',keyed);
  const current=memberRouteValue(member);
  if(current&&!Array.from(select.options).some(option=>option.value===current)){
   const model=state.models.find(item=>item.ref===member.model);const name=model?.label||model?.name||member.model;
   const option=document.createElement('option');option.value=current;option.textContent=name+(String(member.key_id||'pool')==='pool'?' · all keys':' · unavailable');select.appendChild(option);
  }
  select.value=current||'';
- const remove=document.createElement('button');remove.type='button';remove.className='remove-member';remove.textContent='×';remove.title='Remove fallback';remove.onclick=()=>row.remove();
- row.append(select,remove);root.appendChild(row);
- enhanceSelect(select);
+ const move=document.createElement('div');move.className='member-move';
+ const up=document.createElement('button');up.type='button';up.textContent='▲';up.title='Raise priority';up.onclick=()=>moveFailoverMember(row,-1);
+ const down=document.createElement('button');down.type='button';down.textContent='▼';down.title='Lower priority';down.onclick=()=>moveFailoverMember(row,1);
+ move.append(up,down);
+ const remove=document.createElement('button');remove.type='button';remove.className='remove-member';remove.textContent='×';remove.title='Remove model';remove.onclick=()=>{row.remove();applyPriorityBadges(root)};
+ row.append(handle,badge,select,move,remove);root.appendChild(row);
+ enhanceSelect(select);applyPriorityBadges(root);
 }
 function refreshFailoverMemberOptions(){
  const root=$('failoverMembers');if(!root||!root.children.length)return;
@@ -1181,7 +1296,7 @@ function editFailoverGroup(id){
 function renderApiGroups(){
  const root=$('apiGroupsList');if(!root)return;root.replaceChildren();
  const groups=state.apiGroups.filter(item=>item.source==='failover').slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));
- if(!groups.length){root.innerHTML='<div class="empty">No failover groups yet. Create one above and add a local model or API key.</div>';return}
+ if(!groups.length){root.innerHTML='<div class="empty">No groups yet. Create one above and add local or API models.</div>';return}
  groups.forEach(group=>{
   const card=document.createElement('div');card.className='pool-card';
   const head=document.createElement('div');head.className='pool-head';
@@ -1193,21 +1308,33 @@ function renderApiGroups(){
    const key=state.keys.find(item=>item.id===member.key_id);
    return name+' · '+(member.key_id&&member.key_id!=='pool'?(key?.label||'selected key'):'key pool');
   });
-  info.innerHTML='<b>'+esc(group.name)+'</b><small>'+esc(descriptions.join(' → ')||'No members configured')+'</small>';
+  info.innerHTML='<b>'+esc(group.name)+'</b><small>'+esc((group.members||[]).length+' model(s) · first is the priority, the rest are fallbacks')+'</small>';
   const actions=document.createElement('div');actions.className='pool-actions';
   const edit=document.createElement('button');edit.textContent='Edit';edit.onclick=()=>editFailoverGroup(group.id);
   const remove=document.createElement('button');remove.className='danger';remove.textContent='Remove';remove.onclick=async()=>{
    if(!await confirmInApp('Remove group','Remove “'+group.name+'”? Its models and API keys will remain available.','Remove',true))return;
    try{await api('/api/settings',{failover_action:'remove',id:group.id});await refreshBootstrap();resetFailoverForm();toast('Group removed')}catch(error){toast(error.message)}
   };
-  actions.append(edit,remove);head.append(info,actions);card.append(head);root.append(card);
+  actions.append(edit,remove);head.append(info,actions);card.append(head);
+  const list=document.createElement('div');list.className='group-members';
+  (group.members||[]).forEach((member,index)=>{
+   const chip=document.createElement('div');chip.className='group-member';chip.draggable=true;chip.dataset.model=member.model;chip.dataset.key=member.key_id||'pool';
+   chip.innerHTML='<span class="drag-handle" aria-hidden="true">⋮⋮</span><span class="priority-badge"></span><span class="grow">'+esc(descriptions[index]||member.model)+'</span>';
+   list.append(chip);
+  });
+  applyPriorityBadges(list);
+  makeSortable(list,'.group-member',async()=>{
+   const members=Array.from(list.children).map(chip=>({model:chip.dataset.model,key_id:chip.dataset.key}));
+   try{await api('/api/settings',{failover_action:'edit',id:group.id,name:group.name,members});await refreshBootstrap();toast('Priority order saved')}catch(error){toast(error.message);await refreshBootstrap()}
+  });
+  card.append(list);root.append(card);
  });
 }
 async function saveFailoverGroup(){
  const name=$('failoverGroupName').value.trim();
  const members=Array.from($('failoverMembers').querySelectorAll('.member-route')).map(select=>memberFromRouteValue(select.value)).filter(Boolean);
  if(!name){toast('Enter a group name');return}
- if(members.length<1){toast('Add at least one fallback entry');return}
+ if(members.length<1){toast('Add at least one model');return}
  try{
   await api('/api/settings',{failover_action:state.editingGroup?'edit':'add',id:state.editingGroup,name,members});
   await refreshBootstrap();resetFailoverForm();toast('Failover group saved');
@@ -1304,17 +1431,13 @@ async function loadUploadedImagePreviews(){const items=(state.uploadedFiles||[])
 async function attachFiles(){try{if(!state.selectedFiles.length&&!state.selectedFolders.length&&!state.pendingUploads.length){toast('Choose files first');return}const uploads=[];let total=0;for(const item of state.pendingUploads){if(item.file.size>10*1024*1024)throw new Error(item.file.name+' exceeds the 10 MB per-file limit.');total+=item.file.size;if(total>20*1024*1024)throw new Error('Local file selection exceeds the 20 MB import limit.');uploads.push({path:item.path,folder_root:item.folderRoot||'',content:bytesToBase64(await item.file.arrayBuffer())})}await ensureChat();const previewMap=new Map([...(state.uploadedFiles||[]),...state.pendingUploads].filter(item=>item.previewUrl).map(item=>[item.path,item.previewUrl]));const result=await api('/api/context/import',{chat_id:state.chatId,selected_files:state.selectedFiles,selected_folders:state.selectedFolders,uploads});state.contextCount=Number(result.items?.length??((state.contextCount||0)+Number(result.files||0)));state.uploadedFiles=(result.items||[]).map(item=>({...item,previewUrl:previewMap.get(item.path)||null}));state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl&&!state.uploadedFiles.some(uploaded=>uploaded.previewUrl===item.previewUrl))URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];renderPendingUploads();$('filesModal').classList.remove('show');hint();await refreshChats();loadUploadedImagePreviews();toast(result.message||'Files added to this chat')}catch(e){toast(e.message)}}
 function openComposerFilePicker(){const picker=$('composerFiles');if(!picker)return;picker.click()}
 async function handleComposerFiles(){const picker=$('composerFiles');if(!picker.files||!picker.files.length)return;stageLocalFiles(picker);await attachFiles()}
-async function startDownload(){const model=$('downloadModel').value.trim();if(!model){toast('Enter an Ollama model ID');return}try{const d=await api('/api/download',{model});$('downloadCaption').textContent='Queued: '+model;$('localDownloadStatus').textContent='Download queued: '+model;$('downloadModel').value='';toast('Download started in background');pollDownload()}catch(e){toast(e.message)}}
+async function startDownload(){const model=$('downloadModel').value.trim();if(!model){toast('Enter a model ID, repository or URL');return}try{const d=await api('/api/download',{model,source:$('downloadSource').value});$('downloadCaption').textContent='Queued: '+model;$('localDownloadStatus').textContent='Download queued: '+model;$('downloadModel').value='';toast('Download started in background');pollDownload()}catch(e){toast(e.message)}}
 async function pollDownload(){try{const d=await api('/api/download/status');const job=d.job;if(!job)return;const percent=job.total?job.completed/job.total*100:0;$('downloadFill').style.width=(job.state==='done'?100:percent)+'%';$('downloadCaption').textContent=job.state==='running'?`${job.model} · ${percent.toFixed(1)}% · ${job.human}`:`${job.model} · ${job.state}${job.error?' · '+job.error:''}`;if(job.state==='done'){await refreshBootstrap();$('localDownloadStatus').textContent=job.model+' installed successfully.';toast('Model download complete')}else if(job.state==='error'){$('localDownloadStatus').textContent=job.error||'Download failed';toast(job.error||'Download failed')}else{$('localDownloadStatus').textContent=job.model+' · '+percent.toFixed(1)+'% · '+job.human;setTimeout(pollDownload,1000)}}catch(e){console.error(e)}}
 $('sidebarSettings').onclick=openSettings;$('contextBtn').onclick=openComposerFilePicker;$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=refreshBootstrap;$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:'default',label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout()}});
 $('menuBtn').onclick=()=>document.body.classList.toggle('nav-open');$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',event=>{if(event.target.closest('.chat-item,#newChat,#sidebarSettings'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const theme=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=theme;try{localStorage.setItem('kurt-theme',theme)}catch(error){}};enhanceAllSelects();
 document.body.classList.add('compact-scroll');
-$('addApiModel').onclick=async()=>{
- const provider=$('apiModelProvider').value,model=$('apiModelId').value.trim(),label=$('apiModelLabel').value.trim();
- if(!provider){toast('Choose a provider');return}
- if(!model){toast('Enter the exact model ID');return}
- try{await api('/api/settings',{api_group_action:'add',source:'api',name:(label||model).slice(0,60),label:label||model,provider,model,key_id:'pool',key_group:'default'});$('apiModelId').value='';$('apiModelLabel').value='';await refreshBootstrap();toast('API model added')}catch(error){toast(error.message)}
-};
+$('showApiModelForm').onclick=()=>openApiModelForm(null);$('cancelApiModel').onclick=closeApiModelForm;$('addApiModel').onclick=saveApiModel;
+makeSortable($('failoverMembers'),'.failover-member-row');
 showWelcome();
 resetFailoverForm();
 (async()=>{
@@ -1448,6 +1571,22 @@ def _load_json(path, fallback):
         return fallback
 
 
+def normalize_download_id(model, source="auto"):
+    raw = str(model or "").strip()
+    lowered = raw.lower()
+    hf_prefixes = ("hf.co/", "huggingface.co/", "hf:", "https://huggingface.co/", "http://huggingface.co/",
+                   "https://www.huggingface.co/", "https://hf.co/", "http://hf.co/")
+    if str(source or "auto").lower() == "huggingface" or lowered.startswith(hf_prefixes):
+        value = re.sub(r"^(?:https?://)?(?:www\.)?(?:huggingface\.co|hf\.co)/", "", raw, flags=re.I)
+        value = re.sub(r"^hf:", "", value, flags=re.I).strip("/")
+        value = re.sub(r"/(?:tree|blob|resolve)/[^:]*$", "", value)
+        value = re.sub(r"\.git$", "", value)
+        if not re.fullmatch(r"[\w.\-]+/[\w.\-]+(?::[\w.\-]+)?", value):
+            raise ValueError("Enter a Hugging Face GGUF repository such as user/repo or user/repo:Q4_K_M.")
+        return "hf.co/" + value
+    return raw
+
+
 class KurtWebApp:
     def __init__(self):
         self.lock = threading.RLock()
@@ -1510,6 +1649,28 @@ class KurtWebApp:
             else:
                 entry.update(payload)
 
+    @staticmethod
+    def group_key_filter(group):
+        ids = group.get("key_ids")
+        if isinstance(ids, list):
+            return {str(item) for item in ids}
+        key_id = str(group.get("key_id") or "pool")
+        return None if key_id == "pool" else {key_id}
+
+    def remote_allowed_keys(self, remote):
+        group = next((item for item in self.settings.get("api_groups", []) if item.get("source") == "api" and item.get("remote_id") == remote.get("id")), None)
+        return None if group is None else self.group_key_filter(group)
+
+    def api_groups_view(self):
+        view = []
+        for group in self.settings.get("api_groups", []):
+            item = dict(group)
+            if group.get("source") == "api":
+                remote = next((entry for entry in K.REMOTE_MODELS if entry.get("id") == group.get("remote_id")), None)
+                item["model_ref"] = K.remote_model_ref(remote) if remote else ""
+            view.append(item)
+        return view
+
     def list_chat_routes(self):
         self.sync_api_groups()
         routes = []
@@ -1526,11 +1687,14 @@ class KurtWebApp:
             provider = str(remote.get("provider") or "").lower()
             key_group = str(remote.get("key_group") or "default")
             keys = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider]
+            allowed = self.remote_allowed_keys(remote)
+            if allowed is not None:
+                keys = [item for item in keys if str(item.get("id")) in allowed]
             model_label = str(remote.get("label") or remote.get("model") or model_ref)
             for key in sorted(keys, key=lambda item: str(item.get("label") or "Account").lower()):
                 routes.append({
                     "value": "keymodel|{}|{}".format(model_ref, key.get("id")),
-                    "label": "Key · {} · {}".format(model_label, key.get("label") or "Account"),
+                    "label": "API · {} · {}".format(model_label, key.get("label") or "Account"),
                     "kind": "key",
                 })
 
@@ -1550,11 +1714,12 @@ class KurtWebApp:
             provider = str(group.get("provider") or "").lower()
             pool = str(group.get("key_group") or "default")
             keys = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider]
-            if group.get("key_id") and group.get("key_id") != "pool":
-                keys = [item for item in keys if str(item.get("id")) == str(group.get("key_id"))]
+            allowed = self.group_key_filter(group)
+            if allowed is not None:
+                keys = [item for item in keys if str(item.get("id")) in allowed]
             remote = next((item for item in K.REMOTE_MODELS if item.get("id") == group.get("remote_id")), None)
-            if remote is not None and keys:
-                routes.append({"value": "group|" + group_id, "label": "Key · " + str(group.get("name") or group.get("label") or group.get("model") or "saved route") + " · key pool", "kind": "key"})
+            if remote is not None and len(keys) > 1:
+                routes.append({"value": "group|" + group_id, "label": "API · " + str(group.get("name") or group.get("label") or group.get("model") or "saved route") + " · key pool", "kind": "key"})
         return routes
 
     def resolve_model_key_candidate(self, model_ref, key_id="pool"):
@@ -1571,6 +1736,9 @@ class KurtWebApp:
             raise ValueError("The selected model is no longer configured: " + (model_ref or "(empty model)"))
         provider = str(remote.get("provider") or "").lower()
         matches = [item for item in K.PROVIDER_KEYS if str(item.get("provider") or "").lower() == provider]
+        allowed = self.remote_allowed_keys(remote)
+        if allowed is not None:
+            matches = [item for item in matches if str(item.get("id")) in allowed]
         if key_id != "pool":
             matches = [item for item in matches if str(item.get("id")) == key_id]
         if not matches:
@@ -2263,10 +2431,11 @@ class KurtWebApp:
         with self.lock:
             return next((chat for chat in self.chats if chat.get("id") == chat_id), None)
 
-    def start_download(self, model):
+    def start_download(self, model, source="auto"):
         model = str(model or "").strip()
-        if not model or len(model) > 200 or any(ch.isspace() for ch in model):
-            raise ValueError("Enter an Ollama model ID, for example qwen2.5-coder:7b.")
+        if not model or len(model) > 300 or any(ch.isspace() for ch in model):
+            raise ValueError("Enter a model ID, for example qwen2.5-coder:7b or a Hugging Face repository such as user/repo.")
+        model = normalize_download_id(model, source)
         with self.lock:
             if self.download_job and self.download_job.get("state") in ("queued", "running"):
                 raise ValueError("A model download is already running.")
@@ -2395,7 +2564,7 @@ class Handler(BaseHTTPRequestHandler):
                 providers = [{"id": key, "label": value.get("label", key)} for key, value in K.PROVIDER_SPECS.items()]
                 self._json({
                     "models": self.app.list_models(), "routes": self.app.list_chat_routes(), "providers": providers,
-                    "keys": self.app.sanitized_keys(), "api_groups": self.app.settings.get("api_groups", []),
+                    "keys": self.app.sanitized_keys(), "api_groups": self.app.api_groups_view(),
                     "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""), "system_prompt": self.app.editable_system_prompt(), "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False))},
                     "project_root": str(self.app.workspace()),
                 })
@@ -2588,7 +2757,7 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/file/write":
                 self._write_file(data)
             elif parsed.path == "/api/download":
-                job = self.app.start_download(data.get("model"))
+                job = self.app.start_download(data.get("model"), data.get("source"))
                 self._json({"job": job}, 202)
             elif parsed.path == "/api/chat":
                 self._chat(data)
@@ -2734,6 +2903,8 @@ class Handler(BaseHTTPRequestHandler):
             key_id = str(data.get("id") or "")
             K.PROVIDER_KEYS[:] = [item for item in K.PROVIDER_KEYS if str(item.get("id")) != key_id]
             for group in self.app.settings.get("api_groups", []):
+                if isinstance(group.get("key_ids"), list):
+                    group["key_ids"] = [item for item in group["key_ids"] if str(item) != key_id]
                 if str(group.get("key_id") or "") == key_id:
                     group["key_id"] = "pool"
             keys_changed = True
@@ -2829,6 +3000,21 @@ class Handler(BaseHTTPRequestHandler):
                 model_id = str(data.get("model") or "").strip()
                 key_group = str(data.get("key_group") or "default").strip()
                 key_id = str(data.get("key_id") or "pool")
+                key_ids = None
+                if isinstance(data.get("key_ids"), list):
+                    key_ids = []
+                    for value in data.get("key_ids"):
+                        value = str(value)
+                        if value not in key_ids:
+                            key_ids.append(value)
+                    chosen = [item for item in K.PROVIDER_KEYS if str(item.get("id")) in key_ids]
+                    if not chosen or len(chosen) != len(key_ids):
+                        raise ValueError("Select at least one saved API key.")
+                    providers = {str(item.get("provider") or "").lower() for item in chosen}
+                    if len(providers) != 1:
+                        raise ValueError("Select keys from one provider for a single model.")
+                    provider = providers.pop()
+                    key_id = key_ids[0] if len(key_ids) == 1 else "pool"
                 label = str(data.get("label") or model_id).strip()[:100]
                 base_url = str(data.get("base_url") or K.default_base_url(provider)).strip().rstrip("/")
                 if provider not in K.PROVIDER_SPECS or not model_id:
@@ -2841,7 +3027,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not matches:
                     raise ValueError("Add an API key for this provider and group before saving the route.")
                 payload.update({"provider": provider, "model": model_id, "label": label, "key_group": key_group,
-                                "key_id": key_id, "base_url": base_url,
+                                "key_id": key_id, "key_ids": key_ids, "base_url": base_url,
                                 "remote_id": (current or {}).get("remote_id") or uuid.uuid4().hex[:12]})
             if current:
                 current.clear()
