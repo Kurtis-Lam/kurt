@@ -42,43 +42,29 @@ MAX_CHATS = 100
 MAX_MESSAGES_PER_CHAT = 300
 
 WEB_INSTRUCTIONS = r"""
-KURT WEB WORKSPACE RULES:
-- You are Kurt, the local coding assistant in this application. Speak as Kurt and do not
-  confuse yourself with ChatGPT or another assistant. The user owns this local instance.
-- The System prompt field in Kurt Settings is user-editable configuration. You may explain,
-  quote, review, and revise the Kurt-specific prompt supplied in this conversation. Do not
-  refuse a request merely because it concerns Kurt's own prompt. Never include API keys,
-  credentials, or unrelated host-platform instructions.
-- Before every file edit or SYSTEM_PROMPT action, write a clear "Change summary" explaining
-  the exact file or prompt sections, what will change, and why. Put it before the action.
-- Each conversation has an isolated temporary workspace. Treat it as the only writable
-  workspace and use the attached file contents and directory listing supplied in context.
-- The original project directory is read-only unless the user explicitly enables project
-  writes in Settings and then confirms an individual Apply to project action.
-- When creating or modifying files, emit complete files with this exact action format:
-  @@@ WRITE relative/path.ext
-  complete file contents
-  @@@ END
-- For an existing file in the temporary workspace, use the supplied contents and emit a
-  complete replacement with WRITE. Never invent unseen file contents.
-- You may request a web search when current or external information is needed:
-  @@@ SEARCH your focused search query
-  @@@ END
-- You may propose an update to Kurt's editable system prompt using:
-  @@@ SYSTEM_PROMPT
-  complete replacement Kurt system prompt
-  @@@ END
-  This creates a review card. It is not saved until the user explicitly applies it.
-- Do not emit provider tool-call markers or invent tool results. Do not claim a command or
-  test ran unless the interface supplied its actual result.
-- Use the workspace tree and readable file contents already supplied in the system
-  messages. They are the source of truth for what is available. If the workspace is empty or lacks the files needed, ask the user to attach the files using the composer attachment control or configure the project directory in Settings.
-- Uploaded ZIP archives are automatically extracted into this conversation's workspace. Inspect the extracted paths in the workspace tree and work with the extracted files; do not ask the user to unzip them manually.
-- Uploaded folders are packaged internally for transfer and then extracted into the workspace. Treat the extracted folder tree as the original uploaded folder structure.
-- Images and other binary attachments are stored in the workspace and listed by path. Do not guess their visual contents; only describe an image when the selected model/provider actually supplies image-vision input or an available image-reading tool can inspect it.
-- Do not claim to have inspected files that were not attached or whose contents were not
-  supplied. Keep paths relative to this conversation's temporary workspace. Never target
-  paths outside it or claim that the original project was changed.
+KURT WEB INTERFACE RULES:
+- You are Kurt, the local assistant in this application. Speak as Kurt.
+- Normal mode has no access to local files, attachments, directories, terminal commands, or
+  other computer resources. In Normal mode, do not request or emit local-access actions.
+- Code mode can read and list files only beneath the configured project directory, subject to
+  the server's protected-path exclusions. Uploaded attachments are available only in Code mode.
+- Before proposing a file or prompt change, provide a concise Change summary that names the
+  target and explains what will change and why.
+- WRITE and EDIT blocks create review cards only. They never save a file by themselves. A
+  user-confirmed Download saves a copy; a separately confirmed Apply to project action writes
+  to the configured project directory when project writes are enabled in Settings.
+- RUN blocks create command-review cards only. They never execute until the user approves
+  the specific command in the interface. The command runner is restricted to the isolated
+  conversation workspace and its allowlisted developer checks; it is not an unrestricted shell.
+- READ and LIST are read-only and may address only paths inside the configured project root.
+  Never attempt path traversal, symbolic-link access, or access to protected/system directories.
+- SEARCH may request external web research when needed. Do not invent search results.
+- SYSTEM_PROMPT creates a review card. It is not saved until the user confirms applying it.
+- Uploaded ZIP archives and folders are unpacked into the conversation workspace in Code mode.
+  Treat extracted paths as their uploaded relative paths. Do not claim to inspect binary images
+  unless the selected model has vision input or an available image-reading capability.
+- Never claim a file was read, a command ran, or a change was saved unless the application
+  returned the actual result. Never imply access beyond the configured project directory.
 """
 
 KURT_IDENTITY_INSTRUCTIONS = r"""
@@ -93,8 +79,8 @@ credentials, or other secrets. Summarize decisions, assumptions, alternatives, a
 in user-facing rationale; do not reveal private chain-of-thought or hidden scratchpad tokens.
 """
 
-VISIBLE_THINKING_INSTRUCTIONS = """
-VISIBLE THINKING (required for every reply): First think the request through in plain language inside <think> and </think> tags: what is being asked, the key facts and constraints, your plan, and a quick check of the plan. Then write the final answer after the closing </think> tag. The interface shows the <think> block to the user in a collapsible "Thought for ..." panel, so keep it clear and honest. Never put the final answer, code, or @@@ file blocks inside the <think> block, and always include the closing </think> tag. Even for simple requests, write at least two sentences of thought. This instruction takes priority over any earlier rule about not showing reasoning.
+RESPONSE_FORMAT_INSTRUCTIONS = """
+RESPONSE FORMAT: Never reveal hidden chain-of-thought, private analysis, or text inside <think> tags. Do not generate <think> blocks or expose internal planning. Give the user the answer directly, with a concise user-facing explanation of important decisions and verification when useful. Keep final prose, code, and file proposals in the normal response body. Do not send hidden reasoning or analysis-channel content to the interface; the interface displays response status and workspace activity instead.
 """
 
 EFFORT_INSTRUCTIONS = {
@@ -103,28 +89,37 @@ EFFORT_INSTRUCTIONS = {
 }
 
 NORMAL_MODE_INSTRUCTIONS = r"""
-NORMAL MODE: Do not execute terminal commands. You may still request web research with SEARCH.
-Return file changes using WRITE or EDIT actions; the application runs syntax validation.
+NORMAL MODE — NO LOCAL FILE OR COMPUTER ACCESS:
+- You cannot inspect, list, search, read, create, edit, delete, move, upload, download, or otherwise access local files or folders.
+- You cannot access the configured project directory, chat workspace, attachments, local models' files, or the user's computer through tools or action blocks.
+- Do not request, emit, or simulate READ, LIST, RUN, WRITE, EDIT, or SYSTEM_PROMPT actions. The server blocks these actions as well.
+- You may answer general questions and request external web research with SEARCH.
+- When the user asks you to inspect or change local files, run commands, or work on their project, explain that they must switch this conversation to Code mode. Do not pretend to have inspected anything.
 """
 
 CODE_MODE_INSTRUCTIONS = r"""
-CODE MODE: You may run developer commands using action blocks:
-@@@ RUN python -m pytest -q
-@@@ END
-Commands run in this conversation's working directory and per-chat Python virtual environment.
-Before finishing, run relevant existing tests/checks when practical; state when no test harness
-exists. Syntax validation alone is not proof of end-to-end correctness. Use one command per RUN block. The runner does not invoke a shell and permits only python,
-pytest, ruff, mypy, node --check, and bash -n. A virtual environment is package isolation,
-not a full operating-system sandbox; never attempt to access files outside the workspace.
-Run targeted tests or checks when useful. The application also validates generated file syntax
-before returning artifacts; repair failed checks before presenting final files.
+CODE MODE — PROJECT FILE ACCESS WITH USER APPROVAL:
+- You may read and list files inside the configured Code mode project directory using:
+  @@@ LIST relative/path
+  @@@ END
+  @@@ READ relative/path.ext
+  @@@ END
+  Use LIST with an empty path to inspect the configured project directory root.
+- The read/list tools are read-only. The server restricts them to the configured project directory and excludes credential, secret, system, and dependency locations. Never imply that you can access paths outside that configured root.
+- You may inspect attached files and the isolated conversation workspace. Uploaded attachments are copied into that workspace by the user's explicit upload action.
+- Propose complete file replacements using WRITE or EDIT. These create review cards only; they do not write to the project or workspace. The user must explicitly download a proposal or approve the confirmed Apply to project action before a project file changes.
+- You may propose a developer command using one RUN action block. It is never executed automatically. The user must review and approve each command in the interface first. Approved commands run only through the restricted per-chat developer runner in the isolated chat workspace, not with unrestricted shell access to the computer.
+- Never claim a read, command, or write succeeded unless the application returned its actual result. Run targeted checks only after the user approves the command.
+- Syntax validation is not proof of end-to-end correctness. State when no test harness exists and describe any remaining uncertainty.
 """
 
 RUN_ACTION_RE = re.compile(r"@@@\s*RUN\s*([^\n]*)\n(.*?)\n?@@@\s*END", re.I | re.S)
 SEARCH_ACTION_RE = re.compile(r"@@@\s*SEARCH\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
+READ_ACTION_RE = re.compile(r"@@@\s*READ\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
+LIST_ACTION_RE = re.compile(r"@@@\s*LIST\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
 SYSTEM_PROMPT_ACTION_RE = re.compile(r"@@@\s*SYSTEM_PROMPT\s*\n(.*?)\n?@@@\s*END", re.I | re.S)
 WEB_ACTION_RE = re.compile(
-    r"@@@\s*(?:RUN|SEARCH|SYSTEM_PROMPT)\b[^\n]*\n[\s\S]*?@@@\s*END", re.I
+    r"@@@\s*(?:RUN|SEARCH|READ|LIST|SYSTEM_PROMPT)\b[^\n]*\n[\s\S]*?@@@\s*END", re.I
 )
 SYSTEM_PROMPT_REQUEST_RE = re.compile(
     r"^\s*(?:/system-prompt|(?:what\s+is|what's)\s+(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt|(?:show|share|reveal|print|display|quote|give)\s+(?:me\s+)?(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt)\s*[?!.\s]*$",
@@ -138,6 +133,7 @@ HTML_PAGE = r'''<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Kurt</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-5 -6 30 28'%3E%3Crect x='-5' y='-6' width='30' height='28' rx='6' fill='%230b120e'/%3E%3Cpath fill='%233dd66e' d='M0 0h6v4h-6zM14 0h6v2h-6zM11 2h6v2h-6zM0 4h1v12h-1zM2 4h2v12h-2zM5 4h1v12h-1zM8 4h6v2h-6zM6 6h5v4h-5zM1 8h1v8h-1zM4 8h1v8h-1zM8 10h6v2h-6zM11 12h6v2h-6zM14 14h6v2h-6z'/%3E%3C/svg%3E">
+<script>try{if(localStorage.getItem('kurt-side-collapsed')==='1')document.documentElement.classList.add('side-collapsed')}catch(e){}</script>
 <script>try{document.documentElement.dataset.theme=localStorage.getItem('kurt-theme')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark')}catch(e){document.documentElement.dataset.theme='dark'}</script>
 <style>
 :root{color-scheme:dark;--bg:#0e1511;--side:#0a100d;--panel:#141e19;--raise:#1c2922;--line:#22302a;--line2:#33463c;--text:#e6efe9;--muted:#8d9e94;--green:#3dd66e;--green-ink:#05200e;--green-soft:rgba(61,214,110,.12);--danger:#ff8d8d;--code:#0a110d;--shadow:0 18px 50px rgba(0,0,0,.4);--sans:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--serif:"Iowan Old Style","Palatino Linotype",Palatino,Charter,Georgia,"Times New Roman",serif;--mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace}
@@ -232,6 +228,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .content hr{border:0;border-top:1px solid var(--line2);margin:20px 0}
 .content blockquote{border-left:3px solid var(--green);padding:2px 14px;margin:12px 0;color:var(--muted)}
 .content a{color:var(--green)}
+.content .math-display{display:block;width:100%;margin:18px auto;text-align:center;font-weight:750;font-size:1.06em;line-height:1.8;overflow-x:auto;overflow-y:hidden;white-space:nowrap}
+.content .math-display mjx-container[display="true"]{display:block!important;margin:0 auto!important;font-weight:750}
 .content code:not(pre code){font:.86em var(--mono);background:var(--raise);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
 .assistant-heading{display:flex;align-items:center;gap:8px;margin:0 0 10px;color:var(--muted);font:600 13px var(--sans)}
 .assistant-heading .mark{width:24px;height:19.2px;padding:2px;border-radius:6px;background:#0b120e;color:#3dd66e;box-sizing:content-box}
@@ -722,6 +720,116 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 .group-member .grow{flex:1;min-width:0;overflow-wrap:anywhere}
 .failover-member-row.dragging,.group-member.dragging{opacity:.45}
 @media(max-width:700px){#failoverMembers .failover-member-row{grid-template-columns:18px 78px minmax(0,1fr) auto 32px;gap:6px}}
+
+/* UI refresh: motion system, Claude-style chat panel, polish. */
+:root{--ease:cubic-bezier(.22,.8,.26,1);--ease-soft:cubic-bezier(.4,0,.2,1);--side-w:268px}
+html.side-collapsed{--side-w:0px}
+*{scrollbar-width:thin}
+::selection{background:color-mix(in srgb,var(--green) 34%,transparent);color:var(--text)}
+html.theme-fade *,html.theme-fade *::before,html.theme-fade *::after{transition:background-color .35s var(--ease-soft),border-color .35s var(--ease-soft),color .35s var(--ease-soft),fill .35s,stroke .35s!important}
+button{transition:background-color .18s var(--ease-soft),border-color .18s var(--ease-soft),color .18s var(--ease-soft),filter .18s,transform .2s var(--ease),box-shadow .22s var(--ease-soft),opacity .18s}
+button:not(:disabled):not(.to-bottom):active{transform:scale(.97)}
+button.primary:not(:disabled):hover{box-shadow:0 6px 18px color-mix(in srgb,var(--green) 30%,transparent)}
+.send{transition:background-color .18s,filter .18s,transform .22s var(--ease),box-shadow .22s}
+.send:not(:disabled):hover{transform:translateY(-1px) scale(1.06);box-shadow:0 6px 16px color-mix(in srgb,var(--green) 32%,transparent)}
+.icon-btn{transition:background-color .18s,color .18s,transform .2s var(--ease)}
+.icon-btn:hover{transform:translateY(-1px)}
+.settings-nav-btn,.custom-select-option,.route-flyout-item,.route-flyout-category,.key-check,.chat-context-menu button,.artifact-top,.nav-btn,.chip,.pill,.work-log-head,.think-head,.group-member,.chat-more{transition:background-color .18s var(--ease-soft),color .18s var(--ease-soft),border-color .18s var(--ease-soft),transform .22s var(--ease),box-shadow .2s}
+.chat-context-menu button:hover{transform:translateX(2px)}
+.route-flyout-item:hover,.route-flyout-category:hover{transform:translateX(2px)}
+.menu-btn{transition:background-color .18s,color .18s,transform .3s var(--ease)}
+.topbar{position:sticky;top:0;z-index:12;background:color-mix(in srgb,var(--bg) 84%,transparent);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+.modal-backdrop,.dialog-backdrop{-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+.brand{transition:opacity .25s var(--ease-soft)}
+.logo{transition:transform .35s var(--ease),border-color .2s}
+.brand:hover .logo{transform:rotate(-6deg) scale(1.06);border-color:var(--green)}
+.nav-btn .ico{transition:transform .35s var(--ease),background-color .2s,color .2s}
+.nav-btn.new:hover .ico{transform:rotate(90deg) scale(1.08)}
+.nav-btn:hover .ico{color:var(--text)}
+.nav-btn.new:hover .ico{color:var(--green-ink)}
+.nav-btn:not(.new):hover .ico{transform:rotate(18deg)}
+.status-dot{animation:pulseDot 2.4s ease-in-out infinite}
+@keyframes pulseDot{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--green) 45%,transparent)}50%{box-shadow:0 0 0 5px transparent}}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}}
+@keyframes rowIn{from{opacity:0;transform:translateX(-10px)}}
+@keyframes activeIn{from{background-color:transparent}}
+@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+.message{animation:rise .45s var(--ease) backwards}
+.message.user .bubble{border:1px solid var(--line);border-radius:18px 18px 6px 18px;padding:10px 16px;transition:border-color .2s,transform .2s var(--ease)}
+.message.user .bubble:hover{border-color:var(--line2)}
+.welcome{animation:rise .65s var(--ease) backwards}
+.welcome .mark.xl{animation:floaty 4.5s ease-in-out infinite}
+.welcome h1{letter-spacing:-.02em}
+.main.empty .chip{animation:rise .55s var(--ease) backwards}
+.main.empty .chip:nth-child(1){animation-delay:.12s}.main.empty .chip:nth-child(2){animation-delay:.18s}.main.empty .chip:nth-child(3){animation-delay:.24s}.main.empty .chip:nth-child(4){animation-delay:.30s}.main.empty .chip:nth-child(5){animation-delay:.36s}.main.empty .chip:nth-child(6){animation-delay:.42s}
+.chip:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,.16)}
+.composer{border-radius:24px;box-shadow:0 4px 24px rgba(0,0,0,.18);transition:border-color .2s var(--ease-soft),box-shadow .28s var(--ease-soft),transform .28s var(--ease)}
+.composer:focus-within{box-shadow:0 0 0 3px var(--green-soft),0 10px 32px rgba(0,0,0,.24)}
+.artifact{transition:border-color .2s,box-shadow .25s var(--ease-soft),transform .25s var(--ease)}
+.artifact:hover{border-color:var(--green);box-shadow:0 8px 24px rgba(0,0,0,.16)}
+.artifact-top:hover{background:var(--raise)}
+.codebox{transition:border-color .2s}
+.codebox:hover{border-color:var(--line2)}
+.toast{transition:opacity .25s var(--ease-soft),transform .32s var(--ease)}
+.to-bottom{display:grid;opacity:0;visibility:hidden;pointer-events:none;transform:translateX(-50%) translateY(10px);transition:opacity .22s var(--ease-soft),transform .3s var(--ease),visibility .3s,background-color .18s,color .18s}
+.to-bottom.show{display:grid;opacity:1;visibility:visible;pointer-events:auto;transform:translateX(-50%)}
+.to-bottom.show:hover{transform:translateX(-50%) translateY(-2px)}
+.main.empty .to-bottom{display:none}
+.route-flyout{transform-origin:bottom left;transition:opacity .16s var(--ease-soft),transform .22s var(--ease),visibility .22s}
+.route-flyout[hidden]{display:grid;visibility:hidden;opacity:0;pointer-events:none;transform:translateY(6px) scale(.98)}
+.artifact-pane{display:flex;flex-direction:column;opacity:0;visibility:hidden;pointer-events:none;transform:translateX(28px);transition:opacity .25s var(--ease-soft),transform .36s var(--ease),visibility .36s,width .34s var(--ease)}
+.main.has-artifacts .artifact-pane{opacity:1;visibility:visible;pointer-events:auto;transform:none}
+.chat-area{transition:flex-basis .36s var(--ease),width .36s var(--ease),max-width .36s var(--ease)}
+.chat-list{padding:4px 0 14px;transition:opacity .15s var(--ease-soft),transform .18s var(--ease)}
+.chat-list.swapping{opacity:0;transform:translateY(6px)}
+.chat-group{display:block}
+.chat-date-heading,.chat-date-heading:first-child{display:flex;align-items:center;gap:4px;padding:14px 4px 3px 2px;color:var(--text);font-size:13px;font-weight:600;line-height:1.2}
+.chat-group:first-child .chat-date-heading{padding-top:4px}
+.heading-toggle{display:inline-flex;align-items:center;gap:5px;padding:4px 7px;border:0;background:transparent;color:var(--text);font-size:13px;font-weight:600;border-radius:8px}
+.heading-toggle:hover{background:var(--raise)}
+.heading-toggle .chev{width:14px;height:14px;color:var(--muted);transition:transform .3s var(--ease),color .2s}
+.heading-toggle:hover .chev{color:var(--text)}
+.chat-group.collapsed .heading-toggle .chev{transform:rotate(-90deg)}
+.heading-actions{margin-left:auto;display:flex;align-items:center;gap:1px}
+.heading-btn{width:28px;height:28px;padding:0;display:grid;place-items:center;border:0;background:transparent;color:var(--muted);border-radius:8px}
+.heading-btn .ic{width:16px;height:16px}
+.heading-btn:hover,.heading-btn[aria-pressed=true]{color:var(--text);background:var(--raise)}
+.heading-btn[aria-pressed=true]{color:var(--green)}
+.sort-btn.flipped .ic{transform:scaleY(-1)}
+.chat-group-body{display:grid;grid-template-rows:1fr;opacity:1;transition:grid-template-rows .32s var(--ease),opacity .26s var(--ease-soft)}
+.chat-group-inner{min-height:0;overflow:hidden;padding:0 1px}
+.chat-group.collapsed .chat-group-body{grid-template-rows:0fr;opacity:0}
+.chat-group.collapsed .chat-group-inner{visibility:hidden;transition:visibility 0s linear .32s}
+.chat-row{position:relative;margin:1px 0;padding:0 2px 0 0;gap:2px;min-height:36px;border-radius:9px;transition:background-color .2s var(--ease-soft),outline-color .2s}
+.chat-row.active{animation:activeIn .38s var(--ease-soft)}
+.chat-row.enter{animation:rowIn .45s var(--ease) backwards}
+.chat-item{position:relative;padding:8px 8px 8px 31px;font-size:14px;line-height:1.35;color:color-mix(in srgb,var(--text) 80%,transparent);transition:color .2s var(--ease-soft),transform .25s var(--ease)}
+.chat-item::before{content:"";position:absolute;left:13px;top:50%;width:7px;height:7px;margin-top:-4px;border:1.5px solid var(--muted);border-radius:50%;transition:background-color .25s var(--ease-soft),border-color .25s var(--ease-soft),transform .3s var(--ease)}
+.chat-row:hover .chat-item::before{border-color:var(--text);transform:scale(1.15)}
+.chat-row.active .chat-item::before{background:var(--green);border-color:var(--green);transform:scale(1.15)}
+.chat-row.active .chat-item{font-weight:550}
+.chat-row.selected{outline:1px solid var(--green);outline-offset:-1px}
+.chat-select-bar{max-height:48px;opacity:1;overflow:hidden;transform:none;transition:max-height .3s var(--ease),opacity .22s var(--ease-soft),padding .3s var(--ease),transform .3s var(--ease),visibility .3s}
+.chat-select-bar[hidden]{display:flex;max-height:0;opacity:0;padding-top:0;padding-bottom:0;transform:translateY(-6px);visibility:hidden;pointer-events:none}
+.chat-context-menu{display:grid;visibility:hidden;opacity:0;pointer-events:none;transform:scale(.95) translateY(-4px);transition:opacity .16s var(--ease-soft),transform .2s var(--ease),visibility .2s}
+.chat-context-menu.open{visibility:visible;opacity:1;pointer-events:auto;transform:none;animation:none}
+.side-bottom{transition:border-color .2s}
+@media(min-width:701px){
+.menu-btn{display:inline-grid}
+.app{grid-template-columns:var(--side-w) minmax(0,1fr);transition:grid-template-columns .36s var(--ease)}
+.sidebar{overflow:hidden;transition:opacity .28s var(--ease-soft),border-color .3s,padding .36s var(--ease)}
+.sidebar>*{min-width:244px}
+html.side-collapsed .sidebar{opacity:0;pointer-events:none;border-right-color:transparent;padding-left:0;padding-right:0}
+.artifact-pane{width:calc((100vw - var(--side-w))/2)}
+}
+@media(max-width:700px){
+.sidebar{transition:transform .34s var(--ease),box-shadow .34s var(--ease-soft);box-shadow:none}
+body.nav-open .sidebar{box-shadow:var(--shadow)}
+.scrim,body.nav-open .scrim{display:block;position:fixed;inset:0;z-index:15;background:rgba(4,10,7,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+.scrim{opacity:0;visibility:hidden;pointer-events:none;transition:opacity .3s var(--ease-soft),visibility .3s}
+body.nav-open .scrim{opacity:1;visibility:visible;pointer-events:auto}
+}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -744,7 +852,6 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <aside class="sidebar">
 <div class="brand"><span class="logo"><svg viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg></span><b>Kurt</b></div>
 <button class="nav-btn new" id="newChat"><span class="ico"><svg class="ic"><use href="#i-plus"/></svg></span>New chat</button>
-<div class="side-heading"><div class="side-title">Chats</div><div class="chat-heading-actions"><select id="chatSort" class="chat-sort" aria-label="Sort chats"><option value="newest">Newest</option><option value="oldest">Oldest</option></select><button id="selectChats" class="chat-select-toggle" type="button" aria-pressed="false">Select</button></div></div>
 <div class="chat-select-bar" id="chatSelectBar" hidden><label><input id="selectAllChats" type="checkbox"> All</label><span id="selectedChatCount">0 selected</span><button id="deleteSelectedChats" type="button" class="danger" disabled>Delete</button><button id="cancelChatSelect" type="button" class="ghost">Done</button></div>
 <div id="chatList" class="chat-list"></div>
 <div class="side-bottom">
@@ -778,7 +885,7 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <button class="send" id="sendBtn" title="Send message" aria-label="Send message" disabled><svg class="ic"><use href="#i-up"/></svg></button>
 </div>
 </div>
-<div class="compose-hint" id="composeHint">Kurt can make mistakes. Files are staged in this chat’s isolated workspace. Project files stay unchanged unless you explicitly enable and apply changes.</div>
+<div class="compose-hint" id="composeHint">Normal mode has no local file access. Code mode can inspect the configured project folder; changes require your approval.</div>
 </div>
 </section>
 <aside class="artifact-pane" id="artifactPane" aria-label="Selected file preview">
@@ -798,8 +905,8 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 </nav>
 <div class="settings-panel-area">
 <section class="settings-panel active" data-settings-panel="general">
-<h3>General</h3><div class="inline-note">Choose the default route and configure the project workspace.</div>
-<div class="settings-grid"><div class="field"><label>Default chat route</label><select id="settingsModel"></select></div><div class="field"><label>Project directory (read-only by default)</label><input id="projectRoot" placeholder="/Users/you/project"></div></div>
+<h3>General</h3><div class="inline-note">Choose the default route and configure which local folder Code mode may inspect.</div>
+<div class="settings-grid"><div class="field"><label>Default chat route</label><select id="settingsModel"></select></div><div class="field"><label>Code mode project access root</label><input id="projectRoot" placeholder="/Users/you/project"><div class="inline-note">Choose one project folder, not your home folder or system root. Code mode can read files beneath this folder, except protected credential and system locations.</div></div></div>
 <label class="check-row"><input id="allowProjectWrites" type="checkbox"> Allow applying generated files to the project (each file still requires confirmation)</label>
 <div class="field"><label>System prompt</label><textarea id="systemPrompt" style="min-height:180px"></textarea><div class="inline-note">Kurt can review and propose edits to this prompt in chat. Proposed prompt changes appear as a review card and require your approval before saving. Type /system-prompt in chat to display the exact active Kurt prompt for the selected mode.</div></div>
 <div class="row"><button class="primary" id="saveSettings">Save settings</button><button id="reloadSettings">Reload from disk</button></div>
@@ -837,7 +944,7 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 <div class="chat-context-menu" id="chatContextMenu" role="menu"></div>
 <div class="dialog-backdrop" id="appDialogBackdrop"><form class="app-dialog" id="appDialogForm"><h2 id="appDialogTitle"></h2><p class="dialog-message" id="appDialogMessage"></p><div class="dialog-fields" id="appDialogFields"></div><div class="dialog-actions"><button type="button" id="appDialogCancel">Cancel</button><button type="submit" class="primary" id="appDialogConfirm">Save</button></div></form></div>
 <script>
-const TOKEN='__TOKEN__';const HINT='Kurt can make mistakes. Attachments are copied into an isolated chat workspace; the project stays unchanged unless you explicitly apply a file.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[]};
+const TOKEN='__TOKEN__';const HINT='Normal mode has no local file or computer access. Switch to Code mode to inspect project files and propose changes for your approval.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[]};
 const $=id=>document.getElementById(id);const api=async(path,body)=>{const res=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:body?JSON.stringify(body):undefined});const data=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(data.error||res.statusText);return data};
 function toast(msg){const el=$('toast');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600)}
 
@@ -964,8 +1071,10 @@ function openRouteFlyout(trigger){
 window.addEventListener('resize',positionRouteFlyout);
 window.addEventListener('scroll',positionRouteFlyout,true);
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function stripUnsupportedActions(src){return String(src||'')
- .replace(/@@@\s*(?:RUN|SEARCH|SYSTEM_PROMPT|READ|EXEC|BASH|SHELL)\b[\s\S]*?(?:@@@\s*END\b|$)/gi,'')
+function stripUnsupportedActions(src){let text=String(src||'');const opener=/<think(?:ing)?>/i.exec(text),closer=/<\/think(?:ing)?>/i.exec(text);if(closer&&(!opener||closer.index<opener.index))text=text.slice(closer.index+closer[0].length);return text
+ .replace(/@@@\s*(?:RUN|SEARCH|READ|LIST|WRITE|EDIT|SYSTEM_PROMPT|EXEC|BASH|SHELL)\b[\s\S]*?(?:@@@\s*END\b|$)/gi,'')
+ .replace(/<think(?:ing)?>[\s\S]*?(?:<\/think(?:ing)?>|$)/gi,'')
+ .replace(/<\/think(?:ing)?>/gi,'')
  .replace(/<\|tool_call_start\|>[\s\S]*?(?:<\|tool_call_end\|>|$)/gi,'')
  .replace(/<\|tool_call_(?:start|end)\|>/gi,'')
  .trim()}
@@ -974,6 +1083,7 @@ function mdBlocks(text){
  const math=[];
  const mathToken=tex=>{const index=math.push(String(tex||'').trim())-1;return '\n\u0002KURTMATH'+index+'\u0002\n'};
  text=String(text||'')
+  .replace(/\\begin\{(equation\*?|align\*?|gather\*?|multline\*?|displaymath)\}([\s\S]*?)\\end\{\1\}/g,(_,environment,tex)=>mathToken('\\begin{'+environment+'}'+tex+'\\end{'+environment+'}'))
   .replace(/\\\[([\s\S]*?)\\\]/g,(_,tex)=>mathToken(tex))
   .replace(/\$\$([\s\S]*?)\$\$/g,(_,tex)=>mathToken(tex))
   .replace(/\\\(([\s\S]*?)\\\)/g,(_,tex)=>mathToken(tex))
@@ -994,12 +1104,12 @@ function mdBlocks(text){
  }
  flushP();flushL();flushQ();return html
 }
-function hasMathMarkup(value){return /\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$|\\\([\s\S]*?\\\)|(^|[^\$])\$[^\$\n]+\$(?!\$)/.test(String(value||''))}
+function hasMathMarkup(value){return /\\begin\{(?:equation\*?|align\*?|gather\*?|multline\*?|displaymath)\}|\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$|\\\([\s\S]*?\\\)|(^|[^\$])\$[^\$\n]+\$(?!\$)/.test(String(value||''))}
 window.MathJax={tex:{inlineMath:[],displayMath:[['\\[','\\]']],processEscapes:true,packages:{'[+]':['ams']}},options:{skipHtmlTags:['script','noscript','style','textarea','pre','code']},startup:{typeset:false}};
 function typesetMath(root){if(!root||!window.MathJax?.typesetPromise)return;try{window.MathJax.typesetClear?.([root]);window.MathJax.typesetPromise([root]).catch(error=>console.warn('Math rendering failed:',error))}catch(error){console.warn('Math rendering failed:',error)}}
 const mathJaxScript=document.createElement('script');mathJaxScript.src='https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js';mathJaxScript.async=true;mathJaxScript.onload=()=>document.querySelectorAll('.content').forEach(typesetMath);mathJaxScript.onerror=()=>console.warn('MathJax could not be loaded; equations will remain centered as TeX text.');document.head.appendChild(mathJaxScript);
 function renderMarkdown(src){src=String(src||'');return src.split(/(```[^\n]*\n[\s\S]*?```|```[^\n]*\n[\s\S]*$|```[^\n]*$)/).map((seg,i)=>{if(i%2===0)return mdBlocks(seg);const nl=seg.indexOf('\n');const lang=(nl<0?seg.slice(3):seg.slice(3,nl)).trim().split(/\s+/)[0]||'';let code=nl<0?'':seg.slice(nl+1);if(nl>=0&&seg.endsWith('```'))code=code.replace(/\n?```$/,'');return '<div class="codebox"><div class="codehead"><span>'+esc(lang||'code')+'</span><button class="copy-mini" data-copy-code>Copy code</button></div><pre><code>'+esc(code.replace(/\n$/,''))+'</code></pre></div>'}).join('')}
-function splitThink(raw,streaming){let think='',answer='',open=false;const closer=/<\/think(?:ing)?>/i.exec(raw),opener=/<think(?:ing)?>/i.exec(raw);if(closer&&(!opener||closer.index<opener.index)){think+=raw.slice(0,closer.index)+'\n';raw=raw.slice(closer.index+closer[0].length)}while(raw.length){const m=/<think(?:ing)?>/i.exec(raw);if(!m){answer+=raw;break}answer+=raw.slice(0,m.index);const after=raw.slice(m.index+m[0].length);const c=/<\/think(?:ing)?>/i.exec(after);if(!c){think+=after;open=true;break}think+=after.slice(0,c.index)+'\n';raw=after.slice(c.index+c[0].length)}answer=answer.replace(/^\s+/,'');if(streaming)answer=answer.replace(/<\/?(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?$/i,'');return{think:think.trim(),answer,open}}
+function splitThink(raw,streaming){return{think:'',answer:stripUnsupportedActions(raw),open:false}}
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
 function bindCopy(root){root.querySelectorAll('[data-copy-code]').forEach(b=>b.onclick=()=>{const code=b.closest('.codebox').querySelector('code');navigator.clipboard.writeText(code?code.textContent:'').then(()=>toast('Code copied'))})}
 function formatThought(seconds){const s=Number(seconds);if(!Number.isFinite(s)||s<=0)return '';if(s<60)return Math.max(1,Math.round(s))+'s';const m=Math.floor(s/60),r=Math.round(s%60);return r?m+'m '+r+'s':m+'m'}
@@ -1015,32 +1125,95 @@ function setReasoning(node,text,live=false,seconds=0){
  const body=panel.querySelector('.think-body');
  body.textContent=value;panel.classList.toggle('live',!!live);if(head)head.classList.toggle('live',!!live);
  if(live){label.textContent='Thinking…';if(!panel.dataset.userCollapsed)setReasoningOpen(panel,true);body.scrollTop=body.scrollHeight}
- else{const t=formatThought(seconds);label.textContent=t?'Thought for '+t:'Thought process';if(panel.dataset.userOpen!=='1')setReasoningOpen(panel,false)}
+ else{const t=formatThought(seconds);label.textContent=t?'Summary · '+t:'Response summary';if(panel.dataset.userOpen!=='1')setReasoningOpen(panel,false)}
 }
-function setThink(node,entries){const panel=node.querySelector('.work-log');if(!panel)return;const relevant=/^(Running command:|PASSED:|FAILED:|Searching the web:|Web search failed:|Syntax validation passed:|Basic file validation passed:|Prepared a Kurt system-prompt proposal|Retrieved the exact active Kurt system prompt|Validation warning:)/i;const items=(Array.isArray(entries)?entries:[]).filter(item=>relevant.test(String(typeof item==='string'?item:item?.text||'')));if(!items.length){panel.hidden=true;return}panel.hidden=false;const body=panel.querySelector('.work-log-body');const open=panel.dataset.initialized==='1'&&panel.classList.contains('open');panel.dataset.initialized='1';panel.classList.toggle('open',open);panel.querySelector('.work-log-head').setAttribute('aria-expanded',String(open));body.replaceChildren();items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const label=String(data.text||'Activity');const detail=String(data.detail||'');const row=document.createElement(detail&&detail!==label?'details':'div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');if(row.tagName==='DETAILS'){const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;body.appendChild(row)});panel.querySelector('.think-label').textContent='Workspace activity · '+items.length+' event(s)'}
+function setThink(node,entries){const panel=node.querySelector('.work-log');if(!panel)return;const relevant=/^(Running command:|Prepared a command for approval:|Read project file:|Listed project directory:|PASSED:|FAILED:|Searching the web:|Web search failed:|Syntax validation passed:|Basic file validation passed:|Prepared a Kurt system-prompt proposal|Retrieved the exact active Kurt system prompt|Blocked a local computer action|Validation warning:)/i;const items=(Array.isArray(entries)?entries:[]).filter(item=>relevant.test(String(typeof item==='string'?item:item?.text||'')));if(!items.length){panel.hidden=true;return}panel.hidden=false;const body=panel.querySelector('.work-log-body');const open=panel.dataset.initialized==='1'&&panel.classList.contains('open');panel.dataset.initialized='1';panel.classList.toggle('open',open);panel.querySelector('.work-log-head').setAttribute('aria-expanded',String(open));body.replaceChildren();items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const label=String(data.text||'Activity');const detail=String(data.detail||'');const row=document.createElement(detail&&detail!==label?'details':'div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');if(row.tagName==='DETAILS'){const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;body.appendChild(row)});panel.querySelector('.think-label').textContent='Workspace activity · '+items.length+' event(s)'}
 function pushWorkStep(node,text,ok,detail){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok&&last.detail===detail)return;entries.push({text,ok,detail:detail||''});if(entries.length>60)entries.shift();setThink(node,entries)}
-function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const panel=node.querySelector('.reasoning-panel');if(panel){panel.classList.remove('live');if(panel._head)panel._head.classList.remove('live');const label=panel._label;if(label&&label.textContent.indexOf('Thinking')===0)label.textContent='Thought process'}}
+function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const panel=node.querySelector('.reasoning-panel');if(panel){panel.classList.remove('live');if(panel._head)panel._head.classList.remove('live');const label=panel._label;if(label&&label.textContent.indexOf('Thinking')===0)label.textContent='Response summary'}}
 let follow=true;
 function scrollEnd(force){if(!force&&!follow)return;const m=$('messages');m.scrollTop=m.scrollHeight}
 function setEmpty(on){$('main').classList.toggle('empty',on);if(on)$('toBottom').classList.remove('show')}
 function setTitle(title,meta){$('chatTitle').textContent=title||'New chat';$('chatMeta').textContent=meta||''}
 function autosize(){const t=$('prompt');t.style.height='auto';t.style.height=Math.min(t.scrollHeight,220)+'px'}
 function updateSend(){$('sendBtn').disabled=!state.busy&&!$('prompt').value.trim()}
-function hint(){const base=state.contextCount?state.contextCount+' item(s) in this chat’s isolated workspace':HINT;$('composeHint').textContent=state.mode==='code'?base+' Code mode can run approved developer checks in a per-chat Python venv; a venv is not a full operating-system sandbox.':base}
+function hint(){const base=state.contextCount?state.contextCount+' item(s) in this chat’s isolated workspace':HINT;$('composeHint').textContent=state.mode==='code'?'Code mode can read files only under the configured project directory, not the whole computer. File changes are previews until you approve Apply to project; every terminal command also requires approval and runs in the isolated chat workspace.':HINT}
 function setBusy(b){state.busy=b;const btn=$('sendBtn');btn.querySelector('use').setAttribute('href',b?'#i-stop':'#i-up');btn.title=b?'Stop response':'Send message';btn.setAttribute('aria-label',btn.title);updateSend()}
 function cancelRun(){if(state.abort)state.abort.abort();state.abort=null;state.run++;setBusy(false)}
 function responseModelLabel(ref){if(!ref)return'';const item=state.models.find(m=>m.ref===ref);return item?`${item.label||item.name||item.model} · ${item.provider}`:String(ref)}
 function setResponseMeta(node,stats,model){const el=node?.querySelector('.response-metrics');if(!el)return;const parts=[];const seconds=Number(stats?.thought_seconds);const speed=Number(stats?.tokens_per_second);if(Number.isFinite(seconds)&&seconds>0)parts.push(`Generated in ${seconds.toFixed(seconds<10?1:0)}s`);if(Number.isFinite(speed)&&speed>0)parts.push(`${stats?.tokens_estimated?'~':''}${speed.toFixed(speed<10?1:0)} tok/s`);const label=responseModelLabel(model);if(label)parts.push(label);el.textContent=parts.join(' · ');if(stats?.tokens_estimated)el.title='Token rate is estimated from generated text length because the provider did not report output-token usage.'}
-function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<think)/i.test(String(content||'')))safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.';wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user'){if(hasMathMarkup(safeContent)){const userContent=document.createElement('div');userContent.className='content user-content';userContent.innerHTML=renderMarkdown(safeContent);bubble.appendChild(userContent);typesetMath(userContent)}else bubble.textContent=content}else{bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');const reasoning=reasoningBlock();const headingRow=bubble.querySelector('.assistant-heading');headingRow.insertBefore(reasoning._head,headingRow.querySelector('.assistant-status'));bubble.appendChild(reasoning);bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindCopy(wrap);wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];setReasoning(wrap,extra?.reasoning||'',false,extra?.thinkingSeconds||0);setThink(wrap,extra?.worklog||[]);setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
+function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<\/?think)/i.test(String(content||'')))safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.';wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user'){if(hasMathMarkup(safeContent)){const userContent=document.createElement('div');userContent.className='content user-content';userContent.innerHTML=renderMarkdown(safeContent);bubble.appendChild(userContent);typesetMath(userContent)}else bubble.textContent=content}else{bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');const reasoning=reasoningBlock();const headingRow=bubble.querySelector('.assistant-heading');headingRow.insertBefore(reasoning._head,headingRow.querySelector('.assistant-status'));bubble.appendChild(reasoning);bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindCopy(wrap);wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];setReasoning(wrap,extra?.reasoning||'',false,extra?.thinkingSeconds||0);setThink(wrap,extra?.worklog||[]);setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
 function clearArtifactPane(){const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';const main=$('main');if(main)main.classList.remove('has-artifacts');document.querySelectorAll('.artifact-trigger').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
 function closeArtifactPane(){const main=$('main');if(main)main.classList.remove('has-artifacts');const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';document.querySelectorAll('.artifact-trigger.selected').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
-function renderArtifactTriggers(container,artifacts){if(!container)return;container.innerHTML='';(artifacts||[]).forEach(a=>{const promptCard=a.kind==='system_prompt';const button=document.createElement('button');button.type='button';button.className='artifact-trigger';button.setAttribute('aria-controls','artifactPane');button.setAttribute('aria-expanded','false');button.innerHTML='<span class="artifact-trigger-icon"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span><span class="artifact-trigger-text"><span class="artifact-trigger-name"></span><span class="artifact-trigger-status"></span></span><span class="artifact-trigger-open">Preview →</span>';button.querySelector('.artifact-trigger-name').textContent=promptCard?'System prompt proposal':String(a.path||'Generated file');button.querySelector('.artifact-trigger-status').textContent=a.validation?.message||'Saved in the temporary workspace';button.setAttribute('aria-label','Preview '+(a.path||'generated file'));button.onclick=()=>openArtifactPreview(a,button);container.appendChild(button)})}
-function openArtifactPreview(a,trigger){const pane=$('artifactPaneContent');if(!pane)return;pane.replaceChildren(artifactCard(a));$('main').classList.add('has-artifacts');document.querySelectorAll('.artifact-trigger').forEach(button=>{const selected=button===trigger;button.classList.toggle('selected',selected);button.setAttribute('aria-expanded',String(selected))});const title=$('artifactPaneTitle');if(title)title.textContent=a.kind==='system_prompt'?'System prompt proposal':String(a.path||'File preview');const count=$('artifactCount');if(count)count.textContent='Selected file preview';const side=$('artifactPane');side.scrollTop=0}
-function artifactCard(a){const promptCard=a.kind==='system_prompt';const card=document.createElement('div');card.className='artifact open'+(a.validation?.ok?'':' bad');card.innerHTML=`<div class="artifact-top"><div class="file-icon"><svg class="ic"><use href="#i-file"/></svg></div><div class="file-name">${esc(a.path)}</div><div class="file-check">${esc(a.validation?.message||'Saved in temporary workspace')}</div><span class="artifact-chev"><svg class="ic"><use href="#i-chev"/></svg></span></div><div class="artifact-body"><div class="codebox"><div class="codehead"><span>${promptCard?'SYSTEM PROMPT':esc((a.path.split('.').pop()||'FILE').toUpperCase())}</span><button class="copy-mini copy-artifact">Copy</button></div><pre><code></code></pre></div><div class="artifact-actions">${promptCard?(a.preview_only?'':'<button class="primary apply-prompt">Apply prompt to Kurt</button>'):'<button class="download-artifact">Download file</button><button class="primary apply-artifact">Apply to project</button>'}</div></div>`;card.querySelector('code').textContent=a.content;card.querySelector('.artifact-top').onclick=()=>card.classList.toggle('open');card.querySelectorAll('.copy-artifact').forEach(button=>button.onclick=()=>navigator.clipboard.writeText(a.content).then(()=>toast('Content copied')));if(promptCard&&!a.preview_only){card.querySelector('.apply-prompt').onclick=async()=>{if(!await confirmInApp('Apply system prompt','Replace Kurt’s editable system prompt with this proposed version?','Apply',true))return;try{await api('/api/settings',{system_prompt:a.content});await refreshBootstrap();toast('Kurt system prompt updated')}catch(error){toast(error.message)}}}else if(!promptCard){card.querySelector('.download-artifact').onclick=()=>{const blob=new Blob([a.content],{type:'application/octet-stream'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=a.path.split('/').pop();link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};card.querySelector('.apply-artifact').onclick=async()=>{if(!a.validation?.ok){toast('Fix validation errors before applying');return}if(!state.settings.allow_project_writes){toast('Enable project writes in Settings first');return}const message=`Apply ${a.path} to ${state.projectRoot}?${a.exists?'\nThis will overwrite the existing project file.':''}\n\nThe isolated workspace copy will remain unchanged.`;if(!await confirmInApp('Apply file to project',message,'Apply file',true))return;try{const result=await api('/api/file/write',{path:a.path,content:a.content,overwrite:!!a.exists,authorized:true});toast(result.message||'Applied to project')}catch(error){toast(error.message)}}}return card}
+function renderArtifactTriggers(container,artifacts){
+ if(!container)return;
+ container.innerHTML='';
+ (artifacts||[]).forEach(a=>{
+  const promptCard=a.kind==='system_prompt',commandCard=a.kind==='command';
+  const button=document.createElement('button');button.type='button';button.className='artifact-trigger';
+  button.setAttribute('aria-controls','artifactPane');button.setAttribute('aria-expanded','false');
+  button.innerHTML='<span class="artifact-trigger-icon"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span><span class="artifact-trigger-text"><span class="artifact-trigger-name"></span><span class="artifact-trigger-status"></span></span><span class="artifact-trigger-open">Review →</span>';
+  button.querySelector('.artifact-trigger-name').textContent=promptCard?'System prompt proposal':commandCard?'Command approval':String(a.path||'Generated file');
+  button.querySelector('.artifact-trigger-status').textContent=a.validation?.message||(a.approval_required?'Ready for approval · not saved':'Preview');
+  button.setAttribute('aria-label','Review '+(a.path||'generated file'));button.onclick=()=>openArtifactPreview(a,button);container.appendChild(button);
+ });
+}
+function openArtifactPreview(a,trigger){
+ const pane=$('artifactPaneContent');if(!pane)return;pane.replaceChildren(artifactCard(a));$('main').classList.add('has-artifacts');
+ document.querySelectorAll('.artifact-trigger').forEach(button=>{const selected=button===trigger;button.classList.toggle('selected',selected);button.setAttribute('aria-expanded',String(selected))});
+ const title=$('artifactPaneTitle');if(title)title.textContent=a.kind==='system_prompt'?'System prompt proposal':a.kind==='command'?'Command approval':String(a.path||'File preview');
+ const count=$('artifactCount');if(count)count.textContent=a.kind==='command'?'Not executed · approval required':a.approval_required?'Preview only · not saved':'Selected file preview';
+ $('artifactPane').scrollTop=0;
+}
+function artifactCard(a){
+ const promptCard=a.kind==='system_prompt',commandCard=a.kind==='command';
+ const card=document.createElement('div');card.className='artifact open'+(a.validation?.ok?'':' bad');
+ const actions=commandCard?'<button class="primary approve-command">Approve &amp; run</button>':promptCard?(a.preview_only?'':'<button class="primary apply-prompt">Apply prompt to Kurt</button>'):'<button class="download-artifact">Download file</button><button class="primary apply-artifact">Apply to project</button>';
+ const heading=commandCard?'COMMAND REVIEW':promptCard?'SYSTEM PROMPT':esc((String(a.path||'file').split('.').pop()||'FILE').toUpperCase());
+ const status=a.validation?.message||(a.approval_required?'Preview only · not saved':'Ready for review');
+ card.innerHTML=`<div class="artifact-top"><div class="file-icon"><svg class="ic"><use href="#i-file"/></svg></div><div class="file-name">${esc(a.path)}</div><div class="file-check">${esc(status)}</div><span class="artifact-chev"><svg class="ic"><use href="#i-chev"/></svg></span></div><div class="artifact-body"><div class="codebox"><div class="codehead"><span>${heading}</span><button class="copy-mini copy-artifact">Copy</button></div><pre><code></code></pre></div><div class="artifact-actions">${actions}</div></div>`;
+ card.querySelector('code').textContent=a.content;card.querySelector('.artifact-top').onclick=()=>card.classList.toggle('open');
+ card.querySelector('.copy-artifact').onclick=()=>navigator.clipboard.writeText(a.content).then(()=>toast('Content copied'));
+ if(commandCard){
+  const button=card.querySelector('.approve-command');
+  button.onclick=async()=>{
+   if(state.mode!=='code'){toast('Switch this conversation to Code mode before running a command.');return}
+   const approved=await confirmInApp('Approve command execution',`Run this command in the isolated workspace for this conversation?\n\n${a.content}\n\nIt has not run yet. The command runner only permits approved developer checks.`, 'Approve & run',true);
+   if(!approved)return;
+   button.disabled=true;button.textContent='Running…';
+   try{
+    const result=await api('/api/command/run',{chat_id:state.chatId,command:a.content,approved:true});
+    const output=`Exit code: ${result.returncode}\nStatus: ${result.ok?'Succeeded':'Failed'}\n\n${String(result.output||'(No output.)').slice(0,12000)}`;
+    await inAppDialog({title:result.ok?'Command completed':'Command failed',message:output,confirmText:'Close'});
+    button.textContent=result.ok?'Completed':'Failed';
+    const fileCheck=card.querySelector('.file-check');if(fileCheck)fileCheck.textContent=result.ok?'Executed with approval':'Execution failed';
+   }catch(error){button.disabled=false;button.textContent='Approve & run';toast(error.message)}
+  };
+ }else if(promptCard&&!a.preview_only){
+  card.querySelector('.apply-prompt').onclick=async()=>{
+   if(state.mode!=='code'){toast('Switch this conversation to Code mode before changing the system prompt.');return}
+   if(!await confirmInApp('Apply system prompt','Replace Kurt’s editable system prompt with this proposed version?','Apply',true))return;
+   try{await api('/api/settings',{system_prompt:a.content,prompt_proposal:true,chat_id:state.chatId,approved:true});await refreshBootstrap();toast('Kurt system prompt updated')}catch(error){toast(error.message)}
+  };
+ }else if(!promptCard){
+  card.querySelector('.download-artifact').onclick=async()=>{
+   if(!await confirmInApp('Download approved file',`Save ${a.path} to your computer’s Downloads folder? This only downloads the proposed file; it does not modify the project.`, 'Download',false))return;
+   const blob=new Blob([a.content],{type:'application/octet-stream'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=a.path.split('/').pop();link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+  card.querySelector('.apply-artifact').onclick=async()=>{
+   if(state.mode!=='code'){toast('Switch this conversation to Code mode before applying a file.');return}
+   if(!a.validation?.ok){toast('Fix validation errors before applying');return}
+   if(!state.settings.allow_project_writes){toast('Enable project writes in Settings first');return}
+   const message=`Apply ${a.path} to ${state.projectRoot}?${a.exists?'\nThis will overwrite the existing project file.':''}\n\nThe proposed file has not been saved yet.`;
+   if(!await confirmInApp('Apply file to project',message,'Apply file',true))return;
+   try{const result=await api('/api/file/write',{path:a.path,content:a.content,overwrite:!!a.exists,chat_id:state.chatId,approved:true,authorized:true});toast(result.message||'Applied to project');const status=card.querySelector('.file-check');if(status)status.textContent='Applied to project with approval'}catch(error){toast(error.message)}
+  };
+ }
+ return card;
+}
 const SUGGESTIONS=[['Understand my project','Inspect the current project structure and explain its architecture.'],['Build a feature','Help me plan and implement a new feature. Ask for any missing requirements first.'],['Generate a file','Write a small utility script and return it as a file card.'],['Debug code','Help me debug this issue. Start by asking for the relevant error and files.']];
 function showWelcome(){clearArtifactPane();setEmpty(true);follow=true;$('messages').innerHTML='<div class="welcome"><svg class="mark xl" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><h1>What are we building?</h1></div>';$('chips').innerHTML=SUGGESTIONS.map(s=>'<button class="chip" data-prompt="'+esc(s[1])+'">'+esc(s[0])+'</button>').join('');document.querySelectorAll('#chips [data-prompt]').forEach(b=>b.onclick=()=>{$('prompt').value=b.dataset.prompt;autosize();updateSend();$('prompt').focus()})}
-function closeChatMenu(){const menu=$('chatContextMenu');menu.classList.remove('open');menu.replaceChildren();menu.removeAttribute('data-chat-id')}
-function openChatMenu(chatId,x,y){const chat=state.chats.find(item=>item.id===chatId);if(!chat)return;const menu=$('chatContextMenu');menu.replaceChildren();menu.dataset.chatId=chatId;const add=(label,action,cls='')=>{const button=document.createElement('button');button.type='button';button.className=cls;button.textContent=label;button.onclick=()=>{closeChatMenu();action()};menu.appendChild(button)};add(chat.pinned?'Unpin chat':'Pin chat',()=>togglePinChat(chatId,!chat.pinned));add('Rename chat',()=>renameChat(chatId,chat.title||''));const divider=document.createElement('div');divider.className='menu-divider';menu.appendChild(divider);add('Delete chat',()=>deleteChat(chatId),'danger');menu.classList.add('open');const rect=menu.getBoundingClientRect();menu.style.left=Math.max(8,Math.min(x,innerWidth-rect.width-8))+'px';menu.style.top=Math.max(8,Math.min(y,innerHeight-rect.height-8))+'px'}
+function closeChatMenu(){const menu=$('chatContextMenu');if(!menu.classList.contains('open')&&!menu.childElementCount)return;menu.classList.remove('open');clearTimeout(menu._t);menu._t=setTimeout(()=>{if(!menu.classList.contains('open')){menu.replaceChildren();menu.removeAttribute('data-chat-id')}},220)}
+function openChatMenu(chatId,x,y){const chat=state.chats.find(item=>item.id===chatId);if(!chat)return;const menu=$('chatContextMenu');menu.replaceChildren();menu.dataset.chatId=chatId;const add=(label,action,cls='')=>{const button=document.createElement('button');button.type='button';button.className=cls;button.textContent=label;button.onclick=()=>{closeChatMenu();action()};menu.appendChild(button)};add(chat.pinned?'Unpin chat':'Pin chat',()=>togglePinChat(chatId,!chat.pinned));add('Rename chat',()=>renameChat(chatId,chat.title||''));const divider=document.createElement('div');divider.className='menu-divider';menu.appendChild(divider);add('Delete chat',()=>deleteChat(chatId),'danger');clearTimeout(menu._t);menu.classList.add('open');const rect={width:menu.offsetWidth,height:menu.offsetHeight};menu.style.left=Math.max(8,Math.min(x,innerWidth-rect.width-8))+'px';menu.style.top=Math.max(8,Math.min(y,innerHeight-rect.height-8))+'px'}
 function updateChatSelectionToolbar(){
  const bar=$('chatSelectBar');if(!bar)return;
  bar.hidden=!state.selectingChats;
@@ -1050,8 +1223,8 @@ function updateChatSelectionToolbar(){
  const all=state.chats.length>0&&selected===state.chats.length;
  $('selectAllChats').checked=all;
  $('selectAllChats').indeterminate=selected>0&&!all;
- $('selectChats').textContent=state.selectingChats?'Cancel':'Select';
- $('selectChats').setAttribute('aria-pressed',String(state.selectingChats));
+ const selBtn=$('selectChats');
+ if(selBtn){selBtn.setAttribute('aria-pressed',String(state.selectingChats));selBtn.title=state.selectingChats?'Cancel selection':'Select chats'}
 }
 function setChatSelectionMode(enabled){
  state.selectingChats=!!enabled;
@@ -1100,20 +1273,48 @@ function buildChatRow(chat){
  row.addEventListener('contextmenu',event=>{event.preventDefault();openChatMenu(chat.id,event.clientX,event.clientY)});
  return row;
 }
+let collapsedGroups=new Set();try{collapsedGroups=new Set(JSON.parse(localStorage.getItem('kurt-collapsed-groups')||'[]'))}catch(error){}
+let chatListPainted=false;
+function saveCollapsedGroups(){try{localStorage.setItem('kurt-collapsed-groups',JSON.stringify(Array.from(collapsedGroups)))}catch(error){}}
+function buildHeadingActions(){
+ const box=document.createElement('div');box.className='heading-actions';
+ const sort=document.createElement('button');sort.type='button';sort.className='heading-btn sort-btn'+(state.sort==='oldest'?' flipped':'');
+ sort.title=state.sort==='oldest'?'Oldest first':'Newest first';sort.setAttribute('aria-label','Sort chats');
+ sort.innerHTML='<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 20V5M4 9l4-4 4 4M16 4v15M12 15l4 4 4-4"/></svg>';
+ sort.onclick=()=>{const list=$('chatList');list.classList.add('swapping');state.sort=state.sort==='oldest'?'newest':'oldest';setTimeout(()=>{renderChats();list.classList.remove('swapping')},150)};
+ const select=document.createElement('button');select.type='button';select.id='selectChats';select.className='heading-btn';
+ select.setAttribute('aria-label','Select chats');select.setAttribute('aria-pressed',String(state.selectingChats));
+ select.innerHTML='<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>';
+ select.onclick=()=>setChatSelectionMode(!state.selectingChats);
+ box.append(sort,select);return box;
+}
 function renderChats(){
  const el=$('chatList');el.replaceChildren();
  const oldest=state.sort==='oldest';
  const chats=state.chats.slice().sort((a,b)=>oldest?(a.updated||0)-(b.updated||0):(b.updated||0)-(a.updated||0));
  const sections=[];
  const pinned=chats.filter(chat=>chat.pinned);
- if(pinned.length)sections.push({label:'Pinned',chats:pinned});
+ if(pinned.length)sections.push({key:'pinned',label:'Pinned',chats:pinned});
  const buckets=new Map();
- chats.filter(chat=>!chat.pinned).forEach(chat=>{const bucket=chatDateBucket(chat.updated);let section=buckets.get(bucket.key);if(!section){section={label:bucket.label,order:bucket.order,chats:[]};buckets.set(bucket.key,section)}section.chats.push(chat)});
+ chats.filter(chat=>!chat.pinned).forEach(chat=>{const bucket=chatDateBucket(chat.updated);let section=buckets.get(bucket.key);if(!section){section={key:bucket.key,label:bucket.label,order:bucket.order,chats:[]};buckets.set(bucket.key,section)}section.chats.push(chat)});
  Array.from(buckets.values()).sort((a,b)=>oldest?b.order-a.order:a.order-b.order).forEach(section=>sections.push(section));
- sections.forEach(section=>{
-  const heading=document.createElement('div');heading.className='chat-date-heading';heading.textContent=section.label;el.append(heading);
-  section.chats.forEach(chat=>el.append(buildChatRow(chat)));
+ const animate=!chatListPainted&&sections.length>0;let rowIndex=0;
+ sections.forEach((section,index)=>{
+  const group=document.createElement('section');group.className='chat-group'+(collapsedGroups.has(section.key)?' collapsed':'');
+  const heading=document.createElement('div');heading.className='chat-date-heading';
+  const toggle=document.createElement('button');toggle.type='button';toggle.className='heading-toggle';toggle.setAttribute('aria-expanded',String(!group.classList.contains('collapsed')));
+  const label=document.createElement('span');label.className='heading-label';label.textContent=section.label;
+  const chev=document.createElementNS('http://www.w3.org/2000/svg','svg');chev.setAttribute('class','ic chev');chev.setAttribute('aria-hidden','true');chev.innerHTML='<use href="#i-chev"/>';
+  toggle.append(label,chev);
+  toggle.onclick=()=>{const collapsed=group.classList.toggle('collapsed');toggle.setAttribute('aria-expanded',String(!collapsed));if(collapsed)collapsedGroups.add(section.key);else collapsedGroups.delete(section.key);saveCollapsedGroups()};
+  heading.append(toggle);
+  if(index===0)heading.append(buildHeadingActions());
+  const body=document.createElement('div');body.className='chat-group-body';
+  const inner=document.createElement('div');inner.className='chat-group-inner';
+  section.chats.forEach(chat=>{const row=buildChatRow(chat);if(animate){row.classList.add('enter');row.style.animationDelay=Math.min(rowIndex,14)*30+'ms'}rowIndex++;inner.append(row)});
+  body.append(inner);group.append(heading,body);el.append(group);
  });
+ if(sections.length)chatListPainted=true;
  updateChatSelectionToolbar();
 }
 async function renameChat(id,current){const result=await inAppDialog({title:'Rename conversation',message:'Choose a clear title for this chat.',confirmText:'Rename',fields:[{name:'title',label:'Chat title',value:current,required:true,maxLength:100}]});if(!result)return;const title=result.title.trim();if(!title){toast('Chat title cannot be empty');return}try{await api('/api/chats/'+encodeURIComponent(id),{rename:title});await refreshChats();if(id===state.chatId)setTitle(title,$('chatMeta').textContent)}catch(error){toast(error.message)}}
@@ -1343,12 +1544,13 @@ async function saveFailoverGroup(){
 async function refreshChats(){const d=await api('/api/chats');state.chats=d.chats||[];renderChats()}
 function resetComposer(){$('prompt').value='';autosize();state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.uploadedFiles=[];state.contextCount=0;renderPendingUploads();hint();updateSend()}
 async function ensureChat(initialMessage){
- if(!state.chatId){const body={create:true};if(initialMessage)body.initial_message=initialMessage;const d=await api('/api/chats',body);state.chatId=d.id}
+ if(!state.chatId){const body={create:true,mode:state.mode,effort:state.effort};if(initialMessage)body.initial_message=initialMessage;const d=await api('/api/chats',body);state.chatId=d.id}
  else if(initialMessage){await api('/api/chats/'+encodeURIComponent(state.chatId),{append_user_message:initialMessage})}
+ else{await api('/api/chats/'+encodeURIComponent(state.chatId),{mode:state.mode,effort:state.effort})}
  return state.chatId;
 }
 async function newChat(){cancelRun();state.chatId=null;state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=data.effort==='expert'?'expert':'thinking';state.mode=data.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;syncSelect($('effortSelect'));syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
+async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=data.effort==='expert'?'expert':'thinking';state.mode=data.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;syncSelect($('effortSelect'));syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
 async function send(){
  const text=$('prompt').value.trim();if(!text||state.busy)return;
  const run=++state.run;state.effort=$('effortSelect').value;state.mode=$('operationMode').value;const route=$('topModel').value;
@@ -1392,17 +1594,18 @@ $('sendBtn').onclick=()=>{if(state.busy){if(state.abort)state.abort.abort()}else
 $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!state.busy)send()}});
 $('prompt').addEventListener('input',()=>{autosize();updateSend()});
 $('prompt').addEventListener('paste',event=>{
+ if(state.mode!=='code'&&Array.from(event.clipboardData?.items||[]).some(item=>String(item.type||'').startsWith('image/'))){event.preventDefault();toast('Normal mode cannot read pasted files or images. Switch to Code mode first.');return}
  const clipboardItems=Array.from(event.clipboardData?.items||[]);const pastedImages=clipboardItems.filter(item=>String(item.type||'').startsWith('image/')).map(item=>item.getAsFile()).filter(Boolean);
  if(pastedImages.length){event.preventDefault();stageUploadFiles(pastedImages);attachFiles();return}
  const pastedText=event.clipboardData?.getData('text/plain')||'';
- if(pastedText.length>16000){event.preventDefault();const stamp=new Date().toISOString().replace(/[:.]/g,'-');const file=new File([pastedText],'pasted-text-'+stamp+'.txt',{type:'text/plain'});if(file.size>10*1024*1024){toast('This pasted text exceeds the 10 MB attachment limit. Split it into smaller parts.');return}stageUploadFiles([file]);$('prompt').value='I attached a large pasted text file. Please read it and help me with its contents.';autosize();updateSend();toast('Large paste attached as a .txt file');attachFiles()}
+ if(pastedText.length>16000&&state.mode==='code'){event.preventDefault();const stamp=new Date().toISOString().replace(/[:.]/g,'-');const file=new File([pastedText],'pasted-text-'+stamp+'.txt',{type:'text/plain'});if(file.size>10*1024*1024){toast('This pasted text exceeds the 10 MB attachment limit. Split it into smaller parts.');return}stageUploadFiles([file]);$('prompt').value='I attached a large pasted text file. Please read it and help me with its contents.';autosize();updateSend();toast('Large paste attached as a .txt file');attachFiles()}
  });
-$('newChat').onclick=newChat;$('chatSort').onchange=()=>{state.sort=$('chatSort').value;renderChats()};$('selectChats').onclick=()=>setChatSelectionMode(!state.selectingChats);$('selectAllChats').onchange=()=>selectAllChats($('selectAllChats').checked);$('deleteSelectedChats').onclick=deleteSelectedChats;$('cancelChatSelect').onclick=()=>setChatSelectionMode(false);$('effortSelect').onchange=()=>{state.effort=$('effortSelect').value};$('operationMode').onchange=()=>{state.mode=$('operationMode').value;hint()};
+$('newChat').onclick=newChat;$('selectAllChats').onchange=()=>selectAllChats($('selectAllChats').checked);$('deleteSelectedChats').onclick=deleteSelectedChats;$('cancelChatSelect').onclick=()=>setChatSelectionMode(false);$('effortSelect').onchange=()=>{state.effort=$('effortSelect').value};$('operationMode').onchange=async()=>{state.mode=$('operationMode').value;hint();if(state.busy)cancelRun();if(state.mode!=='code'){state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.uploadedFiles=[];state.contextCount=0;renderPendingUploads();$('filesModal').classList.remove('show')}if(state.chatId){try{await api('/api/chats/'+encodeURIComponent(state.chatId),{mode:state.mode,effort:state.effort});if(state.mode==='code'){const context=await api('/api/context/status?chat_id='+encodeURIComponent(state.chatId));state.contextCount=context.files||0;state.uploadedFiles=context.items||[];renderPendingUploads();loadUploadedImagePreviews()}}catch(error){toast(error.message)}}hint()};
 function activateSettingsTab(tab){document.querySelectorAll('[data-settings-tab]').forEach(button=>button.classList.toggle('active',button.dataset.settingsTab===tab));document.querySelectorAll('[data-settings-panel]').forEach(panel=>panel.classList.toggle('active',panel.dataset.settingsPanel===tab));const area=document.querySelector('.settings-panel-area');if(area)area.scrollTop=0}
 document.querySelectorAll('[data-settings-tab]').forEach(b=>b.onclick=()=>activateSettingsTab(b.dataset.settingsTab));
 async function openSettings(){await refreshBootstrap();activateSettingsTab('general');$('settingsModal').classList.add('show')}
 async function saveSettings(){const payload={project_root:$('projectRoot').value,system_prompt:$('systemPrompt').value,allow_project_writes:$('allowProjectWrites').checked,default_route:$('settingsModel').value};const data=await api('/api/settings',payload);state.settings=data.settings||{};state.settings.allow_project_writes=$('allowProjectWrites').checked;state.projectRoot=data.project_root;await refreshBootstrap();toast('Settings saved')}
-async function browseFiles(){const path=$('fileFolder').value.trim();const d=await api('/api/files?path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()}}el.appendChild(row)})}
+async function browseFiles(){if(state.mode!=='code'){toast('Switch this conversation to Code mode to browse project files.');return}await ensureChat();const path=$('fileFolder').value.trim();const d=await api('/api/files?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()}}el.appendChild(row)})}
 function formatFileSize(value){const bytes=Math.max(0,Number(value)||0);if(bytes<1024)return bytes+' B';if(bytes<1024*1024)return (bytes/1024).toFixed(1)+' KB';return (bytes/1024/1024).toFixed(1)+' MB'}
 function fileIconNode(item){if(item.previewUrl&&String(item.type||item.mime||'').startsWith('image/')){const image=document.createElement('img');image.className='attachment-thumb';image.src=item.previewUrl;image.alt=item.name||'Uploaded image';return image}const icon=document.createElement('span');icon.className='attachment-file-icon';icon.innerHTML='<svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>';return icon}
 function makeUploadCard(item,{uploaded=false,removable=false,compact=false,index=-1}={}){
@@ -1428,13 +1631,13 @@ function stageUploadFiles(files){for(const file of files||[]){const relative=Str
 function stageLocalFiles(input){stageUploadFiles(Array.from(input.files||[]));input.value=''}
 function bytesToBase64(buffer){const bytes=new Uint8Array(buffer);let binary='';const chunk=0x8000;for(let i=0;i<bytes.length;i+=chunk)binary+=String.fromCharCode(...bytes.subarray(i,i+chunk));return btoa(binary)}
 async function loadUploadedImagePreviews(){const items=(state.uploadedFiles||[]).filter(item=>item.image&&!item.previewUrl);await Promise.all(items.map(async item=>{try{const url='/api/context/preview?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(item.path);const response=await fetch(url,{headers:{'X-Kurt-Token':TOKEN}});if(!response.ok)return;item.previewUrl=URL.createObjectURL(await response.blob())}catch(error){console.warn('Could not load an attachment preview:',error)}}));renderPendingUploads()}
-async function attachFiles(){try{if(!state.selectedFiles.length&&!state.selectedFolders.length&&!state.pendingUploads.length){toast('Choose files first');return}const uploads=[];let total=0;for(const item of state.pendingUploads){if(item.file.size>10*1024*1024)throw new Error(item.file.name+' exceeds the 10 MB per-file limit.');total+=item.file.size;if(total>20*1024*1024)throw new Error('Local file selection exceeds the 20 MB import limit.');uploads.push({path:item.path,folder_root:item.folderRoot||'',content:bytesToBase64(await item.file.arrayBuffer())})}await ensureChat();const previewMap=new Map([...(state.uploadedFiles||[]),...state.pendingUploads].filter(item=>item.previewUrl).map(item=>[item.path,item.previewUrl]));const result=await api('/api/context/import',{chat_id:state.chatId,selected_files:state.selectedFiles,selected_folders:state.selectedFolders,uploads});state.contextCount=Number(result.items?.length??((state.contextCount||0)+Number(result.files||0)));state.uploadedFiles=(result.items||[]).map(item=>({...item,previewUrl:previewMap.get(item.path)||null}));state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl&&!state.uploadedFiles.some(uploaded=>uploaded.previewUrl===item.previewUrl))URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];renderPendingUploads();$('filesModal').classList.remove('show');hint();await refreshChats();loadUploadedImagePreviews();toast(result.message||'Files added to this chat')}catch(e){toast(e.message)}}
-function openComposerFilePicker(){const picker=$('composerFiles');if(!picker)return;picker.click()}
+async function attachFiles(){try{if(state.mode!=='code'){toast('Normal mode cannot attach or read local files. Switch to Code mode first.');return}if(!state.selectedFiles.length&&!state.selectedFolders.length&&!state.pendingUploads.length){toast('Choose files first');return}const uploads=[];let total=0;for(const item of state.pendingUploads){if(item.file.size>10*1024*1024)throw new Error(item.file.name+' exceeds the 10 MB per-file limit.');total+=item.file.size;if(total>20*1024*1024)throw new Error('Local file selection exceeds the 20 MB import limit.');uploads.push({path:item.path,folder_root:item.folderRoot||'',content:bytesToBase64(await item.file.arrayBuffer())})}await ensureChat();const previewMap=new Map([...(state.uploadedFiles||[]),...state.pendingUploads].filter(item=>item.previewUrl).map(item=>[item.path,item.previewUrl]));const result=await api('/api/context/import',{chat_id:state.chatId,selected_files:state.selectedFiles,selected_folders:state.selectedFolders,uploads});state.contextCount=Number(result.items?.length??((state.contextCount||0)+Number(result.files||0)));state.uploadedFiles=(result.items||[]).map(item=>({...item,previewUrl:previewMap.get(item.path)||null}));state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl&&!state.uploadedFiles.some(uploaded=>uploaded.previewUrl===item.previewUrl))URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];renderPendingUploads();$('filesModal').classList.remove('show');hint();await refreshChats();loadUploadedImagePreviews();toast(result.message||'Files added to this chat')}catch(e){toast(e.message)}}
+function openComposerFilePicker(){if(state.mode!=='code'){toast('File attachments are available only in Code mode. Switch modes to continue.');return}const picker=$('composerFiles');if(!picker)return;picker.click()}
 async function handleComposerFiles(){const picker=$('composerFiles');if(!picker.files||!picker.files.length)return;stageLocalFiles(picker);await attachFiles()}
 async function startDownload(){const model=$('downloadModel').value.trim();if(!model){toast('Enter a model ID, repository or URL');return}try{const d=await api('/api/download',{model,source:$('downloadSource').value});$('downloadCaption').textContent='Queued: '+model;$('localDownloadStatus').textContent='Download queued: '+model;$('downloadModel').value='';toast('Download started in background');pollDownload()}catch(e){toast(e.message)}}
 async function pollDownload(){try{const d=await api('/api/download/status');const job=d.job;if(!job)return;const percent=job.total?job.completed/job.total*100:0;$('downloadFill').style.width=(job.state==='done'?100:percent)+'%';$('downloadCaption').textContent=job.state==='running'?`${job.model} · ${percent.toFixed(1)}% · ${job.human}`:`${job.model} · ${job.state}${job.error?' · '+job.error:''}`;if(job.state==='done'){await refreshBootstrap();$('localDownloadStatus').textContent=job.model+' installed successfully.';toast('Model download complete')}else if(job.state==='error'){$('localDownloadStatus').textContent=job.error||'Download failed';toast(job.error||'Download failed')}else{$('localDownloadStatus').textContent=job.model+' · '+percent.toFixed(1)+'% · '+job.human;setTimeout(pollDownload,1000)}}catch(e){console.error(e)}}
 $('sidebarSettings').onclick=openSettings;$('contextBtn').onclick=openComposerFilePicker;$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=refreshBootstrap;$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:'default',label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout()}});
-$('menuBtn').onclick=()=>document.body.classList.toggle('nav-open');$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',event=>{if(event.target.closest('.chat-item,#newChat,#sidebarSettings'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const theme=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=theme;try{localStorage.setItem('kurt-theme',theme)}catch(error){}};enhanceAllSelects();
+$('menuBtn').onclick=()=>{if(matchMedia('(max-width:700px)').matches){document.body.classList.toggle('nav-open')}else{const collapsed=document.documentElement.classList.toggle('side-collapsed');try{localStorage.setItem('kurt-side-collapsed',collapsed?'1':'0')}catch(error){}}};$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',event=>{if(event.target.closest('.chat-item,#newChat,#sidebarSettings'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const root=document.documentElement;root.classList.add('theme-fade');setTimeout(()=>root.classList.remove('theme-fade'),420);const theme=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=theme;try{localStorage.setItem('kurt-theme',theme)}catch(error){}};enhanceAllSelects();
 document.body.classList.add('compact-scroll');
 $('showApiModelForm').onclick=()=>openApiModelForm(null);$('cancelApiModel').onclick=closeApiModelForm;$('addApiModel').onclick=saveApiModel;
 makeSortable($('failoverMembers'),'.failover-member-row');
@@ -1448,15 +1651,15 @@ resetFailoverForm();
 </script></body></html>'''
 
 
-THINKING_KINDS = ("thinking", "reasoning", "thought")
-MODEL_SUMMARY_KINDS = ("reasoning_summary", "summary", "summary_text", "analysis_summary")
+THINKING_KINDS = ()
+MODEL_SUMMARY_KINDS = ()
 THINK_OPEN_RE = re.compile(r"<think(?:ing)?>", re.I)
 THINK_CLOSE_RE = re.compile(r"</think(?:ing)?>", re.I)
 THINK_TAG_RE = re.compile(r"<(/)?think(?:ing)?>", re.I)
 THINK_RE = re.compile(r"<think(?:ing)?>([\s\S]*?)(?:</think(?:ing)?>|\Z)", re.I)
 ACTION_TAIL_RE = re.compile(r"@@@\s*(?:WRITE|EDIT)\b[\s\S]*\Z")
 UNSUPPORTED_ACTION_BLOCK_RE = re.compile(
-    r"@@@\s*(?:RUN|SEARCH|SYSTEM_PROMPT|READ|EXEC|BASH|SHELL)\b[\s\S]*?(?:@@@\s*END\b|\Z)", re.I
+    r"@@@\s*(?:RUN|SEARCH|SYSTEM_PROMPT|READ|LIST|EXEC|BASH|SHELL)\b[\s\S]*?(?:@@@\s*END\b|\Z)", re.I
 )
 TOOL_CALL_BLOCK_RE = re.compile(
     r"<\|tool_call_start\|>[\s\S]*?(?:<\|tool_call_end\|>|\Z)", re.I
@@ -1472,15 +1675,16 @@ def strip_unsupported_actions(value):
 
 
 def split_thinking(raw):
-    thoughts = []
-    closer = THINK_CLOSE_RE.search(raw)
-    opener = THINK_OPEN_RE.search(raw)
+    """Discard private inline thought blocks and return only the user-facing reply."""
+    reply = str(raw or "")
+    opener = THINK_OPEN_RE.search(reply)
+    closer = THINK_CLOSE_RE.search(reply)
     if closer and (not opener or closer.start() < opener.start()):
-        thoughts.append(raw[:closer.start()])
-        raw = raw[closer.end():]
-    thoughts.extend(THINK_RE.findall(raw))
-    reply = THINK_RE.sub("", raw)
-    return "\n\n".join(part.strip() for part in thoughts if part.strip()), reply.strip()
+        reply = reply[closer.end():]
+    reply = re.sub(r"<think(?:ing)?>[\s\S]*?(?:</think(?:ing)?>|\Z)", "", reply, flags=re.I)
+    reply = THINK_TAG_RE.sub("", reply)
+    reply = re.sub(r"\n{3,}", "\n\n", reply)
+    return "", reply.strip()
 
 
 class _SearchHTMLParser(HTMLParser):
@@ -1879,6 +2083,70 @@ class KurtWebApp:
             raise ValueError("File not found in the workspace.")
         return candidate
 
+    def project_access_root(self):
+        root = self.workspace()
+        home = Path.home().expanduser().resolve()
+        if root == Path(root.anchor) or root == home or root in home.parents:
+            raise ValueError("Code mode requires a specific project folder. Choose a project directory, not the computer's system root or your entire home folder.")
+        return root
+
+    def resolve_project_access_path(self, relative, allow_root=False):
+        rel = self._safe_context_relative(relative, allow_root=allow_root)
+        if rel and self._skip_context_name(Path(rel).name):
+            raise ValueError("This credential or secret file is protected from Code mode access.")
+        root = self.project_access_root()
+        candidate = root / rel if rel else root
+        current = root
+        for part in rel.split('/') if rel else ():
+            current = current / part
+            if current.is_symlink():
+                raise ValueError("Symbolic links cannot be accessed in Code mode.")
+        resolved = candidate.resolve()
+        resolved.relative_to(root)
+        return resolved
+
+    def read_project_file(self, relative):
+        path = self.resolve_project_access_path(relative)
+        if not path.is_file() or path.is_symlink() or self._skip_context_name(path.name):
+            raise ValueError("That file is unavailable for Code mode reading.")
+        if path.stat().st_size > 1_000_000:
+            raise ValueError("That file is larger than the 1 MB per-read limit. Read a smaller file or split it first.")
+        raw = path.read_bytes()
+        if b"\x00" in raw[:4096]:
+            raise ValueError("That file appears to be binary and cannot be read as text.")
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeError as exc:
+            raise ValueError("That file is not valid UTF-8 text and cannot be read as text.") from exc
+        return content
+
+    def list_project_directory(self, relative=""):
+        path = self.resolve_project_access_path(relative, allow_root=True)
+        if not path.is_dir():
+            raise ValueError("That project path is not a directory.")
+        items = []
+        for item in sorted(path.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.lower())):
+            if item.is_symlink() or self._skip_context_name(item.name):
+                continue
+            if item.is_dir() and self._skip_context_dir(item.name):
+                continue
+            if not item.is_dir() and not item.is_file():
+                continue
+            try:
+                size = item.stat().st_size if item.is_file() else 0
+            except OSError:
+                continue
+            items.append({
+                "name": item.name,
+                "path": item.relative_to(self.workspace()).as_posix(),
+                "directory": item.is_dir(),
+                "size": size,
+            })
+            if len(items) >= 500:
+                items.append({"name": "… listing truncated at 500 entries …", "path": "", "directory": False, "size": 0})
+                break
+        return items
+
     def list_models(self):
         models = []
         try:
@@ -1956,7 +2224,7 @@ class KurtWebApp:
         parts = [part for part in raw.split('/') if part not in ('', '.')]
         if not parts or any(part == '..' for part in parts):
             raise ValueError('Context path contains an invalid directory traversal.')
-        if any(part.lower() in {'.git', '.kurt', '.kurt_inputs', '__pycache__', 'node_modules', '.venv', 'venv', '.ssh', '.aws', '.azure', '.gnupg', '.kube'} for part in parts):
+        if any(part.lower() in ({'.git', '.kurt', '.kurt_inputs', '__pycache__', 'node_modules', '.venv', 'venv', '.ssh', '.aws', '.azure', '.gnupg', '.kube', 'credentials', 'secrets', 'dist', 'build'} | {str(item).lower() for item in K.IGNORE_DIRS}) for part in parts):
             raise ValueError('This system or dependency directory is not imported into the chat workspace.')
         return '/'.join(parts)
 
@@ -2075,8 +2343,7 @@ class KurtWebApp:
         folders = []
         for value in selected_folders:
             rel = self._safe_context_relative(value, allow_root=True)
-            folder = source_root if not rel else (source_root / rel).resolve()
-            folder.relative_to(source_root)
+            folder = self.resolve_project_access_path(rel, allow_root=True)
             if not folder.is_dir():
                 raise ValueError('A selected project folder no longer exists: ' + (rel or source_root.name))
             folders.append((rel, folder))
@@ -2098,8 +2365,7 @@ class KurtWebApp:
             rel = self._safe_context_relative(value)
             if any(not parent or rel == parent or rel.startswith(parent + '/') for parent, _ in filtered_folders):
                 continue
-            source = (source_root / rel).resolve()
-            source.relative_to(source_root)
+            source = self.resolve_project_access_path(rel)
             if not source.is_file() or source.is_symlink() or self._skip_context_name(source.name):
                 continue
             size = source.stat().st_size
@@ -2227,24 +2493,31 @@ class KurtWebApp:
         return intro + ('\n' + ''.join(chunks) if chunks else '\n(No readable text files attached yet.)')
 
     def chat_system_prompt(self, chat_id, mode="normal", effort="thinking"):
-        root = self.chat_workspace(chat_id)
-        project = self.workspace()
         custom = str(self.settings.get("system_prompt") or "").strip()
-        base = custom or K.SYSTEM.replace("{cwd}", str(root))
-        if "{cwd}" in base:
-            base = base.replace("{cwd}", str(root))
+        if mode == "code":
+            root = self.chat_workspace(chat_id)
+            base = custom or K.SYSTEM.replace("{cwd}", str(root))
+            if "{cwd}" in base:
+                base = base.replace("{cwd}", str(root))
+        else:
+            base = custom or K.SYSTEM.replace("{cwd}", "(local file access disabled in Normal mode)")
+            if "{cwd}" in base:
+                base = base.replace("{cwd}", "(local file access disabled in Normal mode)")
         if "WEB INTERFACE FILE OUTPUT RULES:" not in base and "KURT WEB WORKSPACE RULES:" not in base:
             base += WEB_INSTRUCTIONS
         if "KURT WEB WORKSPACE RULES:" not in base:
             base += "\n" + WEB_INSTRUCTIONS
         mode_rules = CODE_MODE_INSTRUCTIONS if mode == "code" else NORMAL_MODE_INSTRUCTIONS
         effort_rules = EFFORT_INSTRUCTIONS.get(effort, EFFORT_INSTRUCTIONS["thinking"])
-        return (
-            base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules + "\n" + VISIBLE_THINKING_INSTRUCTIONS
-            + "\nIsolated temporary workspace directory: " + str(root)
-            + "\nOriginal project directory (read-only unless the user explicitly authorizes apply actions): " + str(project)
-            + "\nFiles in isolated workspace:\n" + self.tree(root)
-        )
+        prompt = base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules + "\n" + RESPONSE_FORMAT_INSTRUCTIONS
+        if mode == "code":
+            project = self.workspace()
+            prompt += (
+                "\nIsolated temporary workspace directory: " + str(root)
+                + "\nConfigured Code mode project access root: " + str(project)
+                + "\nFiles attached in the isolated workspace:\n" + self.tree(root)
+            )
+        return prompt
 
     def run_command(self, chat_id, command):
         workspace = self.chat_workspace(chat_id)
@@ -2273,7 +2546,6 @@ class KurtWebApp:
         artifacts = []
         errors = []
         root = self.chat_workspace(chat_id)
-        project_root = self.workspace()
         for kind, arg, body in K.BLOCK_RE.findall(answer):
             if kind not in ("WRITE", "EDIT"):
                 continue
@@ -2286,10 +2558,14 @@ class KurtWebApp:
                 existed_in_temp = path.is_file()
                 content = body
                 if kind == "EDIT":
-                    if not existed_in_temp:
-                        errors.append("{}: EDIT target is not present in the temporary workspace; read or import it first.".format(filename))
-                        continue
-                    old, _crlf = K.read_file(path)
+                    if existed_in_temp:
+                        old, _crlf = K.read_file(path)
+                    else:
+                        project_path = self.resolve_project_access_path(filename)
+                        if not project_path.is_file():
+                            errors.append("{}: EDIT target is not available in the configured Code mode project directory; read or import it first.".format(filename))
+                            continue
+                        old = self.read_project_file(filename)
                     pairs = K.PAIR_RE.findall(body)
                     if not pairs:
                         errors.append("{}: EDIT block contains no valid SEARCH/REPLACE pair.".format(filename))
@@ -2312,14 +2588,12 @@ class KurtWebApp:
                 if not validation.get("ok", False):
                     errors.append("{}: {}".format(filename, validation.get("message") or "syntax validation failed"))
                     continue
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(content, encoding="utf-8")
-                project_path = (project_root / filename).resolve()
-                project_path.relative_to(project_root)
+                project_path = self.resolve_project_access_path(filename)
                 artifacts.append({
                     "path": filename.replace("\\", "/"), "content": content,
                     "validation": validation, "exists": project_path.exists(),
                     "temp_exists": existed_in_temp, "source": kind,
+                    "approval_required": True,
                 })
             except Exception as exc:
                 errors.append("{}: {}".format(filename or "(unnamed file)", exc))
@@ -2592,17 +2866,23 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/context/status":
                 args = parse_qs(parsed.query)
                 chat_id = str(args.get("chat_id", [""])[0])
-                if not self.app.get_chat(chat_id):
+                chat = self.app.get_chat(chat_id)
+                if not chat:
                     self._json({"error": "Conversation not found."}, 404)
                     return
+                if chat.get("mode") != "code":
+                    raise ValueError("Attachments are available only in Code mode. Switch this conversation to Code mode.")
                 items = self.app.context_file_list(chat_id)
                 self._json({"files": len(items), "items": items})
             elif parsed.path == "/api/context/preview":
                 args = parse_qs(parsed.query)
                 chat_id = str(args.get("chat_id", [""])[0])
-                if not self.app.get_chat(chat_id):
+                chat = self.app.get_chat(chat_id)
+                if not chat:
                     self._json({"error": "Conversation not found."}, 404)
                     return
+                if chat.get("mode") != "code":
+                    raise ValueError("Attachment previews are available only in Code mode.")
                 relative = self.app._safe_context_relative(args.get("path", [""])[0])
                 image_path = self.app.resolve_chat_path(self.app.chat_workspace(chat_id), relative)
                 if not image_path.is_file() or image_path.is_symlink():
@@ -2623,9 +2903,12 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/workspace/export":
                 args = parse_qs(parsed.query)
                 chat_id = str(args.get("chat_id", [""])[0])
-                if not self.app.get_chat(chat_id):
+                chat = self.app.get_chat(chat_id)
+                if not chat:
                     self._json({"error": "Conversation not found."}, 404)
                     return
+                if chat.get("mode") != "code":
+                    raise ValueError("Normal mode cannot inspect or export local attachments. Switch this conversation to Code mode.")
                 payload = self.app.workspace_archive(chat_id)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/zip")
@@ -2636,24 +2919,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(payload)
             elif parsed.path == "/api/files":
                 args = parse_qs(parsed.query)
-                relative = args.get("path", [""])[0]
-                root = self.app.workspace()
-                folder = (root / relative).resolve()
-                folder.relative_to(root)
+                chat = self.app.get_chat(str(args.get("chat_id", [""])[0]))
+                if not chat or chat.get("mode") != "code":
+                    raise ValueError("Normal mode cannot browse local directories. Switch this conversation to Code mode.")
+                relative = self.app._safe_context_relative(args.get("path", [""])[0], allow_root=True)
+                folder = self.app.resolve_project_access_path(relative, allow_root=True)
                 if not folder.is_dir():
-                    raise ValueError("Folder not found in the workspace.")
-                items = []
-                for item in sorted(folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
-                    if item.name.startswith(".") or item.name in K.IGNORE_DIRS:
-                        continue
-                    resolved = item.resolve()
-                    try:
-                        rel = str(resolved.relative_to(root)).replace("\\", "/")
-                    except ValueError:
-                        continue
-                    items.append({"name": item.name, "path": rel, "directory": item.is_dir(), "size": K.fmt_bytes(item.stat().st_size) if item.is_file() else ""})
-                parent = None if folder == root else str(folder.parent.relative_to(root)).replace("\\", "/")
-                self._json({"path": str(folder.relative_to(root)).replace("\\", "/") if folder != root else "", "parent": parent, "items": items})
+                    raise ValueError("Folder not found in the configured Code mode project directory.")
+                items = self.app.list_project_directory(relative)
+                parent_path = "" if not relative else str(Path(relative).parent).replace("\\", "/")
+                parent = None if not relative else ("" if parent_path == "." else parent_path)
+                self._json({"path": relative, "parent": parent, "items": [{"name": item["name"], "path": item["path"], "directory": item["directory"], "size": K.fmt_bytes(item["size"]) if item["size"] else ""} for item in items]})
             else:
                 self._json({"error": "Not found."}, 404)
         except Exception as exc:
@@ -2677,6 +2953,11 @@ class Handler(BaseHTTPRequestHandler):
                     if not message_id or len(message_id) > 100 or not content or len(content) > 100000:
                         raise ValueError("Enter a valid user message before sending.")
                 chat = self.app.create_chat(initial_message=initial if isinstance(initial, dict) else None)
+                if data.get("mode") in ("normal", "code"):
+                    chat["mode"] = data["mode"]
+                if data.get("effort") in EFFORT_INSTRUCTIONS:
+                    chat["effort"] = data["effort"]
+                self.app.save_chats()
                 self._json({"id": chat["id"]})
             elif parsed.path == "/api/chats/bulk-delete":
                 ids = data.get("ids") if isinstance(data.get("ids"), list) else []
@@ -2731,6 +3012,16 @@ class Handler(BaseHTTPRequestHandler):
                             chat["updated"] = time.time()
                             self.app.save_chats()
                     self._json({"ok": True, "message_id": message_id})
+                elif "mode" in data:
+                    value = str(data.get("mode") or "")
+                    if value not in ("normal", "code"):
+                        raise ValueError("Choose Normal or Code mode.")
+                    chat["mode"] = value
+                    if data.get("effort") in EFFORT_INSTRUCTIONS:
+                        chat["effort"] = data["effort"]
+                    chat["updated"] = time.time()
+                    self.app.save_chats()
+                    self._json({"ok": True, "mode": value})
                 elif "pin" in data:
                     chat["pinned"] = bool(data.get("pin"))
                     chat["updated"] = time.time()
@@ -2746,16 +3037,32 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._json({"error": "Unsupported operation."}, 400)
             elif parsed.path == "/api/context/import":
+                chat = self.app.get_chat(str(data.get("chat_id") or ""))
+                if not chat or chat.get("mode") != "code":
+                    raise ValueError("Normal mode cannot import or inspect local files. Switch this conversation to Code mode.")
                 result = self.app.import_context(data.get("chat_id"), data.get("selected_files"), data.get("selected_folders"), data.get("uploads"))
                 self._json(result)
             elif parsed.path == "/api/file/read":
-                path = self.app.resolve_workspace_path(data.get("path"), allow_missing=False)
-                if path.stat().st_size > 1_000_000:
-                    raise ValueError("File is too large to attach (maximum 1 MB).")
-                content = path.read_text(encoding="utf-8", errors="replace")
-                self._json({"path": str(path.relative_to(self.app.workspace())), "content": content})
+                chat = self.app.get_chat(str(data.get("chat_id") or ""))
+                if not chat or chat.get("mode") != "code":
+                    raise ValueError("Normal mode cannot read local files. Switch this conversation to Code mode.")
+                relative = str(data.get("path") or "")
+                content = self.app.read_project_file(relative)
+                self._json({"path": relative.replace("\\", "/"), "content": content})
             elif parsed.path == "/api/file/write":
                 self._write_file(data)
+            elif parsed.path == "/api/command/run":
+                chat_id = str(data.get("chat_id") or "")
+                chat = self.app.get_chat(chat_id)
+                command = str(data.get("command") or "").strip()
+                if not chat or chat.get("mode") != "code":
+                    raise ValueError("Switch this conversation to Code mode before running a command.")
+                if data.get("approved") is not True:
+                    raise ValueError("The command has not been approved.")
+                if not command or len(command) > 2000:
+                    raise ValueError("Enter a valid command (maximum 2,000 characters).")
+                result = self.app.run_command(chat_id, command)
+                self._json(result)
             elif parsed.path == "/api/download":
                 job = self.app.start_download(data.get("model"), data.get("source"))
                 self._json({"job": job}, 202)
@@ -2850,8 +3157,15 @@ class Handler(BaseHTTPRequestHandler):
             root = Path(str(data.get("project_root") or "")).expanduser().resolve()
             if not root.exists() or not root.is_dir():
                 raise ValueError("Choose an existing directory for the workspace.")
+            home = Path.home().expanduser().resolve()
+            if root == Path(root.anchor) or root == home or root in home.parents:
+                raise ValueError("Choose a specific project folder, not your home folder or the computer's system root.")
             self.app.settings["project_root"] = str(root)
         if "system_prompt" in data:
+            if data.get("prompt_proposal"):
+                chat = self.app.get_chat(str(data.get("chat_id") or ""))
+                if not chat or chat.get("mode") != "code" or data.get("approved") is not True:
+                    raise ValueError("Applying a system prompt proposal requires Code mode and your explicit confirmation.")
             prompt = str(data.get("system_prompt") or "")
             if len(prompt) > 40000:
                 raise ValueError("System prompt must be 40,000 characters or fewer.")
@@ -3056,18 +3370,30 @@ class Handler(BaseHTTPRequestHandler):
                                  "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False))}})
 
     def _write_file(self, data):
-        if not self.app.settings.get('allow_project_writes') or data.get('authorized') is not True:
-            raise ValueError('Project writes are disabled. Enable them in Settings and confirm the individual Apply to project action.')
+        chat_id = str(data.get("chat_id") or "")
+        chat = self.app.get_chat(chat_id)
+        if not chat or chat.get("mode") != "code":
+            raise ValueError("Switch this conversation to Code mode before applying a file.")
+        if not self.app.settings.get('allow_project_writes') or data.get('authorized') is not True or data.get('approved') is not True:
+            raise ValueError('Project writes are disabled or not approved. Enable project writes in Settings and confirm the individual Apply to project action.')
         relative = str(data.get("path") or "")
         content = str(data.get("content") or "")
-        path = self.app.resolve_workspace_path(relative)
+        path = self.app.resolve_project_access_path(relative)
+        if self.app._skip_context_name(path.name):
+            raise ValueError("That file type or name is protected from Code mode writes.")
+        if path.exists() and path.is_symlink():
+            raise ValueError("Symbolic-link targets cannot be modified in Code mode.")
         if path.exists() and not data.get("overwrite"):
             raise ValueError("The file already exists. Confirm overwrite in the browser first.")
         if not validate_content(relative, content).get("ok", False):
             raise ValueError("The file did not pass Kurt's validation checks.")
         path.parent.mkdir(parents=True, exist_ok=True)
         # Re-resolve after creating parent directories to prevent symlink escapes.
-        path = self.app.resolve_workspace_path(relative)
+        path = self.app.resolve_project_access_path(relative)
+        if self.app._skip_context_name(path.name):
+            raise ValueError("That file type or name is protected from Code mode writes.")
+        if path.exists() and not data.get("overwrite"):
+            raise ValueError("The file appeared after the review card was created. Review the overwrite confirmation again before applying it.")
         fd, tmp_name = tempfile.mkstemp(prefix=".kurt-", suffix=".tmp", dir=str(path.parent))
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
@@ -3124,7 +3450,7 @@ class Handler(BaseHTTPRequestHandler):
         self.app.store_chat_input(chat_id, user_text, message_number)
         messages = [
             {"role": "system", "content": self.app.chat_system_prompt(chat_id, mode=mode, effort=effort)},
-            {"role": "system", "content": self.app.context_contents(chat_id)},
+            {"role": "system", "content": self.app.context_contents(chat_id) if mode == "code" else "Normal mode has no access to files, attachments, directories, or local computer contents."},
         ]
         messages.extend(
             {"role": item["role"], "content": item["content"]}
@@ -3221,6 +3547,10 @@ class Handler(BaseHTTPRequestHandler):
                 del worklog[:-60]
             emit({"type": "phase", "text": item["text"], "ok": ok, "detail": item["detail"], "status": status})
 
+        def code_mode_allowed():
+            current_chat = self.app.get_chat(chat_id)
+            return mode == "code" and bool(current_chat) and current_chat.get("mode") == "code"
+
         def generate_response():
             nonlocal generation_seconds, generation_calls, usage_calls, thinking_seconds
             nonlocal provider_output_tokens, output_chars, active_candidate_index, model
@@ -3254,11 +3584,13 @@ class Handler(BaseHTTPRequestHandler):
                         if not chunk:
                             continue
                         kind_name = str(kind or "").strip().lower().replace("-", "_")
-                        if kind_name in MODEL_SUMMARY_KINDS or kind_name in THINKING_KINDS:
+                        if kind_name in MODEL_SUMMARY_KINDS:
                             if isinstance(chunk, str):
                                 piece = chunk if summary_chunks else lead + chunk
                                 summary_chunks.append(piece)
                                 emit({"type": "reasoning", "text": piece})
+                            continue
+                        if kind_name in THINKING_KINDS:
                             continue
                         if kind_name in ("usage", "stats", "metadata") and isinstance(chunk, dict):
                             usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else chunk
@@ -3280,12 +3612,6 @@ class Handler(BaseHTTPRequestHandler):
                     if not raw_response:
                         raise RuntimeError("The model returned no response text.")
                     active_candidate_index = candidate_index
-                    if not summary_chunks:
-                        inline_thought, _reply = split_thinking(raw_response)
-                        if inline_thought:
-                            piece = lead + inline_thought
-                            summary_chunks.append(piece)
-                            emit({"type": "reasoning", "text": piece})
                     if summary_chunks:
                         thinking_seconds += max(0.0, (thinking_ended_at or time.monotonic()) - started_at)
                         model_summary_chunks.extend(summary_chunks)
@@ -3357,6 +3683,10 @@ class Handler(BaseHTTPRequestHandler):
             validation_errors = []
             max_rounds = 4
             for round_index in range(max_rounds):
+                if round_index == 0 and mode == "normal" and SYSTEM_PROMPT_REQUEST_RE.fullmatch(user_text):
+                    final_raw = "Normal mode cannot inspect local application configuration. Switch this conversation to Code mode to view Kurt's editable system prompt."
+                    log_step("Blocked a local configuration read in Normal mode.", False, status="Action blocked…", detail="No local configuration or file was read.")
+                    break
                 if round_index == 0 and SYSTEM_PROMPT_REQUEST_RE.fullmatch(user_text):
                     active_prompt = self.app.chat_system_prompt(chat_id, mode=mode, effort=effort)
                     for key_entry in K.PROVIDER_KEYS:
@@ -3386,11 +3716,20 @@ class Handler(BaseHTTPRequestHandler):
                     final_raw = "Kurt did not return any response text. Check the selected model and provider configuration."
                     break
 
+                if not code_mode_allowed() and re.search(r"@@@\s*(?:RUN|READ|LIST|WRITE|EDIT|SYSTEM_PROMPT)\b", raw, re.I):
+                    final_raw = "Normal mode cannot access, read, create, edit, or run anything on your computer. Switch this conversation to Code mode and send the request again."
+                    log_step("Blocked a local computer action in Normal mode.", False, status="Action blocked…", detail="No file, directory, attachment, project, or terminal action was performed. Switch to Code mode to continue.")
+                    break
+
                 tool_actions = []
                 for match in RUN_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "RUN", match.group(1).strip() or match.group(2).strip()))
                 for match in SEARCH_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "SEARCH", match.group(1).strip() or match.group(2).strip()))
+                for match in READ_ACTION_RE.finditer(raw):
+                    tool_actions.append((match.start(), "READ", match.group(1).strip() or match.group(2).strip()))
+                for match in LIST_ACTION_RE.finditer(raw):
+                    tool_actions.append((match.start(), "LIST", match.group(1).strip() or match.group(2).strip()))
                 tool_actions.sort(key=lambda item: item[0])
 
                 if tool_actions:
@@ -3400,19 +3739,49 @@ class Handler(BaseHTTPRequestHandler):
                         results = []
                         for _position, action, argument in tool_actions:
                             if action == "RUN":
-                                if mode != "code":
-                                    result = {"ok": False, "returncode": -1, "output": "Terminal commands are disabled in Normal mode. Switch to Code mode to run permitted developer checks."}
+                                if not code_mode_allowed():
+                                    results.append("[Command blocked] Local commands are unavailable because this conversation is not currently in Code mode. Tell the user to switch to Code mode.")
                                 elif not argument:
-                                    result = {"ok": False, "returncode": -1, "output": "RUN action did not include a command."}
+                                    results.append("[Command rejected] RUN action did not include a command.")
                                 else:
-                                    log_step("Running command: " + argument, status="Running checks…", detail="The command is being run in this chat’s isolated workspace using its dedicated Python virtual environment. It is not run against the original project directory.")
-                                    result = self.app.run_command(chat_id, argument)
-                                label = "PASSED" if result.get("ok") else "FAILED"
-                                command_output = str(result.get("output", ""))
-                                log_step("{}: {}".format(label, argument or "(empty command)"), result.get("ok"), status="Reviewing results…", detail="Exit code: {}\n\n{}".format(result.get("returncode"), command_output[:9000] or "(The command produced no output.)"))
-                                results.append("[Terminal result]\nCommand: {}\nExit code: {}\n{}".format(
-                                    argument, result.get("returncode"), command_output
-                                ))
+                                    pending_number = 1 + sum(1 for item in artifacts_by_path.values() if item.get("kind") == "command")
+                                    command_path = "Command approval {}".format(pending_number)
+                                    artifacts_by_path[command_path] = {
+                                        "kind": "command", "path": command_path, "content": argument,
+                                        "approval_required": True,
+                                        "validation": {"ok": True, "checked": True, "message": "Awaiting your approval · not executed"},
+                                    }
+                                    log_step("Prepared a command for approval: " + argument, None, status="Awaiting approval…", detail="The command has not run. Review the command card and explicitly approve it before execution. Approved commands are restricted to the isolated chat workspace.")
+                                    results.append("[Command approval pending]\nThis command has been presented to the user for approval and has NOT been executed: {}\nDo not claim it ran or repeat the action. Continue by explaining what approval is needed.".format(argument))
+                            elif action == "READ":
+                                if not code_mode_allowed():
+                                    results.append("[Read blocked] Local file access is unavailable because this conversation is not currently in Code mode. Tell the user to switch to Code mode.")
+                                elif not argument:
+                                    results.append("[Read rejected] READ action needs a project-relative file path.")
+                                else:
+                                    try:
+                                        content = self.app.read_project_file(argument)
+                                        details = "[Project file read]\nPath: {}\n\n{}".format(argument, content)
+                                        log_step("Read project file: " + argument, True, status="Reading project…", detail="Read-only access under the configured Code mode project root. No file was changed.")
+                                        results.append(details)
+                                    except Exception as exc:
+                                        log_step("Project file read failed: " + argument, False, status="Could not read file…", detail=str(exc))
+                                        results.append("[Project file read failed]\nPath: {}\nReason: {}".format(argument, exc))
+                            elif action == "LIST":
+                                if not code_mode_allowed():
+                                    results.append("[Directory listing blocked] Local file access is unavailable because this conversation is not currently in Code mode. Tell the user to switch to Code mode.")
+                                else:
+                                    display_path = argument or "."
+                                    try:
+                                        items = self.app.list_project_directory(argument)
+                                        lines = ["[Project directory listing]\nPath: " + display_path]
+                                        lines.extend(("[DIR] " if item["directory"] else "[FILE] ") + item["path"] + (" ({})".format(item["size"]) if item["size"] else "") for item in items)
+                                        details = "\n".join(lines)
+                                        log_step("Listed project directory: " + display_path, True, status="Reading project…", detail="Read-only directory listing under the configured Code mode project root.")
+                                        results.append(details)
+                                    except Exception as exc:
+                                        log_step("Project directory listing failed: " + display_path, False, status="Could not list directory…", detail=str(exc))
+                                        results.append("[Project directory listing failed]\nPath: {}\nReason: {}".format(display_path, exc))
                             else:
                                 log_step("Searching the web: " + argument, status="Searching the web…", detail="Search query: " + argument)
                                 result = self.app.search_web(argument)
@@ -3478,8 +3847,6 @@ class Handler(BaseHTTPRequestHandler):
             artifacts = list(artifacts_by_path.values())
             stats = response_stats()
             _inline_thinking, reply = split_thinking(final_raw)
-            if not reply.strip() and _inline_thinking:
-                reply = _inline_thinking
             reply = strip_unsupported_actions(reply)
             reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
             if validation_errors:
