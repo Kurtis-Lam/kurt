@@ -93,6 +93,10 @@ credentials, or other secrets. Summarize decisions, assumptions, alternatives, a
 in user-facing rationale; do not reveal private chain-of-thought or hidden scratchpad tokens.
 """
 
+VISIBLE_THINKING_INSTRUCTIONS = """
+VISIBLE THINKING (required for every reply): First think the request through in plain language inside <think> and </think> tags: what is being asked, the key facts and constraints, your plan, and a quick check of the plan. Then write the final answer after the closing </think> tag. The interface shows the <think> block to the user in a collapsible "Thought for ..." panel, so keep it clear and honest. Never put the final answer, code, or @@@ file blocks inside the <think> block, and always include the closing </think> tag. Even for simple requests, write at least two sentences of thought. This instruction takes priority over any earlier rule about not showing reasoning.
+"""
+
 EFFORT_INSTRUCTIONS = {
     "thinking": "THINKING EFFORT: request medium reasoning where the provider supports effort controls. Provide a concise, user-facing reasoning summary covering key observations, approach, assumptions, and checks. Use a provider-supplied reasoning-summary channel when available. Never reveal hidden chain-of-thought or private scratchpad content.",
     "expert": "EXPERT EFFORT: request high/deep reasoning where the provider supports effort controls and perform careful verification. Provide a detailed, user-facing reasoning summary covering key observations, approach, assumptions, alternatives, verification evidence, and remaining uncertainty. Use a provider-supplied reasoning-summary channel when available. Never reveal hidden chain-of-thought or private scratchpad content.",
@@ -2068,7 +2072,7 @@ class KurtWebApp:
         mode_rules = CODE_MODE_INSTRUCTIONS if mode == "code" else NORMAL_MODE_INSTRUCTIONS
         effort_rules = EFFORT_INSTRUCTIONS.get(effort, EFFORT_INSTRUCTIONS["thinking"])
         return (
-            base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules
+            base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules + "\n" + VISIBLE_THINKING_INSTRUCTIONS
             + "\nIsolated temporary workspace directory: " + str(root)
             + "\nOriginal project directory (read-only unless the user explicitly authorizes apply actions): " + str(project)
             + "\nFiles in isolated workspace:\n" + self.tree(root)
@@ -3288,6 +3292,8 @@ class Handler(BaseHTTPRequestHandler):
             artifacts = list(artifacts_by_path.values())
             stats = response_stats()
             _inline_thinking, reply = split_thinking(final_raw)
+            if not reply.strip() and _inline_thinking:
+                reply = _inline_thinking
             reply = strip_unsupported_actions(reply)
             reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
             if validation_errors:
