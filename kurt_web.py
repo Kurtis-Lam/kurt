@@ -81,24 +81,29 @@ in user-facing rationale; do not reveal private chain-of-thought or hidden scrat
 
 RESPONSE_FORMAT_INSTRUCTIONS = r"""
 RESPONSE FORMAT:
-- Begin every reply with exactly one concise, user-facing summary block, then the answer:
+- Begin every substantive reply with one detailed, user-facing rationale block, then the answer:
   @@@ SUMMARY
-  Briefly state the key observation and approach in 1–3 sentences. This is a public explanation
-  of the approach, not private chain-of-thought. Do not include hidden analysis, internal
-  scratchpad content, speculative internal monologue, or token-by-token reasoning.
+  Explain the request interpretation, relevant constraints and assumptions, the approach,
+  important decisions or trade-offs, checks actually performed, and remaining limitations.
+  Use clearly labelled lines or bullets; give enough detail that the user can understand and
+  audit the response without having to infer why a choice was made. Include all relevant
+  decision factors and verification evidence, but do not pad the explanation with irrelevant
+  steps. Simple greetings and trivial answers may use a shorter block.
+  This is a public explanation, not private chain-of-thought. Never include hidden analysis,
+  internal scratchpad content, speculative internal monologue, or token-by-token reasoning.
   @@@ END
-- Keep the actual answer after the summary block. Never output <think> tags.
+- Keep the actual answer after the rationale block. Never output <think> tags.
 - Whenever you provide source code, commands, configuration, or a multi-line code example,
   put it in a fenced Markdown code block with an appropriate language label (for example,
   ```python). Do not put multi-line code in ordinary paragraphs or inline code. The interface
   renders fenced code as a copyable code card with a Copy code button.
-- Keep normal prose, the summary, and code clearly separated. Never claim an action happened
+- Keep normal prose, the rationale, and code clearly separated. Never claim an action happened
   unless the application reports that it actually happened.
 """
 
 EFFORT_INSTRUCTIONS = {
-    "thinking": "THINKING EFFORT: request medium reasoning where the provider supports effort controls. Provide a concise, user-facing reasoning summary covering key observations, approach, assumptions, and checks. Use a provider-supplied reasoning-summary channel when available. Never reveal hidden chain-of-thought or private scratchpad content.",
-    "expert": "EXPERT EFFORT: request high/deep reasoning where the provider supports effort controls and perform careful verification. Provide a detailed, user-facing reasoning summary covering key observations, approach, assumptions, alternatives, verification evidence, and remaining uncertainty. Use a provider-supplied reasoning-summary channel when available. Never reveal hidden chain-of-thought or private scratchpad content.",
+    "thinking": "THINKING EFFORT: request medium reasoning where the provider supports effort controls. In the public SUMMARY block, give a substantive explanation of the request, relevant constraints, approach, key decisions, actual checks, and limitations. Do not reduce a substantive task to a generic one-line placeholder. Never reveal hidden chain-of-thought or private scratchpad content.",
+    "expert": "EXPERT EFFORT: request high/deep reasoning where the provider supports effort controls and perform careful verification. In the public SUMMARY block, give a thorough, auditable explanation of the request, assumptions, constraints, alternatives and trade-offs, chosen approach, actual actions, verification evidence, and remaining uncertainty. Never reveal hidden chain-of-thought or private scratchpad content.",
 }
 
 NORMAL_MODE_INSTRUCTIONS = r"""
@@ -579,7 +584,7 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 .work-log:not(.open) .work-log-body{display:block}
 .reasoning-panel{padding:0 0 3px}
 .reasoning-panel .think-body{max-height:0}
-.reasoning-panel.open .think-body{max-height:320px}
+.reasoning-panel.open .think-body{max-height:min(72vh,1100px);overflow:auto;overscroll-behavior:contain}
 .artifact-body{display:block;max-height:0;overflow:hidden;opacity:0;transition:max-height .28s ease,opacity .2s ease}
 .artifact.open .artifact-body{max-height:3000px;opacity:1}
 .artifact .artifact-body .codebox pre{max-height:48vh;overflow:auto}
@@ -1140,7 +1145,7 @@ function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/6
 function bindCopy(root){root.querySelectorAll('[data-copy-code]').forEach(b=>b.onclick=()=>{const code=b.closest('.codebox').querySelector('code');navigator.clipboard.writeText(code?code.textContent:'').then(()=>toast('Code copied'))})}
 function formatThought(seconds){const s=Number(seconds);if(!Number.isFinite(s)||s<=0)return '';if(s<60)return Math.max(1,Math.round(s))+'s';const m=Math.floor(s/60),r=Math.round(s%60);return r?m+'m '+r+'s':m+'m'}
 function setReasoningOpen(panel,open){panel.classList.toggle('open',open);if(panel._head){panel._head.classList.toggle('open',open);panel._head.setAttribute('aria-expanded',String(open))}}
-function reasoningBlock(){const d=document.createElement('div');d.className='think reasoning-panel';d.hidden=true;d.innerHTML='<div class="think-body"></div>';const head=document.createElement('button');head.type='button';head.className='think-head';head.hidden=true;head.setAttribute('aria-expanded','false');head.innerHTML='<svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Thinking…</span>';d._head=head;d._label=head.querySelector('.think-label');head.onclick=()=>{const open=!d.classList.contains('open');setReasoningOpen(d,open);d.dataset.userCollapsed=open?'':'1';d.dataset.userOpen=open?'1':''};return d}
+function reasoningBlock(){const d=document.createElement('div');d.className='think reasoning-panel';d.hidden=true;d.innerHTML='<div class="think-body"></div>';const head=document.createElement('button');head.type='button';head.className='think-head';head.hidden=true;head.setAttribute('aria-expanded','false');head.innerHTML='<svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Approach &amp; checks</span>';d._head=head;d._label=head.querySelector('.think-label');head.onclick=()=>{const open=!d.classList.contains('open');setReasoningOpen(d,open);d.dataset.userCollapsed=open?'':'1';d.dataset.userOpen=open?'1':''};return d}
 function thinkBlock(){const d=document.createElement('div');d.className='think work-log';d.hidden=true;d.innerHTML='<button class="work-log-head" type="button" aria-expanded="false"><svg class="ic chev"><use href="#i-chev"/></svg><span class="think-label">Workspace activity</span></button><div class="work-log-body"></div>';d.querySelector('.work-log-head').onclick=()=>{const open=d.classList.toggle('open');d.querySelector('.work-log-head').setAttribute('aria-expanded',String(open))};return d}
 function setReasoning(node,text,live=false,seconds=0){
  const panel=node.querySelector('.reasoning-panel');if(!panel)return;
@@ -1150,12 +1155,12 @@ function setReasoning(node,text,live=false,seconds=0){
  panel.hidden=false;if(head)head.hidden=false;
  const body=panel.querySelector('.think-body');
  body.textContent=value;panel.classList.toggle('live',!!live);if(head)head.classList.toggle('live',!!live);
- if(live){label.textContent='Thinking…';if(!panel.dataset.userCollapsed)setReasoningOpen(panel,true);body.scrollTop=body.scrollHeight}
- else{const t=formatThought(seconds);label.textContent=t?'Thought for '+t:'Thinking summary';if(panel.dataset.userOpen!=='1')setReasoningOpen(panel,false)}
+ if(live){label.textContent='Preparing rationale…';if(panel.dataset.userCollapsed!=='1')setReasoningOpen(panel,true);body.scrollTop=body.scrollHeight}
+ else{const t=formatThought(seconds);label.textContent='Approach & checks'+(t?' · '+t:'');if(panel.dataset.userCollapsed!=='1')setReasoningOpen(panel,true)}
 }
-function setThink(node,entries){const panel=node.querySelector('.work-log');if(!panel)return;const relevant=/^(Running command:|Prepared a command for approval:|Read project file:|Listed project directory:|PASSED:|FAILED:|Searching the web:|Web search failed:|Syntax validation passed:|Basic file validation passed:|Prepared a Kurt system-prompt proposal|Retrieved the exact active Kurt system prompt|Blocked a local computer action|Validation warning:)/i;const items=(Array.isArray(entries)?entries:[]).filter(item=>relevant.test(String(typeof item==='string'?item:item?.text||'')));if(!items.length){panel.hidden=true;return}panel.hidden=false;const body=panel.querySelector('.work-log-body');const open=panel.dataset.initialized==='1'&&panel.classList.contains('open');panel.dataset.initialized='1';panel.classList.toggle('open',open);panel.querySelector('.work-log-head').setAttribute('aria-expanded',String(open));body.replaceChildren();items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const label=String(data.text||'Activity');const detail=String(data.detail||'');const row=document.createElement(detail&&detail!==label?'details':'div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');if(row.tagName==='DETAILS'){const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;body.appendChild(row)});panel.querySelector('.think-label').textContent='Workspace activity · '+items.length+' event(s)'}
-function pushWorkStep(node,text,ok,detail){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok&&last.detail===detail)return;entries.push({text,ok,detail:detail||''});if(entries.length>60)entries.shift();setThink(node,entries)}
-function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const panel=node.querySelector('.reasoning-panel');if(panel){panel.classList.remove('live');if(panel._head)panel._head.classList.remove('live');const label=panel._label;if(label&&label.textContent.indexOf('Thinking')===0)label.textContent='Response summary'}}
+function setThink(node,entries){const panel=node.querySelector('.work-log');if(!panel)return;const items=Array.isArray(entries)?entries.slice(-120):[];if(!items.length){panel.hidden=true;return}panel.hidden=false;const body=panel.querySelector('.work-log-body');const open=panel.dataset.initialized!=='1'||panel.classList.contains('open');panel.dataset.initialized='1';panel.classList.toggle('open',open);panel.querySelector('.work-log-head').setAttribute('aria-expanded',String(open));body.replaceChildren();items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const label=String(data.text||'Activity');const detail=String(data.detail||'');const row=document.createElement(detail&&detail!==label?'details':'div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');if(row.tagName==='DETAILS'){row.open=true;const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;body.appendChild(row)});panel.querySelector('.think-label').textContent='Full activity log · '+items.length+' event(s)'}
+function pushWorkStep(node,text,ok,detail){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok&&last.detail===detail)return;entries.push({text,ok,detail:detail||''});if(entries.length>120)entries.shift();setThink(node,entries)}
+function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const panel=node.querySelector('.reasoning-panel');if(panel){panel.classList.remove('live');if(panel._head)panel._head.classList.remove('live');const label=panel._label;if(label&&label.textContent.indexOf('Preparing')===0)label.textContent='Approach & checks'}}
 let follow=true;
 function scrollEnd(force){if(!force&&!follow)return;const m=$('messages');m.scrollTop=m.scrollHeight}
 function setEmpty(on){$('main').classList.toggle('empty',on);if(on)$('toBottom').classList.remove('show')}
@@ -1589,7 +1594,7 @@ async function send(){
  follow=true;renderMessage('user',text);const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
  $('chatMeta').textContent=state.effort+' · '+state.mode+' · Generating…';
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
- const contentEl=node.querySelector('.content');let raw='',reasoning='',pending=false,thinkStart=0;setReasoning(node,'Reviewing the request and checking the available context…',true);
+ const contentEl=node.querySelector('.content');let raw='',reasoning='',pending=false,thinkStart=0;setReasoning(node,'Preparing a public explanation of the approach and checks…',true);
  const controller=new AbortController();state.abort=controller;
  const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseSummary(raw,true);if(parsed.summary)setReasoning(node,parsed.summary,true);const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe){bindCopy(node);typesetMath(contentEl)}node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
@@ -1603,7 +1608,7 @@ async function send(){
     else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();reasoning+=event.text||'';setReasoning(node,reasoning,true)}
     else if(event.type==='reasoning_reset'){reasoning=event.text||'';setReasoning(node,reasoning,!!reasoning)}
     else if(event.type==='token'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}
-    else if(event.type==='done'){pending=false;raw=event.content||'';const parsed=splitResponseSummary(raw,false);reasoning=event.reasoning||reasoning||parsed.summary;const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setReasoning(node,reasoning||'I reviewed the request and prepared the response.',false,event.thinking_seconds||(thinkStart?(performance.now()-thinkStart)/1000:0));setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='done'){pending=false;raw=event.content||'';const parsed=splitResponseSummary(raw,false);reasoning=event.reasoning||reasoning||parsed.summary;const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setReasoning(node,reasoning||'No separate rationale was returned. The full activity log below contains the actions recorded by the application.',false,event.thinking_seconds||(thinkStart?(performance.now()-thinkStart)/1000:0));setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
     else if(event.type==='error')throw new Error(event.message||'The model request failed');
    }
   }
@@ -1701,7 +1706,7 @@ def strip_unsupported_actions(value):
 
 
 def split_thinking(raw):
-    """Extract a public approach summary and discard any private inline thought tags."""
+    """Extract the public rationale block and discard private inline thought tags."""
     reply = str(raw or "")
     summaries = [match.group(1).strip() for match in SUMMARY_ACTION_RE.finditer(reply) if match.group(1).strip()]
     reply = SUMMARY_ACTION_RE.sub("", reply)
@@ -1713,6 +1718,52 @@ def split_thinking(raw):
     reply = THINK_TAG_RE.sub("", reply)
     reply = re.sub(r"\n{3,}", "\n\n", reply)
     return "\n\n".join(summaries).strip(), reply.strip()
+
+
+def build_public_activity_rationale(user_text, mode, worklog, artifacts, validation_errors):
+    """Build an honest, user-facing activity record when the model omits its rationale block."""
+    request = re.sub(r"\s+", " ", str(user_text or "")).strip()
+    if len(request) > 700:
+        request = request[:697].rstrip() + "..."
+    sections = ["Request understood\n" + (request or "No request text was available.")]
+    if mode == "code":
+        sections.append(
+            "Mode and permissions\nCode mode permits read-only access beneath the configured project root. "
+            "File proposals and terminal commands remain subject to separate, explicit approval; "
+            "the command runner is restricted to the isolated chat workspace."
+        )
+    else:
+        sections.append(
+            "Mode and permissions\nNormal mode has no local file, attachment, directory, or terminal access. "
+            "A request involving local computer resources must be retried in Code mode."
+        )
+    entries = []
+    for item in (worklog if isinstance(worklog, list) else [])[-20:]:
+        data = item if isinstance(item, dict) else {"text": str(item)}
+        label = str(data.get("text") or "Activity").strip()
+        detail = re.sub(r"\s+", " ", str(data.get("detail") or "")).strip()
+        if detail and detail != label:
+            if len(detail) > 500:
+                detail = detail[:497].rstrip() + "..."
+            entries.append("- " + label + " — " + detail)
+        elif label:
+            entries.append("- " + label)
+    sections.append(
+        "Observed actions and checks\n" + ("\n".join(entries) if entries else "No local-file, directory, or terminal operation was performed for this reply.")
+    )
+    artifact_lines = []
+    for artifact in (artifacts if isinstance(artifacts, list) else []):
+        path = str(artifact.get("path") or "Generated output")
+        validation = artifact.get("validation") if isinstance(artifact, dict) else {}
+        message = str((validation or {}).get("message") or "Prepared for review")
+        artifact_lines.append("- " + path + " — " + message)
+    if artifact_lines:
+        sections.append("Prepared outputs\n" + "\n".join(artifact_lines))
+    if validation_errors:
+        sections.append("Remaining validation issues\n" + "\n".join("- " + str(error) for error in validation_errors[:12]))
+    else:
+        sections.append("Verification scope\nOnly the checks and actions listed above are confirmed. A preview or syntax check does not mean a file was saved or a command was executed.")
+    return "\n\n".join(sections)
 
 
 class _SearchHTMLParser(HTMLParser):
@@ -3571,8 +3622,8 @@ class Handler(BaseHTTPRequestHandler):
         def log_step(text, ok=None, status="Working…", detail=None):
             item = {"text": str(text), "ok": ok, "detail": str(detail or "")[:12000]}
             worklog.append(item)
-            if len(worklog) > 60:
-                del worklog[:-60]
+            if len(worklog) > 120:
+                del worklog[:-120]
             emit({"type": "phase", "text": item["text"], "ok": ok, "detail": item["detail"], "status": status})
 
         def code_mode_allowed():
@@ -3900,10 +3951,10 @@ class Handler(BaseHTTPRequestHandler):
             stats = response_stats()
             response_summary, reply = split_thinking(final_raw)
             response_summary = response_summary or "".join(model_summary_chunks).strip()
-            if not response_summary and final_raw and mode == "normal" and NORMAL_MODE_LOCAL_ACCESS_RE.search(user_text):
-                response_summary = "I checked the current mode's permissions and identified that local access requires Code mode."
             if not response_summary and final_raw:
-                response_summary = "I reviewed the request and prepared the response."
+                response_summary = build_public_activity_rationale(
+                    user_text, mode, worklog, artifacts, validation_errors
+                )
             reply = strip_unsupported_actions(reply)
             reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
             if validation_errors:
