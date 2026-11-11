@@ -111,5 +111,3 @@ Commands run under the macOS Seatbelt sandbox. They can read what your OS accoun
 
 - Do not use the same conversation in the terminal and the browser at the same moment. Both write `chats.json`, and the last writer wins.
 - Empty conversations (no message sent) are discarded when you leave the terminal interface.
-- The old parallel "helper agents" setting was removed. Agent mode subagents replace it.
-- The `/compact` command was removed because conversation history is now shared and persistent. For local models Kurt leaves out the oldest messages when the context window fills up, and tells you when it does.
