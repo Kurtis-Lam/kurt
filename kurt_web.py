@@ -85,9 +85,21 @@ RESPONSE FORMAT:
 - Put the direct, useful answer in the normal response body. Do not prepend a generic summary,
   recap, request restatement, or process report. Write naturally and conversationally rather
   than narrating every step.
-- Do not emit @@@ SUMMARY blocks or <think> tags. Never reveal private chain-of-thought,
-  hidden scratchpad tokens, or internal monologue. The Thinking panel is separate from the
-  answer and may contain only concise, safe high-level rationale or observable progress.
+- For substantive analysis, decisions, code changes, or verification, provide a distinct,
+  user-facing rationale before the answer using this exact block format:
+  @@@ RATIONALE
+  - Approach: explain the chosen approach and why it fits the request.
+  - Key considerations: identify the constraints, evidence, and trade-offs that materially
+    affected the decision, and explain their effect.
+  - Checks and uncertainty: state what was actually checked and what remains unverified.
+  @@@ END
+  Use only the points that are relevant; add enough detail to make the reasoning understandable.
+  Do not repeat the question or summarize the final answer. For simple requests, omit the block
+  instead of adding filler. This block appears in the separate Thinking panel, not the answer.
+- The RATIONALE block is an explanation written for the user, not a transcript of private
+  reasoning. Never reveal private chain-of-thought, hidden scratchpad tokens, raw analysis,
+  or internal monologue. Never emit <think> tags. The Thinking panel may also show observable
+  progress from actions the application actually performed.
 - Explain important assumptions, decisions, trade-offs, and verification briefly when they
   materially help the user. Clearly distinguish checks actually performed from suggestions
   or work that has not been done.
@@ -101,8 +113,8 @@ RESPONSE FORMAT:
 """
 
 EFFORT_INSTRUCTIONS = {
-    "thinking": "THINKING EFFORT: use medium reasoning where the provider supports effort controls. Think carefully before answering, but keep private chain-of-thought private. Give the user a direct answer and explain only the key decisions or assumptions that matter. Do not add a summary preamble or process report.",
-    "expert": "EXPERT EFFORT: use high/deep reasoning where the provider supports effort controls and verify important details carefully. Keep private chain-of-thought private. Give the user a direct answer, with concise explanations of consequential decisions, evidence, and uncertainty. Do not add a summary preamble or process report.",
+    "thinking": "THINKING EFFORT: use medium reasoning where the provider supports effort controls. For substantive requests, provide a concise, user-facing rationale explaining the approach, decisive considerations, assumptions, and checks. Use a provider-supplied reasoning-summary channel when available; otherwise put the rationale in the RATIONALE block. Mention uncertainty honestly. Do not turn it into a recap or generic summary, and never expose private chain-of-thought or internal monologue.",
+    "expert": "EXPERT EFFORT: use high/deep reasoning where the provider supports effort controls and verify important details carefully. For substantive requests, provide a detailed, user-facing rationale explaining consequential decisions, trade-offs, evidence, alternatives, and checks. Use a provider-supplied reasoning-summary channel when available; otherwise put the rationale in the RATIONALE block. Be precise about uncertainty; do not produce a generic summary or expose private chain-of-thought or internal monologue.",
 }
 
 NORMAL_MODE_INSTRUCTIONS = r"""
@@ -135,7 +147,8 @@ RUN_ACTION_RE = re.compile(r"@@@\s*RUN\s*([^\n]*)\n(.*?)\n?@@@\s*END", re.I | re
 SEARCH_ACTION_RE = re.compile(r"@@@\s*SEARCH\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
 READ_ACTION_RE = re.compile(r"@@@\s*READ\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
 LIST_ACTION_RE = re.compile(r"@@@\s*LIST\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
-SUMMARY_ACTION_RE = re.compile(r"@{2,3}\s*SUMMARY\s*\n(.*?)\n?@{2,3}\s*END", re.I | re.S)
+RATIONALE_ACTION_RE = re.compile(r"@{2,3}\s*RATIONALE\s*\n(.*?)\n?@{2,3}\s*END", re.I | re.S)
+SUMMARY_ACTION_RE = re.compile(r"@{2,3}\s*SUMMARY\s*\n(.*?)\n?@{2,3}\s*END", re.I | re.S)  # Legacy compatibility
 SYSTEM_PROMPT_ACTION_RE = re.compile(r"@@@\s*SYSTEM_PROMPT\s*\n(.*?)\n?@@@\s*END", re.I | re.S)
 WEB_ACTION_RE = re.compile(
     r"@@@\s*(?:RUN|SEARCH|READ|LIST|SYSTEM_PROMPT)\b[^\n]*\n[\s\S]*?@@@\s*END", re.I
@@ -862,6 +875,20 @@ body.nav-open .scrim{opacity:1;visibility:visible;pointer-events:auto}
 /* Let the complete public rationale expand and scroll instead of truncating at 420px. */
 .reasoning-panel.open .think-body{max-height:min(72vh,1100px);overflow:auto;overscroll-behavior:contain;white-space:pre-wrap;overflow-wrap:anywhere}
 .reasoning-panel.live .think-body{scroll-behavior:smooth}
+
+/* Settings performance: no full-screen blur, no hidden-panel layout, paused ambient animation. */
+.modal-backdrop,.dialog-backdrop{-webkit-backdrop-filter:none;backdrop-filter:none;background:rgba(4,10,7,.72)}
+body.modal-open .topbar{-webkit-backdrop-filter:none;backdrop-filter:none;background:var(--bg)}
+body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .message,body.modal-open .message.live .mark,body.modal-open .message.live .assistant-heading .mark,body.modal-open .chip,body.modal-open .chat-row.enter,body.modal-open .think.live .think-label,body.modal-open .think-head.live .think-label{animation:none!important}
+.modal.settings-modal{contain:layout style}
+.settings-panel,.settings-panel.active,.settings-panel:not(.active){max-height:none;overflow:visible;transform:none;transition:none;opacity:1}
+.settings-panel{display:none}
+.settings-panel.active{display:block;animation:panelIn .16s ease-out}
+@keyframes panelIn{from{opacity:0}to{opacity:1}}
+.settings-panel-area{contain:content}
+.settings-nav-btn,.local-model-row,.key-row,.pool-card,.group-member{transition:none}
+.settings-nav-btn{transition:background-color .12s ease,color .12s ease}
+@media(prefers-reduced-motion:reduce){.settings-panel.active{animation:none}}
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -998,8 +1025,9 @@ function closeCustomSelects(except){document.querySelectorAll('.custom-select.op
 function syncSelect(select){const wrap=select?._customWrap;if(!wrap)return;const option=select.options[select.selectedIndex];wrap.querySelector('.custom-select-trigger').textContent=option?.textContent||'Choose…';wrap.querySelectorAll('.custom-select-option').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.value===select.value)))}
 function enhanceSelect(select){
  if(!select||select.id==='topModel'||select._customWrap)return;const wrap=document.createElement('div');wrap.className='custom-select '+Array.from(select.classList).join(' ');const trigger=document.createElement('button');trigger.type='button';trigger.className='custom-select-trigger';trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');trigger.setAttribute('aria-label',select.getAttribute('aria-label')||select.title||'Choose an option');const menu=document.createElement('div');menu.className='custom-select-menu';menu.setAttribute('role','listbox');select.parentNode.insertBefore(wrap,select);wrap.append(select,trigger,menu);select.classList.add('custom-select-native');select._customWrap=wrap;
- const build=()=>{menu.replaceChildren();let group='';Array.from(select.options).forEach(option=>{const groupName=option.parentElement?.tagName==='OPTGROUP'?option.parentElement.label:'';if(groupName&&groupName!==group){group=groupName;const heading=document.createElement('div');heading.className='custom-select-group';heading.textContent=groupName;menu.appendChild(heading)}const button=document.createElement('button');button.type='button';button.className='custom-select-option';button.textContent=option.textContent;button.dataset.value=option.value;button.disabled=option.disabled;button.setAttribute('role','option');button.setAttribute('aria-selected',String(option.value===select.value));button.onclick=()=>{select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));wrap.classList.remove('open');trigger.setAttribute('aria-expanded','false');trigger.focus()};menu.appendChild(button)});syncSelect(select)};
- trigger.onclick=()=>{const open=!wrap.classList.contains('open');closeCustomSelects(wrap);if(open){const r=trigger.getBoundingClientRect();const pane=wrap.closest('.settings-panel-area');const limitBottom=Math.min(window.innerHeight,pane?pane.getBoundingClientRect().bottom:window.innerHeight);const limitTop=Math.max(0,pane?pane.getBoundingClientRect().top:0);const below=limitBottom-r.bottom-14,above=r.top-limitTop-14;const up=!!wrap.closest('.compose-bottom')||(below<180&&above>below);wrap.classList.toggle('drop-up',up);menu.style.setProperty('--menu-max',Math.max(120,Math.min(320,up?above:below))+'px')}wrap.classList.toggle('open',open);trigger.setAttribute('aria-expanded',String(open))};trigger.onkeydown=e=>{if(['ArrowDown','Enter',' '].includes(e.key)){e.preventDefault();wrap.classList.add('open');trigger.setAttribute('aria-expanded','true');menu.querySelector('.custom-select-option:not(:disabled)')?.focus()}else if(e.key==='Escape'){wrap.classList.remove('open');trigger.setAttribute('aria-expanded','false')}};select.addEventListener('change',build);const observer=new MutationObserver(build);observer.observe(select,{childList:true,subtree:true,attributes:true,characterData:true});select._customObserver=observer;build();
+ let dirty=true;const build=()=>{dirty=false;menu.replaceChildren();let group='';Array.from(select.options).forEach(option=>{const groupName=option.parentElement?.tagName==='OPTGROUP'?option.parentElement.label:'';if(groupName&&groupName!==group){group=groupName;const heading=document.createElement('div');heading.className='custom-select-group';heading.textContent=groupName;menu.appendChild(heading)}const button=document.createElement('button');button.type='button';button.className='custom-select-option';button.textContent=option.textContent;button.dataset.value=option.value;button.disabled=option.disabled;button.setAttribute('role','option');button.setAttribute('aria-selected',String(option.value===select.value));button.onclick=()=>{select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));wrap.classList.remove('open');trigger.setAttribute('aria-expanded','false');trigger.focus()};menu.appendChild(button)});syncSelect(select)};
+ const ensure=()=>{if(dirty)build()};const refresh=()=>{dirty=true;syncSelect(select);if(wrap.classList.contains('open'))build()};
+ trigger.onclick=()=>{const open=!wrap.classList.contains('open');closeCustomSelects(wrap);if(open){ensure();const r=trigger.getBoundingClientRect();const pane=wrap.closest('.settings-panel-area');const limitBottom=Math.min(window.innerHeight,pane?pane.getBoundingClientRect().bottom:window.innerHeight);const limitTop=Math.max(0,pane?pane.getBoundingClientRect().top:0);const below=limitBottom-r.bottom-14,above=r.top-limitTop-14;const up=!!wrap.closest('.compose-bottom')||(below<180&&above>below);wrap.classList.toggle('drop-up',up);menu.style.setProperty('--menu-max',Math.max(120,Math.min(320,up?above:below))+'px')}wrap.classList.toggle('open',open);trigger.setAttribute('aria-expanded',String(open))};trigger.onkeydown=e=>{if(['ArrowDown','Enter',' '].includes(e.key)){e.preventDefault();wrap.classList.add('open');trigger.setAttribute('aria-expanded','true');ensure();menu.querySelector('.custom-select-option:not(:disabled)')?.focus()}else if(e.key==='Escape'){wrap.classList.remove('open');trigger.setAttribute('aria-expanded','false')}};select.addEventListener('change',()=>syncSelect(select));const observer=new MutationObserver(refresh);observer.observe(select,{childList:true,subtree:true,attributes:true,characterData:true});select._customObserver=observer;syncSelect(select);
 }
 function enhanceAllSelects(root=document){root.querySelectorAll('select').forEach(enhanceSelect)}
 function setSelectOptions(select,items,placeholder=''){if(!select)return;const current=select.value;select.innerHTML='';if(placeholder){const option=document.createElement('option');option.value='';option.textContent=placeholder;option.disabled=true;select.appendChild(option)}items.forEach(item=>{const option=document.createElement('option');option.value=item.value;option.textContent=item.label;select.appendChild(option)});if(items.some(item=>item.value===current))select.value=current;else if(items.length)select.value=items[0].value;syncSelect(select)}
@@ -1058,7 +1086,7 @@ function renderRoutePicker(){
  trigger.onmouseenter=()=>{if($('routeFlyout').hidden)openRouteFlyout(trigger)};
 }
 function positionRouteFlyout(){
- const menu=$('routeFlyout'),trigger=$('routeCurrent');if(!menu||menu.hidden||!trigger)return;
+ const menu=$('routeFlyout');if(!menu||menu.hidden)return;const trigger=$('routeCurrent');if(!trigger)return;
  const width=Math.max(0,Math.min(430,window.innerWidth-20));
  const height=Math.max(160,Math.min(320,window.innerHeight-24));
  menu.style.width=width+'px';menu.style.height=height+'px';menu.style.maxHeight=height+'px';
@@ -1141,7 +1169,7 @@ function hasMathMarkup(value){return /\\begin\{(?:equation\*?|align\*?|gather\*?
 window.MathJax={tex:{inlineMath:[],displayMath:[['\\[','\\]']],processEscapes:true,packages:{'[+]':['ams']}},options:{skipHtmlTags:['script','noscript','style','textarea','pre','code']},startup:{typeset:false}};
 function typesetMath(root){if(!root||!window.MathJax?.typesetPromise)return;try{window.MathJax.typesetClear?.([root]);window.MathJax.typesetPromise([root]).catch(error=>console.warn('Math rendering failed:',error))}catch(error){console.warn('Math rendering failed:',error)}}
 const mathJaxScript=document.createElement('script');mathJaxScript.src='https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js';mathJaxScript.async=true;mathJaxScript.onload=()=>document.querySelectorAll('.content').forEach(typesetMath);mathJaxScript.onerror=()=>console.warn('MathJax could not be loaded; equations will remain centered as TeX text.');document.head.appendChild(mathJaxScript);
-function splitResponseSummary(src,allowOpen=false){src=String(src||'');const marker=/@{2,3}\s*SUMMARY\s*\r?\n/i.exec(src);if(!marker)return{summary:'',answer:src};const start=marker.index,bodyStart=start+marker[0].length,tail=src.slice(bodyStart),end=/\r?\n?@{2,3}\s*END\b/i.exec(tail);if(!end)return allowOpen?{summary:tail.trim(),answer:src.slice(0,start).trim()}:{summary:'',answer:src};const summary=tail.slice(0,end.index).trim(),after=tail.slice(end.index+end[0].length);return{summary,answer:(src.slice(0,start)+'\n'+after).replace(/\n{3,}/g,'\n\n').trim()}}
+function splitResponseRationale(src,allowOpen=false){src=String(src||'');const marker=/@{2,3}\s*(?:RATIONALE|SUMMARY)\s*\r?\n/i.exec(src);if(!marker)return{rationale:'',answer:src};const start=marker.index,bodyStart=start+marker[0].length,tail=src.slice(bodyStart),end=/\r?\n?@{2,3}\s*END\b/i.exec(tail);if(!end)return allowOpen?{rationale:tail.trim(),answer:src.slice(0,start).trim()}:{rationale:'',answer:src};const rationale=tail.slice(0,end.index).trim(),after=tail.slice(end.index+end[0].length);return{rationale,answer:(src.slice(0,start)+'\n'+after).replace(/\n{3,}/g,'\n\n').trim()}}
 function renderMarkdown(src){src=String(src||'');return src.split(/((?:```|~~~)[^\n]*\n[\s\S]*?(?:```|~~~)|(?:```|~~~)[^\n]*\n[\s\S]*$|(?:```|~~~)[^\n]*$)/).map((seg,i)=>{if(i%2===0)return mdBlocks(seg);const fence=seg.slice(0,3),nl=seg.indexOf('\n');const lang=(nl<0?seg.slice(3):seg.slice(3,nl)).trim().split(/\s+/)[0]||'';let code=nl<0?'':seg.slice(nl+1);if(nl>=0&&seg.endsWith(fence))code=code.slice(0,-fence.length).replace(/\n$/,'');return '<div class="codebox"><div class="codehead"><span>'+esc(lang||'code')+'</span><button class="copy-mini" data-copy-code>Copy code</button></div><pre><code>'+esc(code.replace(/\n$/,''))+'</code></pre></div>'}).join('')}
 function splitThink(raw,streaming){return{think:'',answer:stripUnsupportedActions(raw),open:false}}
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
@@ -1154,16 +1182,23 @@ function setReasoning(node,text,live=false,seconds=0){
  const panel=node.querySelector('.reasoning-panel');if(!panel)return;
  const head=panel._head,label=panel._label;
  const value=String(text||'').trim();
- if(!value){panel.hidden=true;if(head)head.hidden=true;return}
- panel.hidden=false;if(head)head.hidden=false;
  const body=panel.querySelector('.think-body');
+ if(!value){panel.hidden=true;if(head)head.hidden=true;body.textContent='';panel.classList.remove('live');if(head)head.classList.remove('live');return}
+ panel.hidden=false;if(head)head.hidden=false;
  body.textContent=value;panel.classList.toggle('live',!!live);if(head)head.classList.toggle('live',!!live);
- if(live){label.textContent='Thinking…';if(panel.dataset.userCollapsed!=='1')setReasoningOpen(panel,true);body.scrollTop=body.scrollHeight}
- else{const t=formatThought(seconds);label.textContent='Thinking'+(t?' · '+t:'');if(panel.dataset.userCollapsed!=='1')setReasoningOpen(panel,true)}
+ if(live){
+  label.textContent='Thinking…';
+  if(panel.dataset.userCollapsed!=='1')setReasoningOpen(panel,true);
+  body.scrollTop=body.scrollHeight;
+ }else{
+  const t=formatThought(seconds);
+  label.textContent=t?'Thought for '+t:'Thought process';
+  if(panel.dataset.userOpen!=='1')setReasoningOpen(panel,false);
+ }
 }
 function setThink(node,entries){const panel=node.querySelector('.work-log');if(!panel)return;const items=Array.isArray(entries)?entries.slice(-120):[];if(!items.length){panel.hidden=true;return}panel.hidden=false;const body=panel.querySelector('.work-log-body');const open=panel.dataset.initialized!=='1'||panel.classList.contains('open');panel.dataset.initialized='1';panel.classList.toggle('open',open);panel.querySelector('.work-log-head').setAttribute('aria-expanded',String(open));body.replaceChildren();items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const label=String(data.text||'Activity');const detail=String(data.detail||'');const row=document.createElement(detail&&detail!==label?'details':'div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');if(row.tagName==='DETAILS'){row.open=true;const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;body.appendChild(row)});panel.querySelector('.think-label').textContent='Full activity log · '+items.length+' event(s)'}
 function pushWorkStep(node,text,ok,detail){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok&&last.detail===detail)return;entries.push({text,ok,detail:detail||''});if(entries.length>120)entries.shift();setThink(node,entries)}
-function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const panel=node.querySelector('.reasoning-panel');if(panel){panel.classList.remove('live');if(panel._head)panel._head.classList.remove('live');const label=panel._label;if(label&&label.textContent==='Thinking…')label.textContent='Thinking'}}
+function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const panel=node.querySelector('.reasoning-panel');if(panel){panel.classList.remove('live');if(panel._head)panel._head.classList.remove('live');const label=panel._label;if(label&&label.textContent.indexOf('Thinking')===0)label.textContent='Thought process'}}
 let follow=true;
 function scrollEnd(force){if(!force&&!follow)return;const m=$('messages');m.scrollTop=m.scrollHeight}
 function setEmpty(on){$('main').classList.toggle('empty',on);if(on)$('toBottom').classList.remove('show')}
@@ -1358,7 +1393,8 @@ function renderChats(){
 async function renameChat(id,current){const result=await inAppDialog({title:'Rename conversation',message:'Choose a clear title for this chat.',confirmText:'Rename',fields:[{name:'title',label:'Chat title',value:current,required:true,maxLength:100}]});if(!result)return;const title=result.title.trim();if(!title){toast('Chat title cannot be empty');return}try{await api('/api/chats/'+encodeURIComponent(id),{rename:title});await refreshChats();if(id===state.chatId)setTitle(title,$('chatMeta').textContent)}catch(error){toast(error.message)}}
 async function togglePinChat(id,pinned){try{await api('/api/chats/'+encodeURIComponent(id),{pin:!!pinned});await refreshChats()}catch(error){toast(error.message)}}
 async function deleteChat(id){const chat=state.chats.find(item=>item.id===id);if(!await confirmInApp('Delete conversation',`Delete “${chat?.title||'this chat'}” and its temporary workspace? This cannot be undone.`,'Delete chat',true))return;if(state.chatId===id)cancelRun();try{await api('/api/chats/'+encodeURIComponent(id),{delete:true});if(state.chatId===id){state.chatId=null;resetComposer();showWelcome();setTitle('New chat','')}await refreshChats();toast('Chat deleted')}catch(error){toast(error.message)}}
-async function refreshBootstrap(){const data=await api('/api/bootstrap');state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.settings=data.settings||{};state.projectRoot=data.project_root||'';$('projectRoot').value=state.projectRoot;$('systemPrompt').value=state.settings.system_prompt||'';$('allowProjectWrites').checked=!!state.settings.allow_project_writes;fillProviders();fillModels();renderKeys();renderApiKeyChecks(currentApiKeySelection());renderApiModels();renderApiGroups();refreshFailoverMemberOptions();enhanceAllSelects()}
+let bootstrapSig='';
+async function refreshBootstrap(force){const data=await api('/api/bootstrap');const sig=JSON.stringify(data);if(force===true){['projectRoot','systemPrompt','allowProjectWrites'].forEach(id=>{delete $(id).dataset.dirty})}else if(sig===bootstrapSig)return false;bootstrapSig=sig;state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.settings=data.settings||{};state.projectRoot=data.project_root||'';if(!$('projectRoot').dataset.dirty)$('projectRoot').value=state.projectRoot;if(!$('systemPrompt').dataset.dirty)$('systemPrompt').value=state.settings.system_prompt||'';if(!$('allowProjectWrites').dataset.dirty)$('allowProjectWrites').checked=!!state.settings.allow_project_writes;fillProviders();fillModels();renderKeys();renderApiKeyChecks(currentApiKeySelection());renderApiModels();renderApiGroups();refreshFailoverMemberOptions();enhanceAllSelects();return true}
 function fillProviders(){const providers=state.providers.map(item=>({value:item.id,label:item.label}));setSelectOptions($('keyProvider'),providers,'Choose provider')}
 function renderLocalModels(){
  const root=$('localModelList');if(!root)return;root.replaceChildren();
@@ -1601,11 +1637,9 @@ async function send(){
  follow=true;renderMessage('user',text);const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
  $('chatMeta').textContent=state.effort+' · '+state.mode+' · Generating…';
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
- const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',pending=false,thinkStart=0;
- const initialThinking='Working through the request…';
- reasoning=initialThinking;setReasoning(node,reasoning,true);
+ const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',blockRationale='',pending=false,thinkStart=0;const showReasoning=live=>{reasoning=[modelRationale,blockRationale].filter(Boolean).join('\n\n');setReasoning(node,reasoning,live)};
  const controller=new AbortController();state.abort=controller;
- const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseSummary(safeLiveDraft(raw),true);if(parsed.summary){modelRationale=parsed.summary;reasoning=modelRationale;setReasoning(node,reasoning,true)}const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
+ const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseRationale(safeLiveDraft(raw),true);if(parsed.rationale){if(!thinkStart)thinkStart=performance.now();blockRationale=parsed.rationale;showReasoning(true)}const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
  try{
   const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,route,effort:state.effort,mode:state.mode,message_id:messageId}),signal:controller.signal});
@@ -1614,11 +1648,11 @@ async function send(){
   while(true){const packet=await reader.read();if(packet.done)break;if(run!==state.run)return;buffer+=decoder.decode(packet.value,{stream:true});let separator;
    while((separator=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,separator);buffer=buffer.slice(separator+2);const line=frame.split('\n').find(value=>value.startsWith('data:'));if(!line)continue;const event=JSON.parse(line.slice(5).trim());
     if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail);node.querySelector('.assistant-status').textContent=event.status||'Working…'}
-    else if(event.type==='draft_reset'){raw='';modelRationale='';reasoning=initialThinking;contentEl.replaceChildren();node.dataset.raw='';setReasoning(node,reasoning,true);queue()}
+    else if(event.type==='draft_reset'){raw='';blockRationale='';contentEl.replaceChildren();node.dataset.raw='';showReasoning(!!modelRationale);queue()}
     else if(event.type==='draft'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}
-    else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();modelRationale+=event.text||'';reasoning=modelRationale||initialThinking;setReasoning(node,reasoning,true)}
-    else if(event.type==='reasoning_reset'){modelRationale=event.text||'';reasoning=modelRationale||initialThinking;setReasoning(node,reasoning,!!modelRationale||!!reasoning)}
-    else if(event.type==='done'){pending=false;raw=event.content||'';const parsed=splitResponseSummary(raw,false);reasoning=event.reasoning||modelRationale||parsed.summary||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setReasoning(node,reasoning,false,event.thinking_seconds||(thinkStart?(performance.now()-thinkStart)/1000:0));setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();modelRationale+=event.text||'';node.querySelector('.assistant-status').textContent='Thinking…';showReasoning(true)}
+    else if(event.type==='reasoning_reset'){modelRationale=event.text||'';showReasoning(!!modelRationale)}
+    else if(event.type==='done'){pending=false;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setReasoning(node,reasoning,false,event.thinking_seconds||(thinkStart?(performance.now()-thinkStart)/1000:0));setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
     else if(event.type==='error')throw new Error(event.message||'The model request failed');
    }
   }
@@ -1644,8 +1678,8 @@ $('prompt').addEventListener('paste',event=>{
 $('newChat').onclick=newChat;$('selectAllChats').onchange=()=>selectAllChats($('selectAllChats').checked);$('deleteSelectedChats').onclick=deleteSelectedChats;$('cancelChatSelect').onclick=()=>setChatSelectionMode(false);$('effortSelect').onchange=()=>{state.effort=$('effortSelect').value};$('operationMode').onchange=async()=>{state.mode=$('operationMode').value;hint();if(state.busy)cancelRun();if(state.mode!=='code'){state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.uploadedFiles=[];state.contextCount=0;renderPendingUploads();$('filesModal').classList.remove('show')}if(state.chatId){try{await api('/api/chats/'+encodeURIComponent(state.chatId),{mode:state.mode,effort:state.effort});if(state.mode==='code'){const context=await api('/api/context/status?chat_id='+encodeURIComponent(state.chatId));state.contextCount=context.files||0;state.uploadedFiles=context.items||[];renderPendingUploads();loadUploadedImagePreviews()}}catch(error){toast(error.message)}}hint()};
 function activateSettingsTab(tab){document.querySelectorAll('[data-settings-tab]').forEach(button=>button.classList.toggle('active',button.dataset.settingsTab===tab));document.querySelectorAll('[data-settings-panel]').forEach(panel=>panel.classList.toggle('active',panel.dataset.settingsPanel===tab));const area=document.querySelector('.settings-panel-area');if(area)area.scrollTop=0}
 document.querySelectorAll('[data-settings-tab]').forEach(b=>b.onclick=()=>activateSettingsTab(b.dataset.settingsTab));
-async function openSettings(){await refreshBootstrap();activateSettingsTab('general');$('settingsModal').classList.add('show')}
-async function saveSettings(){const payload={project_root:$('projectRoot').value,system_prompt:$('systemPrompt').value,allow_project_writes:$('allowProjectWrites').checked,default_route:$('settingsModel').value};const data=await api('/api/settings',payload);state.settings=data.settings||{};state.settings.allow_project_writes=$('allowProjectWrites').checked;state.projectRoot=data.project_root;await refreshBootstrap();toast('Settings saved')}
+async function openSettings(){activateSettingsTab('general');$('settingsModal').classList.add('show');try{await refreshBootstrap()}catch(error){toast('Settings could not be refreshed: '+error.message)}}
+async function saveSettings(){const payload={project_root:$('projectRoot').value,system_prompt:$('systemPrompt').value,allow_project_writes:$('allowProjectWrites').checked,default_route:$('settingsModel').value};const data=await api('/api/settings',payload);state.settings=data.settings||{};state.settings.allow_project_writes=$('allowProjectWrites').checked;state.projectRoot=data.project_root;await refreshBootstrap(true);toast('Settings saved')}
 async function browseFiles(){if(state.mode!=='code'){toast('Switch this conversation to Code mode to browse project files.');return}await ensureChat();const path=$('fileFolder').value.trim();const d=await api('/api/files?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()}}el.appendChild(row)})}
 function formatFileSize(value){const bytes=Math.max(0,Number(value)||0);if(bytes<1024)return bytes+' B';if(bytes<1024*1024)return (bytes/1024).toFixed(1)+' KB';return (bytes/1024/1024).toFixed(1)+' MB'}
 function fileIconNode(item){if(item.previewUrl&&String(item.type||item.mime||'').startsWith('image/')){const image=document.createElement('img');image.className='attachment-thumb';image.src=item.previewUrl;image.alt=item.name||'Uploaded image';return image}const icon=document.createElement('span');icon.className='attachment-file-icon';icon.innerHTML='<svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>';return icon}
@@ -1677,8 +1711,9 @@ function openComposerFilePicker(){if(state.mode!=='code'){toast('File attachment
 async function handleComposerFiles(){const picker=$('composerFiles');if(!picker.files||!picker.files.length)return;stageLocalFiles(picker);await attachFiles()}
 async function startDownload(){const model=$('downloadModel').value.trim();if(!model){toast('Enter a model ID, repository or URL');return}try{const d=await api('/api/download',{model,source:$('downloadSource').value});$('downloadCaption').textContent='Queued: '+model;$('localDownloadStatus').textContent='Download queued: '+model;$('downloadModel').value='';toast('Download started in background');pollDownload()}catch(e){toast(e.message)}}
 async function pollDownload(){try{const d=await api('/api/download/status');const job=d.job;if(!job)return;const percent=job.total?job.completed/job.total*100:0;$('downloadFill').style.width=(job.state==='done'?100:percent)+'%';$('downloadCaption').textContent=job.state==='running'?`${job.model} · ${percent.toFixed(1)}% · ${job.human}`:`${job.model} · ${job.state}${job.error?' · '+job.error:''}`;if(job.state==='done'){await refreshBootstrap();$('localDownloadStatus').textContent=job.model+' installed successfully.';toast('Model download complete')}else if(job.state==='error'){$('localDownloadStatus').textContent=job.error||'Download failed';toast(job.error||'Download failed')}else{$('localDownloadStatus').textContent=job.model+' · '+percent.toFixed(1)+'% · '+job.human;setTimeout(pollDownload,1000)}}catch(e){console.error(e)}}
-$('sidebarSettings').onclick=openSettings;$('contextBtn').onclick=openComposerFilePicker;$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=refreshBootstrap;$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:'default',label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout()}});
+$('sidebarSettings').onclick=openSettings;$('contextBtn').onclick=openComposerFilePicker;$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=()=>refreshBootstrap(true).then(()=>toast('Settings reloaded')).catch(error=>toast(error.message));['projectRoot','systemPrompt'].forEach(id=>$(id).addEventListener('input',()=>{$(id).dataset.dirty='1'}));$('allowProjectWrites').addEventListener('change',()=>{$('allowProjectWrites').dataset.dirty='1'});$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:'default',label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout()}});
 $('menuBtn').onclick=()=>{if(matchMedia('(max-width:700px)').matches){document.body.classList.toggle('nav-open')}else{const collapsed=document.documentElement.classList.toggle('side-collapsed');try{localStorage.setItem('kurt-side-collapsed',collapsed?'1':'0')}catch(error){}}};$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',event=>{if(event.target.closest('.chat-item,#newChat,#sidebarSettings'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const root=document.documentElement;root.classList.add('theme-fade');setTimeout(()=>root.classList.remove('theme-fade'),420);const theme=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=theme;try{localStorage.setItem('kurt-theme',theme)}catch(error){}};enhanceAllSelects();
+(()=>{const sync=()=>document.body.classList.toggle('modal-open',!!document.querySelector('.modal-backdrop.show,.dialog-backdrop.show'));const observer=new MutationObserver(sync);document.querySelectorAll('.modal-backdrop,.dialog-backdrop').forEach(node=>observer.observe(node,{attributes:true,attributeFilter:['class']}));sync()})();
 document.body.classList.add('compact-scroll');
 $('showApiModelForm').onclick=()=>openApiModelForm(null);$('cancelApiModel').onclick=closeApiModelForm;$('addApiModel').onclick=saveApiModel;
 makeSortable($('failoverMembers'),'.failover-member-row');
@@ -1692,8 +1727,10 @@ resetFailoverForm();
 </script></body></html>'''
 
 
-THINKING_KINDS = ()
-MODEL_SUMMARY_KINDS = ()
+# Raw thinking/reasoning channels can contain private chain-of-thought. They are
+# deliberately ignored; only provider-designated summary channels are displayed.
+THINKING_KINDS = ("thinking", "reasoning", "thought")
+MODEL_RATIONALE_KINDS = ("reasoning_summary", "summary", "summary_text", "analysis_summary")
 THINK_OPEN_RE = re.compile(r"<think(?:ing)?>", re.I)
 THINK_CLOSE_RE = re.compile(r"</think(?:ing)?>", re.I)
 THINK_TAG_RE = re.compile(r"<(/)?think(?:ing)?>", re.I)
@@ -1716,9 +1753,12 @@ def strip_unsupported_actions(value):
 
 
 def split_thinking(raw):
-    """Extract the public rationale block and discard private inline thought tags."""
+    """Extract user-facing rationale while discarding private inline thought tags."""
     reply = str(raw or "")
-    summaries = [match.group(1).strip() for match in SUMMARY_ACTION_RE.finditer(reply) if match.group(1).strip()]
+    rationale = [match.group(1).strip() for match in RATIONALE_ACTION_RE.finditer(reply) if match.group(1).strip()]
+    if not rationale:
+        rationale = [match.group(1).strip() for match in SUMMARY_ACTION_RE.finditer(reply) if match.group(1).strip()]
+    reply = RATIONALE_ACTION_RE.sub("", reply)
     reply = SUMMARY_ACTION_RE.sub("", reply)
     opener = THINK_OPEN_RE.search(reply)
     closer = THINK_CLOSE_RE.search(reply)
@@ -1727,7 +1767,7 @@ def split_thinking(raw):
     reply = re.sub(r"<think(?:ing)?>[\s\S]*?(?:</think(?:ing)?>|\Z)", "", reply, flags=re.I)
     reply = THINK_TAG_RE.sub("", reply)
     reply = re.sub(r"\n{3,}", "\n\n", reply)
-    return "\n\n".join(summaries).strip(), reply.strip()
+    return "\n\n".join(rationale).strip(), reply.strip()
 
 
 
@@ -1999,6 +2039,8 @@ class KurtWebApp:
         self.settings.setdefault("default_mode", "normal")
         self.settings.setdefault("api_groups", [])
         self.model_lock = threading.RLock()
+        self._installed_lock = threading.Lock()
+        self._installed_cache = None
         self.migrate_legacy_api_groups()
         configured_root = Path(self.settings.get("project_root") or Path.cwd()).expanduser()
         if not configured_root.exists() or not configured_root.is_dir():
@@ -2339,10 +2381,27 @@ class KurtWebApp:
                 break
         return items
 
+    def installed_local_models(self, max_age=4.0):
+        now = time.monotonic()
+        with self._installed_lock:
+            cached = self._installed_cache
+            if cached is not None and now - cached[0] < max_age:
+                return cached[1]
+            try:
+                items = list(K.installed_models()) if K.ollama_up() else []
+            except Exception:
+                items = []
+            self._installed_cache = (time.monotonic(), items)
+            return items
+
+    def invalidate_installed_models(self):
+        with self._installed_lock:
+            self._installed_cache = None
+
     def list_models(self):
         models = []
         try:
-            for item in K.installed_models() if K.ollama_up() else []:
+            for item in self.installed_local_models():
                 models.append({
                     "ref": item["name"], "name": item["name"], "label": item["name"],
                     "provider": "Ollama", "provider_id": None, "key_group": None,
@@ -2938,6 +2997,7 @@ class KurtWebApp:
                         job["completed"] = completed
                         job["human"] = K.fmt_bytes(completed) + (" / " + K.fmt_bytes(total) if total else "")
             with self.lock:
+                self.invalidate_installed_models()
                 job["state"] = "done"
                 job["status"] = "Complete"
                 job["completed"] = job.get("total") or job.get("completed")
@@ -3282,6 +3342,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not K.ollama_up():
                     raise ValueError("Ollama is not running. Start Ollama before uninstalling a local model.")
                 K.http_json("/api/delete", {"name": model.get("name") or model_ref}, timeout=60)
+                self.app.invalidate_installed_models()
                 api_groups = self.app.settings.get("api_groups", [])
                 kept_groups = []
                 for group in api_groups:
@@ -3730,7 +3791,7 @@ class Handler(BaseHTTPRequestHandler):
         usage_calls = 0
         provider_output_tokens = 0
         output_chars = 0
-        model_summary_chunks = []
+        model_rationale_chunks = []
 
         def log_step(text, ok=None, status="Working…", detail=None):
             item = {"text": str(text), "ok": ok, "detail": str(detail or "")[:12000]}
@@ -3755,8 +3816,8 @@ class Handler(BaseHTTPRequestHandler):
                 candidate = route_candidates[candidate_index]
                 emit({"type": "draft_reset"})
                 chunks = []
-                summary_chunks = []
-                lead = "\n\n" if model_summary_chunks else ""
+                rationale_chunks = []
+                lead = "\n\n" if model_rationale_chunks else ""
                 thinking_ended_at = None
                 think_tail = ""
                 usage_tokens_this_call = None
@@ -3773,17 +3834,64 @@ class Handler(BaseHTTPRequestHandler):
                         max_tokens=max_tokens,
                         reasoning_effort=reasoning_effort,
                     )
+                    in_think = False
+                    pend = ""
+
+                    def push_reasoning(text):
+                        if not text:
+                            return
+                        piece = text if rationale_chunks else lead + text
+                        rationale_chunks.append(piece)
+                        emit({"type": "reasoning", "text": piece})
+
+                    def push_answer(text):
+                        nonlocal thinking_ended_at
+                        if not text:
+                            return
+                        chunks.append(text)
+                        emit({"type": "draft", "text": text})
+                        if thinking_ended_at is None and rationale_chunks and text.strip():
+                            thinking_ended_at = time.monotonic()
+
+                    def route_text(text, final=False):
+                        """Split streamed content into reasoning (inside <think>) and answer text."""
+                        nonlocal in_think, pend
+                        pend += text
+                        while True:
+                            tag = THINK_TAG_RE.search(pend)
+                            if tag:
+                                before = pend[:tag.start()]
+                                closing = bool(tag.group(1))
+                                if closing and not in_think:
+                                    # Closing tag with no opener: everything so far was reasoning.
+                                    earlier = "".join(chunks) + before
+                                    chunks.clear()
+                                    emit({"type": "draft_reset"})
+                                    push_reasoning(earlier)
+                                elif in_think:
+                                    push_reasoning(before)
+                                else:
+                                    push_answer(before)
+                                in_think = not closing
+                                pend = pend[tag.end():]
+                                continue
+                            hold = ""
+                            if not final:
+                                cut = pend.rfind("<")
+                                if cut != -1 and ">" not in pend[cut:] and len(pend) - cut < 12:
+                                    hold = pend[cut:]
+                                    pend = pend[:cut]
+                            (push_reasoning if in_think else push_answer)(pend)
+                            pend = hold
+                            break
+
                     for kind, chunk in stream:
                         if not chunk:
                             continue
                         kind_name = str(kind or "").strip().lower().replace("-", "_")
-                        if kind_name in MODEL_SUMMARY_KINDS:
+                        if kind_name in MODEL_RATIONALE_KINDS or kind_name in THINKING_KINDS:
                             if isinstance(chunk, str):
-                                piece = chunk if summary_chunks else lead + chunk
-                                summary_chunks.append(piece)
-                                emit({"type": "reasoning", "text": piece})
-                            continue
-                        if kind_name in THINKING_KINDS:
+                                push_reasoning(chunk)
                             continue
                         if kind_name in ("usage", "stats", "metadata") and isinstance(chunk, dict):
                             usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else chunk
@@ -3795,28 +3903,23 @@ class Handler(BaseHTTPRequestHandler):
                                 pass
                             continue
                         if kind_name == "content":
-                            text = chunk if isinstance(chunk, str) else str(chunk)
-                            chunks.append(text)
-                            emit({"type": "draft", "text": text})
-                            if thinking_ended_at is None:
-                                think_tail = (think_tail + text)[-48:]
-                                if summary_chunks or THINK_CLOSE_RE.search(think_tail):
-                                    thinking_ended_at = time.monotonic()
+                            route_text(chunk if isinstance(chunk, str) else str(chunk))
+                    route_text("", final=True)
                     raw_response = "".join(chunks).strip()
                     if not raw_response:
                         raise RuntimeError("The model returned no response text.")
                     active_candidate_index = candidate_index
-                    if summary_chunks:
+                    if rationale_chunks:
                         thinking_seconds += max(0.0, (thinking_ended_at or time.monotonic()) - started_at)
-                        model_summary_chunks.extend(summary_chunks)
+                        model_rationale_chunks.extend(rationale_chunks)
                     output_chars += sum(len(chunk) for chunk in chunks)
                     return raw_response
                 except (BrokenPipeError, ConnectionResetError):
                     raise
                 except Exception as exc:
                     last_error = exc
-                    if summary_chunks:
-                        emit({"type": "reasoning_reset", "text": "".join(model_summary_chunks).strip()})
+                    if rationale_chunks:
+                        emit({"type": "reasoning_reset", "text": "".join(model_rationale_chunks).strip()})
                     failed_candidate_indices.add(candidate_index)
                     remaining = [index for index in range(len(route_candidates)) if index not in failed_candidate_indices]
                     if not remaining:
@@ -4063,8 +4166,9 @@ class Handler(BaseHTTPRequestHandler):
                     log_step("Validation warning: " + error, False, status="Finishing with warnings…", detail="This artifact did not pass the configured check and is withheld from the accepted artifact list.")
 
             stats = response_stats()
-            response_summary, reply = split_thinking(final_raw)
-            response_summary = response_summary or "".join(model_summary_chunks).strip()
+            response_rationale, reply = split_thinking(final_raw)
+            streamed_reasoning = "".join(model_rationale_chunks).strip()
+            response_rationale = "\n\n".join(part for part in (streamed_reasoning, response_rationale) if part).strip()
             reply = strip_unsupported_actions(reply)
             reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
             if validation_errors:
@@ -4090,8 +4194,8 @@ class Handler(BaseHTTPRequestHandler):
             if visible or artifacts:
                 record = {
                     "role": "assistant", "content": visible, "artifacts": artifacts,
-                    "worklog": worklog, "reasoning": response_summary,
-                    "thinking_seconds": round(thinking_seconds or generation_seconds, 1),
+                    "worklog": worklog, "reasoning": response_rationale,
+                    "thinking_seconds": round(thinking_seconds, 1),
                     "effort": effort, "mode": mode, "route": route_info["route"],
                     "model": model, "stats": stats,
                 }
@@ -4105,8 +4209,8 @@ class Handler(BaseHTTPRequestHandler):
             finished = True
             emit({
                 "type": "done", "content": visible, "artifacts": artifacts,
-                "worklog": worklog, "reasoning": response_summary,
-                "thinking_seconds": round(thinking_seconds or generation_seconds, 1),
+                "worklog": worklog, "reasoning": response_rationale,
+                "thinking_seconds": round(thinking_seconds, 1),
                 "chat_id": chat_id, "title": chat["title"], "route": route_info["route"],
                 "model": model, "effort": effort, "mode": mode, "stats": stats,
             })
