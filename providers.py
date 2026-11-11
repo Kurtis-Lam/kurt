@@ -112,6 +112,39 @@ def _messages_for_openai(messages):
     ]
 
 
+def _anthropic_content(content):
+    """Translate OpenAI-style text/image parts into Anthropic content blocks."""
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+    if not isinstance(content, list):
+        return [{"type": "text", "text": str(content or "")}] if content else []
+    converted = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        kind = part.get("type")
+        if kind == "text":
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                converted.append({"type": "text", "text": text})
+        elif kind in ("image_url", "input_image"):
+            image = part.get("image_url") or part.get("source") or {}
+            url = image.get("url") if isinstance(image, dict) else image
+            if not isinstance(url, str) or not url:
+                continue
+            if url.startswith("data:"):
+                header, separator, payload = url.partition(",")
+                if not separator or ";base64" not in header:
+                    continue
+                media_type = header[5:].split(";", 1)[0].lower()
+                if media_type not in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+                    continue
+                converted.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": payload}})
+            elif url.startswith(("https://", "http://")):
+                converted.append({"type": "image", "source": {"type": "url", "url": url}})
+    return converted
+
+
 def _anthropic_messages(messages):
     system = []
     converted = []
@@ -119,16 +152,21 @@ def _anthropic_messages(messages):
         role = item.get("role")
         content = item.get("content", "") or ""
         if role == "system":
-            if content:
+            if isinstance(content, str) and content:
                 system.append(content)
         elif role in ("user", "assistant"):
+            blocks = _anthropic_content(content)
+            if not blocks:
+                continue
             if converted and converted[-1]["role"] == role:
-                converted[-1]["content"] += "\n\n" + content
+                converted[-1]["content"].append({"type": "text", "text": "\n\n"})
+                converted[-1]["content"].extend(blocks)
             else:
-                converted.append({"role": role, "content": content})
+                converted.append({"role": role, "content": blocks})
     if not converted:
-        converted = [{"role": "user", "content": "Continue."}]
+        converted = [{"role": "user", "content": [{"type": "text", "text": "Continue."}]}]
     return "\n\n".join(system), converted
+
 
 
 def _endpoint(model_config):
