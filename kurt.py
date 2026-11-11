@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""kurt - a terminal coding assistant powered by local models (Ollama) and remote provider APIs.
+"""kurt - a coding assistant powered by local models (Ollama) and remote provider APIs.
 
-Run `kurt` in any project folder. Kurt can read your files and propose
-edits / new files / shell commands. Nothing is changed without your OK.
+`kurt` opens the browser interface on localhost. `kurt --cli` runs the same assistant in the
+terminal. Both share conversations, models, API keys, per-chat workspaces and per-chat
+Python environments under ~/.kurt. Nothing is changed or run without your approval.
 """
+import concurrent.futures as concurrent_futures
 import contextlib
 import http.client
 import json
@@ -31,6 +33,7 @@ from rich.console import Console, Group
 from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Prompt
+from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
@@ -43,7 +46,7 @@ class KurtConsole(Console):
             return super().print(*objects, **kwargs)
 
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 DEFAULT_MODEL = "hf.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M"
 CONFIG_DIR = Path.home() / ".kurt"
@@ -530,12 +533,13 @@ class TerminalUI:
     REV = "\x1b[7m"
     NOREV = "\x1b[27m"
     RESET = "\x1b[0m"
-    HINTS = "/help · /models · /keys · @ files"
+    HINTS = "/help · /mode · /models · /link · @ files"
     HINTS_BUSY = "Esc to interrupt"
     PLACEHOLDER = "Message Kurt…"
     PLACEHOLDER_BUSY = "Working… press Esc to interrupt"
     HEIGHT = 5  # context row, input frame, and compact command hints
     PICKER_VISIBLE = 5
+    tag = ""
 
     def __init__(self):
         self.width, self.rows = term_size()
@@ -662,7 +666,8 @@ class TerminalUI:
             activity = self._activity_for(text)
 
         meter = f"  ·  ctx {CONTEXT_PCT}%" if CONTEXT_PCT else ""
-        return f"in {short_path(target, max(12, min(42, w_safe_width(self.width))))}  ·  {activity}{meter}"
+        lead = f"{self.tag}  ·  " if self.tag else ""
+        return f"{lead}in {short_path(target, max(12, min(42, w_safe_width(self.width))))}  ·  {activity}{meter}"
 
     @staticmethod
     def _activity_for(text):
@@ -1063,7 +1068,7 @@ MASCOT = [
 MASCOT_STYLE = "rgb(61,214,110)"
 
 
-def print_brand():
+def print_brand(extra=None):
     mascot = Text("\n".join(MASCOT), style=MASCOT_STYLE, no_wrap=True)
     path_limit = max(16, console.width - len(MASCOT[0]) - 14)
     details = Group(
@@ -1071,6 +1076,7 @@ def print_brand():
         Text("Your local coding companion", style="bold"),
         Text(short_model(MODEL), style="green"),
         Text(short_path(Path.cwd(), path_limit), style="dim", no_wrap=True),
+        *[Text(line, style="dim") for line in (extra or [])],
     )
     grid = Table.grid(padding=(0, 3))
     grid.add_column(no_wrap=True)
@@ -2785,7 +2791,7 @@ def remove_model_entry(entry):
 
 
 def models_menu():
-    global AGENTS, WORKERS, MODEL_SORT, MODEL_SORT_DESC
+    global MODEL_SORT, MODEL_SORT_DESC
     while True:
         local_models = installed_models() if ollama_up() else []
         local_models = sort_models(local_models, MODEL_SORT, MODEL_SORT_DESC)
@@ -2804,8 +2810,6 @@ def models_menu():
             markers = []
             if entry["ref"] == MODEL:
                 markers.append("active")
-            if entry["ref"] in WORKERS:
-                markers.append("helper")
             suffix = " · " + ", ".join(markers) if markers else ""
             options.append({
                 "label": "{}  [{}]{}".format(entry["name"], entry["provider"], suffix),
@@ -2816,12 +2820,11 @@ def models_menu():
             {"label": "Add local model", "description": "Search Hugging Face or enter an Ollama model"},
             {"label": "Add API model", "description": "Configure Claude, OpenAI, Grok, OpenRouter, and more"},
             {"label": "Manage API keys", "description": "Add, edit, or remove provider keys and pools"},
-            {"label": "Helper agents: {}".format("ON" if AGENTS else "OFF"), "description": "Toggle parallel helper models"},
             {"label": "Change model sorting", "description": "Current: {} · {}".format(SORT_LABELS.get(MODEL_SORT, "Size"), "descending" if MODEL_SORT_DESC else "ascending")},
             {"label": "Close", "description": "Return to chat"},
         ])
         choice = select_menu("Models · local and hosted", options)
-        if choice is None or choice == action_start + 5:
+        if choice is None or choice == action_start + 4:
             return
         if choice < action_start:
             entry = entries[choice]
@@ -2830,7 +2833,6 @@ def models_menu():
                 actions.append({"label": "Edit model settings", "description": "Change model ID, key pool, or endpoint"})
             actions.extend([
                 {"label": "Remove model", "description": "Remove its configuration or uninstall local weights"},
-                {"label": "Toggle helper worker", "description": "Use this model for parallel helper tasks"},
                 {"label": "Back", "description": "Return to model list"},
             ])
             action = select_menu(entry["name"], actions)
@@ -2844,14 +2846,6 @@ def models_menu():
                 removal = dict(entry)
                 removal["alternatives"] = [item for item in entries if item["ref"] != entry["ref"]]
                 console.print(remove_model_entry(removal))
-            else:
-                if entry["ref"] in WORKERS:
-                    WORKERS = [worker for worker in WORKERS if worker != entry["ref"]]
-                    console.print("[green]Removed helper worker.[/]")
-                else:
-                    WORKERS.append(entry["ref"])
-                    console.print("[green]Added helper worker.[/]")
-                save_config()
             continue
         action = choice - action_start
         if action == 0:
@@ -2861,10 +2855,6 @@ def models_menu():
         elif action == 2:
             provider_keys_menu()
         elif action == 3:
-            AGENTS = not AGENTS
-            save_config()
-            console.print("[green]Helper agents {}.[/]".format("enabled" if AGENTS else "disabled"))
-        elif action == 4:
             sort_choice = select_menu("Sort local models", [
                 {"label": "Model name", "description": "Alphabetical"},
                 {"label": "Model size", "description": "Largest first"},
@@ -2990,148 +2980,6 @@ class BusyListener:
                 sys.stdout.flush()
 
 
-# ----------------------------------------------------------------- Agents ---
-PLANNER = """You are the orchestrator of a coding assistant. Decide whether the user's request
-below is worth splitting between helper agents that run IN PARALLEL (for example: analysing
-different files, investigating separate sub-problems, reviewing different parts).
-
-Helpers can only read the files you list for them. They cannot edit files or run commands.
-Use 0 agents for simple or small requests. Use at most {max_agents} agents, and only as many
-as are truly needed. Each task must be self-contained and independent.
-
-Reply with ONLY a JSON object, no other text:
-{{"agents": [{{"task": "what this helper should find out or produce", "files": ["relative/path"]}}]}}
-or, when no helpers are needed:
-{{"agents": []}}
-
-Project files:
-{tree}
-
-User request:
-{request}
-"""
-
-WORKER_SYSTEM = (
-    "You are a helper agent inside a coding assistant. Complete the subtask you are given "
-    "thoroughly but concisely. You cannot edit files or run commands. Never use @@@ blocks. "
-    "Reply with your findings and, when useful, exact code snippets."
-)
-
-
-def plan_agents(request):
-    prompt = PLANNER.format(
-        max_agents=MAX_AGENTS, tree=project_tree(80), request=request[:6000]
-    )
-    try:
-        out = chat_once(
-            MODEL, [{"role": "user", "content": prompt}], temperature=0, timeout=300, think=False
-        )
-    except Exception as e:
-        console.print(f"[dim]agents: planning failed ({escape(str(e))}), continuing alone[/]")
-        return []
-    m = re.search(r"\{.*\}", out, re.S)
-    if not m:
-        return []
-    try:
-        data = json.loads(m.group(0))
-    except Exception:
-        return []
-    raw = data.get("agents") if isinstance(data, dict) else None
-    if not isinstance(raw, list):
-        return []
-    agents = []
-    for a in raw[:MAX_AGENTS]:
-        if isinstance(a, dict) and isinstance(a.get("task"), str) and a["task"].strip():
-            files = a.get("files") if isinstance(a.get("files"), list) else []
-            files = [f for f in files if isinstance(f, str)]
-            agents.append({"task": a["task"].strip(), "files": files[:5]})
-    return agents
-
-
-def effective_workers():
-    names = [m["name"] for m in installed_models()] if ollama_up() else []
-    names.extend(remote_model_ref(item) for item in REMOTE_MODELS)
-    ws = [w for w in WORKERS if any(same_model(w, n) for n in names)]
-    return ws or [MODEL]
-
-
-def run_agents(request):
-    """Let the main model decide how many helpers to spawn, run them in parallel,
-    and return their reports as text to append to the user's message."""
-    with console.status("[bold]🤖 Kurt is deciding how many agents are needed...[/]"):
-        tasks = plan_agents(request)
-    if not tasks:
-        console.print("[dim]🤖 agents: Kurt handled this alone[/]")
-        return ""
-
-    n = len(tasks)
-    workers = effective_workers()
-    assigned = [workers[i % len(workers)] for i in range(n)]
-    plan = Text()
-    for i, (t, w) in enumerate(zip(tasks, assigned), 1):
-        plan.append(f"{i}. ", style="bold")
-        plan.append(f"[{short_model(w, 30)}] ", style="cyan")
-        plan.append(t["task"] + "\n")
-    plan.rstrip()
-    console.print(
-        Panel(plan, title=f"Agents · {n} working in parallel", border_style="blue", expand=False)
-    )
-
-    results = [None] * n
-
-    def work(i):
-        t = tasks[i]
-        attached = []
-        for f in t["files"]:
-            p = safe_path(f)
-            if p and p.is_file():
-                text, _ = read_file(p)
-                attached.append(f"[File {f}]\n{text[: file_cap() * 2 // 3]}")
-        user = (
-            f"Overall user request:\n{request}\n\nYour subtask:\n{t['task']}\n\n"
-            + "\n\n".join(attached)
-        )
-        try:
-            results[i] = chat_once(
-                assigned[i],
-                [
-                    {"role": "system", "content": WORKER_SYSTEM},
-                    {"role": "user", "content": user},
-                ],
-            ) or "(no answer)"
-        except Exception as e:
-            results[i] = f"(agent failed: {e})"
-
-    threads = [threading.Thread(target=work, args=(i,), daemon=True) for i in range(n)]
-    for th in threads:
-        th.start()
-    with console.status(f"[bold]🤖 0/{n} agents finished...[/]") as status:
-        while any(th.is_alive() for th in threads):
-            done = sum(1 for r in results if r is not None)
-            status.update(f"[bold]🤖 {done}/{n} agents finished...[/]")
-            time.sleep(0.2)
-
-    parts = []
-    for i, (t, rep) in enumerate(zip(tasks, results), 1):
-        rep = rep.replace("@@@", "@ @ @")
-        lines = rep.splitlines()
-        preview = "\n".join(lines[:8]) + ("\n…" if len(lines) > 8 else "")
-        console.print(
-            Panel(
-                Text(preview, style="dim"),
-                title=f"Agent {i} · {short_model(assigned[i - 1], 30)}",
-                border_style="blue",
-                expand=False,
-            )
-        )
-        parts.append(f"### Agent {i} - {t['task']}\n{rep[:6000]}")
-    return (
-        f"\n\n[Helper agent reports - {n} helper agent(s) ran in parallel on parts of this "
-        "request. Use their findings, verify against the files, and make any changes "
-        "yourself with action blocks.]\n" + "\n\n".join(parts)
-    )
-
-
 # ------------------------------------------------------------- File utils ---
 def safe_path(p):
     """Resolve p relative to cwd; return None if it escapes the project dir."""
@@ -3219,8 +3067,15 @@ def context_budget():
     return int(CTX * 3)
 
 
+def message_chars(message):
+    content = message.get("content")
+    if isinstance(content, list):
+        return sum(len(str(part.get("text", ""))) for part in content if isinstance(part, dict))
+    return len(str(content or ""))
+
+
 def context_chars(messages):
-    return sum(len(m["content"]) for m in messages)
+    return sum(message_chars(m) for m in messages)
 
 
 def context_percent(messages):
@@ -3395,302 +3250,6 @@ def new_file_panel(name, text):
     )
 
 
-SAFE_VIEW_COMMANDS = {
-    "ls", "dir", "cat", "type", "head", "tail", "pwd", "wc", "grep", "egrep", "fgrep", "rg",
-    "find", "tree", "stat", "file", "du", "df", "which", "where", "whoami", "date", "echo",
-    "printf", "sort", "uniq", "cut", "tr", "diff", "cmp", "realpath", "basename", "dirname",
-    "findstr", "mkdir", "touch",
-}
-SAFE_GIT = {"status", "log", "diff", "show", "ls-files", "blame", "rev-parse", "describe"}
-VERSION_FLAGS = {"--version", "-v", "-V", "version"}
-
-
-def _escapes_project(tok):
-    """True when an argument names a path outside the project folder."""
-    if tok.startswith("-") or not any(c in tok for c in ("/", "\\", "~")) and ".." not in tok:
-        return False
-    try:
-        p = Path(os.path.expanduser(tok))
-        full = (p if p.is_absolute() else Path.cwd() / p).resolve()
-        full.relative_to(Path.cwd().resolve())
-        return False
-    except Exception:
-        return True
-
-
-def is_safe_command(cmd):
-    """True for commands that only look at things (or create empty files/folders)."""
-    import shlex
-
-    if re.search(r"[;&`><\n]|\$\(|\|\|", cmd):
-        return False
-    for seg in cmd.split("|"):
-        try:
-            toks = shlex.split(seg, posix=(os.name != "nt"))
-        except ValueError:
-            return False
-        if not toks:
-            return False
-        name = Path(toks[0]).name.lower()
-        if name.endswith(".exe"):
-            name = name[:-4]
-        args = toks[1:]
-        if name in SAFE_VIEW_COMMANDS or name == "git":
-            if any(_escapes_project(x) for x in args):
-                return False
-        if name in SAFE_VIEW_COMMANDS:
-            if name == "find" and any(
-                x in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls") or x.startswith("-fprint")
-                for x in args
-            ):
-                return False
-            if name == "tree" and any(x == "-o" for x in args):
-                return False
-            if name in ("rg", "grep", "egrep", "fgrep") and any(
-                x.startswith(("--pre", "--hostname-bin")) for x in args
-            ):
-                return False
-            if name == "uniq" and len([x for x in args if not x.startswith("-")]) > 1:
-                return False
-            if name == "date" and any(x == "-s" or x.startswith("--set") for x in args):
-                return False
-            if name == "sort" and any(x == "-o" or x.startswith("--output") for x in args):
-                return False
-            if name == "tail" and any(x in ("-f", "-F", "--follow") for x in args):
-                return False
-            continue
-        if name == "git":
-            sub = [x for x in args if not x.startswith("-")]
-            if any(x.startswith("--output") for x in args):
-                return False
-            if sub and sub[0] in SAFE_GIT:
-                continue
-            return False
-        if name in ("python", "python3", "py", "node", "npm", "pip", "pip3") and len(args) == 1 and args[0] in VERSION_FLAGS:
-            continue
-        return False
-    return True
-
-
-def confirm(question):
-    global AUTO
-    if AUTO:
-        return True
-    a = Prompt.ask(question, choices=["y", "n", "a"], default="y", console=console)
-    if a == "a":
-        AUTO = True
-        console.print("[dim]Auto-accepting edits for this session (/auto to toggle).[/]")
-        return True
-    return a == "y"
-
-
-# ---------------------------------------------------------------- Actions ---
-def do_read(arg):
-    rng = re.fullmatch(r"(.+?):(\d+)-(\d+)", arg)
-    name = rng.group(1) if rng else arg
-    p = safe_path(name)
-    if not p or not p.is_file():
-        return f"READ {arg}: ERROR file not found (or outside project)."
-    text, _ = read_file(p)
-    if looks_binary(text):
-        return f"READ {arg}: ERROR this looks like a binary file, so it was not read."
-    cap = file_cap()
-    if rng:
-        lines = text.split("\n")
-        a = max(1, int(rng.group(2)))
-        b = min(len(lines), max(a, int(rng.group(3))))
-        chunk = "\n".join(lines[a - 1:b])
-        if len(chunk) > cap:
-            chunk = chunk[:cap].rsplit("\n", 1)[0]
-            b = a + chunk.count("\n")
-        console.print(f"[dim]📖 read {name} lines {a}-{b} of {len(lines)}[/]")
-        return f"READ {name} (lines {a}-{b} of {len(lines)}):\n{chunk}"
-    console.print(f"[dim]📖 read {name} ({len(text)} chars)[/]")
-    return f"READ {name}:\n{clip_text(text, name, cap)}"
-
-
-def do_edit(arg, body):
-    p = safe_path(arg)
-    if not p or not p.is_file():
-        return f"EDIT {arg}: ERROR file not found (or outside project). Use WRITE to create files."
-    pairs = PAIR_RE.findall(body)
-    if not pairs:
-        return f"EDIT {arg}: ERROR no valid SEARCH/REPLACE pairs found."
-    old, crlf = read_file(p)
-    new = old
-    loose = set()
-    for i, (s, r) in enumerate(pairs, 1):
-        start, end, how, fix = find_span(new, s)
-        if start is None and how == "many":
-            return f"EDIT {arg}: ERROR SEARCH #{i} matches several places. Include more context to make it unique."
-        if start is None:
-            return (f"EDIT {arg}: ERROR SEARCH #{i} not found. It must match the file exactly. "
-                    "Re-READ the file." + closest_snippet(new, s))
-        if how not in ("exact", "trimmed"):
-            loose.add(how)
-            r = reindent(r, fix)
-        new = new[:start] + r + new[end:]
-    if new == old:
-        return f"EDIT {arg}: ERROR the replacement is identical to the existing code, nothing to change."
-    if loose:
-        console.print(f"[dim]≈ matched ignoring differences in {' and '.join(sorted(loose))}[/]")
-    console.print(diff_panel(old, new, arg, "Edit"))
-    if not confirm("Apply this change? (y=yes, n=no, a=yes to all)"):
-        return f"EDIT {arg}: REJECTED by user. Do not propose this change again; ask what they would prefer."
-    broken_before = check_syntax(p, old)
-    try:
-        from kurt_sandbox import is_code_file, validate_content
-        if is_code_file(arg):
-            checked = validate_content(arg, new)
-            if not checked.get("ok"):
-                return f"EDIT {arg}: ERROR temporary validation failed: {checked.get('message', 'unknown error')}"
-    except Exception as exc:
-        return f"EDIT {arg}: ERROR temporary validation could not run: {exc}"
-    UNDO.append((p, old, crlf))
-    write_file(p, new, crlf)
-    console.print(f"[green]✔ edited {arg}[/]")
-    err = "" if broken_before else check_syntax(p, new)
-    if err:
-        console.print(f"[yellow]⚠ {escape(arg)} no longer parses: {escape(err)}[/]")
-        return f"EDIT {arg}: applied, but WARNING: the file now has a syntax error: {err}. Fix it."
-    return f"EDIT {arg}: applied."
-
-
-def do_write(arg, body):
-    p = safe_path(arg)
-    if not p:
-        return f"WRITE {arg}: ERROR path outside project."
-    if p.is_dir():
-        return f"WRITE {arg}: ERROR that path is a folder."
-    exists = p.is_file()
-    old, crlf = read_file(p) if exists else ("", False)
-    new = body if body.endswith("\n") else body + "\n"
-    if exists:
-        console.print(diff_panel(old, new, arg, "Overwrite"))
-        if not confirm("Overwrite this file? (y=yes, n=no, a=yes to all)"):
-            return f"WRITE {arg}: REJECTED by user. Do not propose this change again; ask what they would prefer."
-    else:
-        console.print(new_file_panel(arg, new))
-    broken_before = check_syntax(p, old) if exists else ""
-    try:
-        from kurt_sandbox import is_code_file, validate_content
-        if is_code_file(arg):
-            checked = validate_content(arg, new)
-            if not checked.get("ok"):
-                return f"WRITE {arg}: ERROR temporary validation failed: {checked.get('message', 'unknown error')}"
-    except Exception as exc:
-        return f"WRITE {arg}: ERROR temporary validation could not run: {exc}"
-    UNDO.append((p, old if exists else None, crlf))
-    write_file(p, new, crlf)
-    console.print(f"[green]✔ {'overwrote' if exists else 'created'} {escape(arg)}[/]")
-    err = "" if broken_before else check_syntax(p, new)
-    if err:
-        console.print(f"[yellow]⚠ {escape(arg)} does not parse: {escape(err)}[/]")
-        return f"WRITE {arg}: applied, but WARNING: the file has a syntax error: {err}. Fix it."
-    return f"WRITE {arg}: applied."
-
-
-def do_run(cmd):
-    from rich.syntax import Syntax
-
-    cmd = cmd.strip()
-    safe = is_safe_command(cmd)
-    console.print(Panel(
-        Syntax(cmd, "bash", theme="ansi_dark", word_wrap=True, background_color="default"),
-        title="[bold]Run command[/]",
-        subtitle="view-only · running automatically" if safe else "can change things · needs your OK",
-        subtitle_align="right",
-        border_style="green" if safe else "red",
-    ))
-    if not safe and Prompt.ask("Run it?", choices=["y", "n"], default="n", console=console) != "y":
-        return f"RUN {cmd}: REJECTED by user."
-    try:
-        r = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=180,
-            cwd=Path.cwd(), errors="replace",
-        )
-        out = ((r.stdout or "") + (r.stderr or "")).strip()
-        code = r.returncode
-    except subprocess.TimeoutExpired:
-        out, code = "timed out after 180s", -1
-    except KeyboardInterrupt:
-        out, code = "interrupted by the user", -2
-    shown = out[:3000]
-    if len(out) > 3000:
-        shown += "\n… (output truncated)"
-    console.print(Panel(
-        Text(shown or "(no output)", style="" if shown else "dim"),
-        title="[bold]Output[/]", subtitle=f"exit {code}", subtitle_align="right",
-        border_style="dim" if code == 0 else "red",
-    ))
-    if len(out) > 4000:
-        out = out[:4000] + "\n... [truncated]"
-    return f"RUN {cmd}: exit code {code}\n{out}"
-
-
-PENDING_NOTES = []  # rejections the model has not heard about yet; sent with the next message
-
-
-def _outcome(result):
-    """Classify an EDIT/WRITE result: 'error', 'rejected', 'warning' or 'ok'."""
-    tail = result.split(": ", 1)[-1]
-    if tail.startswith("ERROR"):
-        return "error"
-    if tail.startswith("REJECTED"):
-        return "rejected"
-    return "warning" if "WARNING:" in tail else "ok"
-
-
-def handle_actions(text):
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
-    results, rejected = [], []
-    for kind, arg, body in BLOCK_RE.findall(text):
-        arg = arg.strip()
-        try:
-            if kind == "READ":
-                results.append(do_read(arg))
-            elif kind in ("EDIT", "WRITE"):
-                r = do_edit(arg, body) if kind == "EDIT" else do_write(arg, body)
-                state = _outcome(r)
-                if state == "rejected":
-                    rejected.append(r)
-                elif state != "ok":
-                    if state == "error":
-                        console.print(f"[red]{escape(r)}[/]")
-                    results.append(r)
-            elif kind == "RUN":
-                results.append(do_run(arg or body))
-        except OSError as e:
-            results.append(f"{kind} {arg}: ERROR {e}")
-            console.print(f"[red]{escape(results[-1])}[/]")
-    if not results:
-        PENDING_NOTES.extend(rejected)  # no follow-up needed now; the model hears it next turn
-        return ""
-    return "[tool results]\n" + "\n\n".join(results + rejected)
-
-
-# ------------------------------------------------------------------- Chat ---
-def trim(messages):
-    """Keep the conversation inside the context window.
-
-    When over budget, drop old messages down to 70% of it in ONE go. Ollama reuses its cached
-    prompt as long as the start of the conversation is unchanged, so trimming rarely (instead of
-    shaving one message every turn) avoids re-reading the whole prompt on every request."""
-    budget = context_budget()  # ~3 chars per token, leave headroom
-    total = context_chars(messages)
-    if total <= budget:
-        return
-    target = int(budget * 0.7)
-    cut = 1
-    while total > target and len(messages) - (cut - 1) > 3:
-        total -= len(messages[cut]["content"])
-        cut += 1
-    dropped = cut - 1
-    del messages[1:cut]
-    console.print(f"[dim]↻ dropped {dropped} old messages to fit the context window "
-                  "(/compact summarises instead of forgetting)[/]")
-
-
 def attach_mentions(text):
     extra, seen = [], set()
     cap = file_cap()
@@ -3773,33 +3332,180 @@ class ActionFilter:
         return "".join(out)
 
 
-def early_stop_point(full, state):
-    """After the model asks to READ a file or RUN a command it must wait for the result.
-    If it keeps writing instead (guessing what the file contains), stop generating and return
-    the index where the reply should be cut; otherwise None."""
-    end = full.rfind("@@@ END")
-    if end < 0:
-        return None
-    cut = end + len("@@@ END")
-    tail = full[cut:]
-    if len(tail) < 160 or "@@@" in tail:
-        return None
-    if state.get("cut") != cut:
-        blocks = BLOCK_RE.findall(full[:cut])
-        state["cut"] = cut
-        state["fetch"] = bool(blocks) and blocks[-1][0] in ("READ", "RUN")
-    return cut if state["fetch"] else None
+# =============================================================== Shared sessions ===
+# The terminal interface and the browser interface are two front ends over the same state:
+#
+#   ~/.kurt/config.json            models, provider keys, hardware tuning
+#   ~/.kurt/web_settings.json      system prompt, API groups, defaults
+#   ~/.kurt/chats.json             every conversation (CLI chats appear in the browser and back)
+#   ~/.kurt/web_workspaces/<id>/   private scratch workspace and uploads for one conversation
+#   ~/.kurt/web_envs/<id>/         private Python virtual environment for one conversation
+#
+# A CLI session is simply a conversation in chats.json. All command execution goes through the
+# macOS Seatbelt sandbox in kurt_sandbox.py, inside that conversation's own venv. Kurt itself is
+# never run from those venvs and user code is never run from Kurt's own interpreter environment.
+CLI_MODES = ("normal", "agent")
+DEFAULT_PROMPT_NOTE = "Provider-owned internal instructions are not available to Kurt."
+RATIONALE_PANEL_LIMIT = 4000
 
 
+def _redact_keys(text):
+    for entry in PROVIDER_KEYS:
+        secret = str(entry.get("value") or "")
+        if len(secret) >= 8:
+            text = text.replace(secret, "[REDACTED API KEY]")
+    return text
 
 
-def run_turn(messages):
-    for _ in range(MAX_ROUNDS):
-        trim(messages)
-        full, interrupted = "", False
-        thinking_started = False
-        answer_started = False
+def sandbox_available():
+    return sys.platform == "darwin" and bool(
+        shutil.which("sandbox-exec") or Path("/usr/bin/sandbox-exec").is_file()
+    )
+
+
+def trim_history(messages, model):
+    """Keep local models inside their context window. The two system messages always stay."""
+    if get_remote_model(model):
+        return
+    budget = context_budget()
+    if len(messages) > 1 and message_chars(messages[1]) > budget // 2:
+        messages[1]["content"] = messages[1]["content"][: budget // 2] + "\n[Workspace context clipped for this model's context window.]"
+    total = context_chars(messages)
+    if total <= budget:
+        return
+    target = int(budget * 0.7)
+    dropped = 0
+    while total > target and len(messages) > 3:
+        total -= message_chars(messages[2])
+        del messages[2]
+        dropped += 1
+    if dropped:
+        console.print(f"[dim]↻ left out {dropped} older message(s) so this model's context window is not exceeded.[/]")
+
+
+class TurnAborted(Exception):
+    pass
+
+
+class CliSession:
+    """One terminal conversation backed by a shared chat record."""
+
+    def __init__(self, app, web, chat):
+        self.app = app
+        self.web = web
+        self.chat_id = chat["id"]
+        self.route = str(chat.get("route") or "")
+        self.undo = []
+        self.origin = Path.cwd().resolve()
+
+    @property
+    def chat(self):
+        return self.app.get_chat(self.chat_id)
+
+    @property
+    def mode(self):
+        return self.web.valid_mode_value((self.chat or {}).get("mode"))
+
+    @property
+    def linked(self):
+        return str((self.chat or {}).get("linked_folder") or "")
+
+    def work_root(self):
+        return self.app.chat_work_root(self.chat_id)
+
+    def sync_cwd(self):
+        try:
+            os.chdir(self.work_root())
+        except (OSError, ValueError) as exc:
+            console.print(f"[yellow]Could not enter the session folder:[/] {escape(str(exc))}")
+        if TERMINAL_UI is not None:
+            TERMINAL_UI._file_cache = []
+            TERMINAL_UI.tag = self.tag()
+
+    def tag(self):
+        return f"{self.mode} · {'linked' if self.linked else 'private'}"
+
+    def save(self):
+        self.app.save_chats()
+
+
+class ChatTurn:
+    """One user message handled exactly like the browser's chat endpoint, with terminal prompts
+    standing in for the Approve / Decline cards."""
+
+    MAX_ROUNDS = 4
+
+    def __init__(self, session, user_text, model_text=None):
+        self.s = session
+        self.app = session.app
+        self.W = session.web
+        self.user_text = user_text
+        self.model_text = model_text or user_text
+        self.worklog = []
+        self.artifacts = {}
+        self.messages = []
+        self.model = ""
+        self.route_candidates = []
+        self.active = 0
+        self.failed = set()
+        self.original_keys = []
+        self.gen_seconds = 0.0
+        self.gen_calls = 0
+        self.usage_calls = 0
+        self.usage_tokens = 0
+        self.output_chars = 0
+        self.thinking_seconds = 0.0
+        self.rationale_chunks = []
+        self.last_reasoning = ""
+        self.last_meter = None
+        self.mode = session.mode
+        self.effort = "thinking" if self.mode == "normal" else "expert"
+        self.use_thinking = think_enabled()
+
+    # ------------------------------------------------------------ helpers
+    def log(self, text, ok=None, detail=None):
+        self.worklog.append({"text": str(text), "ok": ok, "detail": str(detail or "")[:12000]})
+        if len(self.worklog) > 120:
+            del self.worklog[:-120]
+        mark = {True: "[green]✔[/]", False: "[red]✖[/]"}.get(ok, "[dim]•[/]")
+        console.print(f"  {mark} [dim]{escape(str(text))}[/]")
+
+    def apply_candidate(self, candidate):
+        self.model = candidate["model"]
+        keys = candidate.get("provider_keys")
+        PROVIDER_KEYS[:] = self.original_keys
+        self.app.set_model(self.model)
+        if keys is not None:
+            PROVIDER_KEYS[:] = list(keys)
+        elif candidate.get("key_id"):
+            chosen = next((k for k in self.original_keys if str(k.get("id")) == str(candidate["key_id"])), None)
+            if chosen is None:
+                raise ValueError("The selected API key is no longer available.")
+            PROVIDER_KEYS[:] = [chosen]
+
+    def ask(self, question):
+        try:
+            return Prompt.ask(question, choices=["y", "n"], default="n", console=console) == "y"
+        except (KeyboardInterrupt, EOFError):
+            console.print()
+            return False
+
+    def approval(self, kind, title, detail="", command="", path=""):
+        payload = {"id": uuid.uuid4().hex, "kind": kind, "title": title, "detail": detail,
+                   "command": command, "path": path, "artifactPath": path}
+        item = {"kind": "approval", "text": title, "ok": None,
+                "detail": detail or command or path or "No action will occur until you approve.",
+                "approval": payload, "approved": None}
+        self.worklog.append(item)
+        approved = self.ask(f"{title} — approve?")
+        item["approved"] = approved
+        item["ok"] = approved
+        return approved, item
+
+    # --------------------------------------------------------- generation
+    def stream_once(self, call_messages, think):
         meter = Meter()
+        self.last_meter = meter
         ui = TERMINAL_UI if TERMINAL_UI and TERMINAL_UI.enabled else None
         console.print()
         if ui:
@@ -3807,237 +3513,930 @@ def run_turn(messages):
             ui.begin_work(meter)
         else:
             console.print(Text("✦ K is thinking…", style="bold bright_green"))
-        failed = False
         printer = StreamPrinter()
-        stop_state = {}
         afilter = ActionFilter()
-        try:
-            with BusyListener(), contextlib.closing(stream_chat(messages)) as stream:
-                for kind, chunk in stream:
-                    if kind == "stats":
-                        meter.tokens = chunk.get("eval_count") or meter.tokens
-                        meter.gen_secs = (chunk.get("eval_duration") or 0) / 1e9
-                        meter.wait_secs = (
-                            (chunk.get("load_duration") or 0)
-                            + (chunk.get("prompt_eval_duration") or 0)
-                        ) / 1e9
-                        continue
-                    meter.tokens += 1  # live estimate: one streamed chunk is about one token
-                    if kind == "thinking":
-                        meter.label = "Thinking"
-                        if not thinking_started:
-                            printer.flush()
-                            console.print(Text("Thinking", style="bold green"))
-                            thinking_started = True
-                        printer.write(chunk, "dim green")
+        answer, rationale = [], []
+        state = {"in_think": False, "pend": "", "thinking": False, "answer": False, "ended": None}
+        started = time.monotonic()
+        exact_tokens = None
+        stream = None
+
+        def push_reasoning(text):
+            if not text:
+                return
+            rationale.append(text)
+            meter.label = "Thinking"
+            if not state["thinking"]:
+                printer.flush()
+                console.print(Text("Thinking", style="bold green"))
+                state["thinking"] = True
+            printer.write(text, "dim green")
+
+        def push_answer(text):
+            if not text:
+                return
+            meter.label = "Preparing action" if afilter.in_block else "Writing"
+            if not state["answer"]:
+                printer.flush()
+                if state["thinking"]:
+                    console.print()
+                console.print(Text("K › ", style="bold bright_green"), end="")
+                state["answer"] = True
+            answer.append(text)
+            visible = afilter.feed(text)
+            if visible:
+                printer.write(visible)
+            if state["ended"] is None and rationale and text.strip():
+                state["ended"] = time.monotonic()
+
+        def route_text(text, final=False):
+            state["pend"] += text
+            while True:
+                tag = self.W.THINK_TAG_RE.search(state["pend"])
+                if tag:
+                    before = state["pend"][:tag.start()]
+                    closing = bool(tag.group(1))
+                    if closing and not state["in_think"]:
+                        earlier = "".join(answer) + before
+                        answer.clear()
+                        push_reasoning(earlier)
+                    elif state["in_think"]:
+                        push_reasoning(before)
                     else:
-                        meter.label = "Preparing action" if afilter.in_block else "Writing"
-                        if not answer_started:
-                            printer.flush()
-                            if thinking_started:
-                                console.print()
-                            console.print(Text("K › ", style="bold bright_green"), end="")
-                            answer_started = True
-                        full += chunk
-                        visible = afilter.feed(chunk)
-                        if visible:
-                            printer.write(visible)
-                        cut = early_stop_point(full, stop_state)
-                        if cut is not None:
-                            full = full[:cut]  # closing the stream makes Ollama stop generating
-                            break
+                        push_answer(before)
+                    state["in_think"] = not closing
+                    state["pend"] = state["pend"][tag.end():]
+                    continue
+                hold = ""
+                if not final:
+                    cut = state["pend"].rfind("<")
+                    if cut != -1 and ">" not in state["pend"][cut:] and len(state["pend"]) - cut < 12:
+                        hold = state["pend"][cut:]
+                        state["pend"] = state["pend"][:cut]
+                (push_reasoning if state["in_think"] else push_answer)(state["pend"])
+                state["pend"] = hold
+                break
+
+        self.gen_calls += 1
+        try:
+            with BusyListener():
+                stream = stream_chat(
+                    call_messages, model=self.model, think=think,
+                    temperature={"thinking": 0.2, "expert": 0.15}[self.effort],
+                    max_tokens={"thinking": 8192, "expert": 16384}[self.effort],
+                    reasoning_effort={"thinking": "medium", "expert": "high"}[self.effort],
+                )
+                for kind, chunk in stream:
+                    if not chunk:
+                        continue
+                    name = str(kind or "").strip().lower().replace("-", "_")
+                    if name in self.W.MODEL_RATIONALE_KINDS or name in self.W.THINKING_KINDS:
+                        if isinstance(chunk, str):
+                            meter.tokens += 1
+                            push_reasoning(chunk)
+                        continue
+                    if name in ("usage", "stats", "metadata") and isinstance(chunk, dict):
+                        usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else chunk
+                        value = next((usage.get(k) for k in (
+                            "completion_tokens", "output_tokens", "completionTokens",
+                            "outputTokens", "eval_count") if usage.get(k) is not None), None)
+                        try:
+                            if value is not None:
+                                exact_tokens = max(int(value), exact_tokens or 0)
+                                meter.tokens = exact_tokens
+                        except (TypeError, ValueError):
+                            pass
+                        meter.gen_secs = (usage.get("eval_duration") or 0) / 1e9
+                        meter.wait_secs = ((usage.get("load_duration") or 0)
+                                           + (usage.get("prompt_eval_duration") or 0)) / 1e9
+                        continue
+                    if name == "content":
+                        meter.tokens += 1
+                        route_text(chunk if isinstance(chunk, str) else str(chunk))
+                route_text("", final=True)
         except KeyboardInterrupt:
-            interrupted = True
             printer.flush()
             console.print("\n[yellow]⏹ interrupted[/]")
-        except Exception as e:
-            failed = True
+            raise TurnAborted()
+        except Exception:
             printer.flush()
-            console.print(f"\n[red]Error talking to the model:[/] {escape(str(e))}")
+            raise
         finally:
             printer.flush()
             meter.stop()
+            if stream is not None and callable(getattr(stream, "close", None)):
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+            self.gen_seconds += max(0.0, time.monotonic() - started)
             if ui:
                 ui.end_work()
                 ui.set_busy(False)
-        if failed:
-            if messages and messages[-1]["role"] == "user":
-                messages.pop()
-            return
+        raw = "".join(answer).strip()
+        if not raw:
+            raise RuntimeError("The model returned no response text.")
         console.print()
         print_summary(meter)
-        messages.append({"role": "assistant", "content": full})
-        if interrupted:
+        if exact_tokens is not None:
+            self.usage_calls += 1
+            self.usage_tokens += exact_tokens
+        self.output_chars += sum(len(c) for c in answer)
+        self.last_reasoning = "".join(rationale).strip()
+        if rationale:
+            self.thinking_seconds += max(0.0, (state["ended"] or time.monotonic()) - started)
+            self.rationale_chunks.extend(rationale)
+        return raw
+
+    def generate(self):
+        available = [i for i in range(len(self.route_candidates)) if i not in self.failed]
+        if self.active in available:
+            available.remove(self.active)
+            available.insert(0, self.active)
+        queue = list(available)
+        empty_retries = {}
+        last_error = None
+        while queue:
+            index = queue.pop(0)
+            candidate = self.route_candidates[index]
+            retry_empty = empty_retries.get(index, 0) > 0
+            try:
+                self.apply_candidate(candidate)
+                call_messages = self.messages
+                if retry_empty:
+                    call_messages = list(self.messages) + [{
+                        "role": "system",
+                        "content": "Your previous reply was empty. Reply now with visible text or one complete action block (@@@ RUN ... @@@ END). Do not answer with reasoning only.",
+                    }]
+                raw = self.stream_once(call_messages, False if retry_empty else self.use_thinking)
+                self.active = index
+                return raw
+            except (TurnAborted, KeyboardInterrupt):
+                raise
+            except Exception as exc:
+                last_error = exc
+                if str(exc) == "The model returned no response text." and empty_retries.get(index, 0) < 2:
+                    empty_retries[index] = empty_retries.get(index, 0) + 1
+                    queue.insert(0, index)
+                    self.log("The model returned an empty reply. Retrying…", None)
+                    continue
+                self.failed.add(index)
+                remaining = [i for i in range(len(self.route_candidates)) if i not in self.failed]
+                if not remaining:
+                    raise RuntimeError("Every model/key entry in this route failed. Last error: " + str(exc)) from exc
+                nxt = self.route_candidates[remaining[0]]
+                self.log("This model or key did not complete the request. Switching to the next entry…", False,
+                         "Failed entry: {}\nReason: {}\nNext entry: {}".format(
+                             candidate.get("member_label") or candidate.get("model"), str(exc)[:1200],
+                             nxt.get("member_label") or nxt.get("model")))
+                queue = [i for i in remaining]
+        raise RuntimeError("No working model/key entry was found." + (f" {last_error}" if last_error else ""))
+
+    def stats(self):
+        seconds = max(self.gen_seconds, 0.0)
+        exact = self.gen_calls > 0 and self.usage_calls == self.gen_calls
+        tokens = self.usage_tokens if exact else (max(1, round(self.output_chars / 4)) if self.output_chars else 0)
+        rate = tokens / seconds if seconds > 0 and tokens > 0 else 0.0
+        return {"thought_seconds": round(seconds, 1), "output_tokens": int(tokens),
+                "tokens_per_second": round(rate, 1), "tokens_estimated": not exact}
+
+    # ------------------------------------------------------------ actions
+    @staticmethod
+    def search_text(query, result):
+        if not result.get("ok"):
+            return "Web search for {!r} did not complete: {}".format(query, result.get("message", "unknown error"))
+        lines = ["Web search results for: " + query]
+        for number, item in enumerate(result.get("results", []), 1):
+            lines.append("{}. {}\nURL: {}\nSnippet: {}".format(
+                number, item.get("title", "Untitled"), item.get("url", ""), item.get("snippet", "")))
+        return "\n\n".join(lines)
+
+    def do_command(self, command):
+        chat = self.s.chat
+        try:
+            self.app.prewarm_chat_environment(self.s.chat_id, with_pip=self.app._command_needs_pip(command))
+        except Exception:
+            pass
+        console.print(Panel(
+            Syntax(command, "bash", theme="ansi_dark", word_wrap=True, background_color="default"),
+            title="[bold]Run command[/]", border_style="red",
+            subtitle="sandboxed · needs your OK", subtitle_align="right",
+        ))
+        detail = "This exact command runs in the session's isolated workspace" + (
+            " / linked folder" if chat.get("linked_folder") else "") + "."
+        approved, item = self.approval("command", "Run terminal command", detail=detail, command=command)
+        if not approved:
+            return "[Command declined] The user declined this command. It was not executed: " + command
+        try:
+            result = self.app.run_command(self.s.chat_id, command)
+        except Exception as exc:
+            result = {"ok": False, "returncode": -1, "output": str(exc), "elapsed": None}
+        code = result.get("returncode", -1)
+        ok = bool(result.get("ok"))
+        output = str(result.get("output") or "(No terminal output.)")
+        elapsed = result.get("elapsed")
+        item["output"] = {"text": output, "returncode": code, "ok": ok, "elapsed": elapsed}
+        shown = output[:3000] + ("\n… (output truncated)" if len(output) > 3000 else "")
+        console.print(Panel(Text(shown), title="[bold]Output[/]", subtitle=f"exit {code}",
+                            subtitle_align="right", border_style="dim" if ok else "red"))
+        return ("[Actual terminal result]\nCommand: {}\nExit code: {}\nStatus: {}\nDuration: {}\nOutput:\n{}\n"
+                "Use this actual result; do not claim success when the exit code is non-zero.").format(
+            command, code, "succeeded" if ok else "failed",
+            (str(elapsed) + "s") if elapsed is not None else "not reported", output)
+
+    def do_write(self, action, target, body):
+        proposal = "@@@ {} {}\n{}\n@@@ END".format(action, target, body)
+        proposed, errors = self.app.artifacts_from_answer(proposal, self.s.chat_id)
+        if errors or not proposed:
+            message = "; ".join(errors) if errors else "No valid file proposal was produced."
+            self.log("File proposal rejected: " + target, False, message)
+            return "[File proposal rejected] {}: {}".format(target, message)
+        artifact = proposed[0]
+        if not (artifact.get("validation") or {}).get("ok", False):
+            return "[File proposal rejected] {}: validation failed.".format(target)
+        self.artifacts[artifact["path"]] = artifact
+        path = Path(artifact["target_path"])
+        old = None
+        if artifact.get("exists"):
+            try:
+                old, _ = read_file(path)
+            except OSError:
+                old = None
+        display = str(path)
+        if old is None:
+            console.print(new_file_panel(display, artifact["content"]))
+        else:
+            console.print(diff_panel(old, artifact["content"], display, "Change"))
+        verb = "Create " if not artifact.get("exists") else "Replace "
+        approved, _ = self.approval("file", "Save file change", path=str(path), detail=verb + str(path))
+        if not approved:
+            artifact["validation"]["message"] = "Declined · not saved"
+            return "[File write declined] The file was not saved: " + str(path)
+        try:
+            saved = self.app.apply_approved_file(
+                self.s.chat_id, artifact["target_path"], artifact["content"],
+                artifact.get("expected_sha256"), artifact.get("linked_root", ""))
+        except Exception as exc:
+            artifact["validation"] = {"ok": False, "checked": True, "message": "Write failed: " + str(exc)}
+            self.log("Approved file write failed: " + str(path), False, str(exc))
+            return "[File write failed] {}: {}".format(target, exc)
+        self.s.undo.append((path, old))
+        artifact["workspace_written"] = True
+        artifact["approval_required"] = False
+        artifact["validation"]["message"] = "Saved with approval"
+        self.log("Saved approved file: " + str(path), True, saved.get("message", ""))
+        return "[File write succeeded] {}".format(saved.get("path"))
+
+    def do_read(self, argument):
+        if not argument:
+            return "[Read rejected] A file path is required."
+        try:
+            path = self.app.resolve_user_read_path(self.s.chat_id, argument)
+            content = self.app.read_agent_file(str(path))
+        except Exception as exc:
+            self.log("Local file read failed: " + argument, False, str(exc))
+            return "[Local file read failed]\nPath: {}\nReason: {}".format(argument, exc)
+        cap = file_cap() if not get_remote_model(self.model) else 120000
+        note = ""
+        if len(content) > cap:
+            note = "\n[Truncated: showing the first {:,} of {:,} characters.]".format(cap, len(content))
+            content = content[:cap]
+        self.log("Read local file: " + str(path), True, "Read-only access; no file was changed.")
+        return "[Local file read]\nPath: {}\n\n{}{}".format(path, content, note)
+
+    def do_list(self, argument):
+        try:
+            path = self.app.resolve_user_read_path(self.s.chat_id, argument or ".")
+            path, entries = self.app.list_agent_directory(str(path))
+        except Exception as exc:
+            self.log("Directory listing failed: " + (argument or "."), False, str(exc))
+            return "[Local directory listing failed]\nPath: {}\nReason: {}".format(argument, exc)
+        lines = ["[Local directory listing]\nPath: " + str(path)]
+        for item in entries:
+            label = "[DIR] " if item["directory"] else "[LINK] " if item.get("symlink") else "[FILE] "
+            lines.append(label + item["name"] + (" ({})".format(fmt_bytes(item["size"])) if item["size"] else ""))
+        self.log("Listed local directory: " + str(path), True, "Read-only listing; links are not followed.")
+        return "\n".join(lines)
+
+    def do_search(self, query):
+        self.log("Searching the web: " + query, None)
+        result = self.app.search_web(query)
+        details = self.search_text(query, result)
+        self.log(result.get("message", "Web search completed."), result.get("ok"), details[:10000])
+        return "[Web search result]\n" + details
+
+    def do_subagents(self, actions):
+        if self.mode != "agent":
+            return "[Subagents unavailable] Subagents can only be used in Agent mode. Continue without delegating."
+        actions = actions[:3]
+        records = [{"name": name, "task": task} for _pos, name, task in actions]
+        self.log("Lead agent delegated {} task(s) to subagents.".format(len(records)), None,
+                 "Children see only recent chat context and their task; they cannot read files, run commands or write.")
+
+        def run_child(task):
+            system = ("You are a read-only analysis subagent. Do not access files, request tools, run commands, "
+                      "or propose mutations. Return concise findings and uncertainties to the lead agent.")
+            history = self.messages[-8:] + [{"role": "system", "content": system},
+                                            {"role": "user", "content": "Delegated task: " + task}]
+            parts = []
+            for kind, chunk in stream_chat(history, model=self.model, think=False, temperature=0.2,
+                                           max_tokens=3072, reasoning_effort="medium"):
+                if kind == "content" and isinstance(chunk, str):
+                    parts.append(chunk)
+            return "".join(parts).strip()[:12000] or "No findings returned."
+
+        findings = []
+        with console.status(f"[bold]🤖 {len(records)} subagent(s) working…[/]"):
+            with concurrent_futures.ThreadPoolExecutor(max_workers=len(records), thread_name_prefix="kurt-sub") as pool:
+                futures = {pool.submit(run_child, rec["task"]): (i, rec) for i, rec in enumerate(records)}
+                for future in concurrent_futures.as_completed(futures):
+                    i, rec = futures[future]
+                    try:
+                        text, ok = future.result(), True
+                    except Exception as exc:
+                        text, ok = "Subagent failed: " + str(exc), False
+                    findings.append((i, rec["name"], text))
+                    self.log("Subagent {} {}.".format(rec["name"], "completed" if ok else "failed"), ok, text)
+        findings.sort()
+        return "[Subagent findings for the lead agent]\n" + "\n\n".join(
+            "### {}\n{}".format(name, text) for _i, name, text in findings)
+
+    def collect_actions(self, raw):
+        W = self.W
+        found = []
+        simple = (("RUN", W.RUN_ACTION_RE), ("SEARCH", W.SEARCH_ACTION_RE), ("READ", W.READ_ACTION_RE),
+                  ("LIST", W.LIST_ACTION_RE), ("AGENT_RUN", W.AGENT_RUN_ACTION_RE),
+                  ("AGENT_READ", W.AGENT_READ_ACTION_RE), ("AGENT_LIST", W.AGENT_LIST_ACTION_RE))
+        for name, regex in simple:
+            for match in regex.finditer(raw):
+                found.append((match.start(), name, W.action_argument(match)))
+        for match in W.SUBAGENT_ACTION_RE.finditer(raw):
+            found.append((match.start(), "SUBAGENT", (match.group(1).strip(), match.group(2).strip())))
+        for match in BLOCK_RE.finditer(raw):
+            if match.group(1) in ("WRITE", "EDIT"):
+                found.append((match.start(), match.group(1), (match.group(2).strip(), match.group(3))))
+        for match in W.AGENT_WRITE_ACTION_RE.finditer(raw):
+            found.append((match.start(), "AGENT_WRITE", (match.group(1).strip(), match.group(2))))
+        found.sort(key=lambda item: item[0])
+        return found
+
+    def run_actions(self, actions):
+        results = []
+        subs = [(pos, arg[0].strip()[:48] or "Subagent", arg[1].strip()) for pos, act, arg in actions if act == "SUBAGENT"]
+        if subs:
+            results.append(self.do_subagents(subs))
+        for _pos, action, argument in actions:
+            if action == "SUBAGENT":
+                continue
+            if action in ("RUN", "AGENT_RUN"):
+                results.append(self.do_command(argument) if argument
+                               else "[Command rejected] The command action did not include a command.")
+            elif action in ("WRITE", "EDIT", "AGENT_WRITE"):
+                results.append(self.do_write(action, argument[0], argument[1]))
+            elif action in ("READ", "AGENT_READ"):
+                results.append(self.do_read(argument))
+            elif action in ("LIST", "AGENT_LIST"):
+                results.append(self.do_list(argument))
+            else:
+                results.append(self.do_search(argument))
+        return results
+
+    # --------------------------------------------------------------- main
+    def prepare(self):
+        s, app, W = self.s, self.app, self.W
+        chat = s.chat
+        chat_id = s.chat_id
+        route_info = app.resolve_chat_route(s.route, MODEL)
+        self.route_info = route_info
+        previous = [
+            item for item in chat.get("messages", [])[-W.MAX_MESSAGES_PER_CHAT:]
+            if item.get("role") in ("user", "assistant")
+            and not str(item.get("content") or "").startswith(W.EMPTY_REPLY_PLACEHOLDER_PREFIX)
+            and str(item.get("content") or "").strip()
+        ]
+        app.store_chat_input(chat_id, self.user_text, len(chat.get("messages", [])) + 1)
+        context = app.context_contents(chat_id)
+        images, image_note = app.context_image_parts(chat_id)
+        self.messages = [
+            {"role": "system", "content": app.chat_system_prompt(chat_id, mode=self.mode, effort=self.effort)},
+            {"role": "system", "content": context + "\n" + image_note + "\nUploaded files are copied into this chat's private workspace. Separately, READ/LIST may inspect local paths that the current OS account can access; uploads do not alter the originals."},
+        ]
+        notes = project_notes()
+        if notes:
+            self.messages[0]["content"] += "\nProject notes from KURT.md (the user wrote these; follow them):\n" + notes + "\n"
+        self.messages.extend({"role": m["role"], "content": m["content"]} for m in previous)
+        payload = ([{"type": "text", "text": self.model_text}] + images) if images else self.model_text
+        self.messages.append({"role": "user", "content": payload})
+        record = {"role": "user", "content": self.user_text, "message_id": uuid.uuid4().hex}
+        attachments = [item["path"] for item in app.context_file_list(chat_id)]
+        if attachments:
+            record["attachments"] = attachments
+        chat["messages"].append(record)
+        chat["updated"] = time.time()
+        chat["model"] = route_info["model"]
+        chat["route"] = route_info["route"]
+        chat["effort"] = self.effort
+        chat["mode"] = self.mode
+        s.save()
+        self.route_candidates = route_info.get("candidates") or [route_info]
+        self.model = route_info["model"]
+
+    def run(self):
+        global CONTEXT_PCT
+        app, W, s = self.app, self.W, self.s
+        try:
+            self.prepare()
+        except Exception as exc:
+            console.print(f"[red]{escape(str(exc))}[/] [dim]Use /models or /route to pick a model.[/]")
             return
-        feedback = handle_actions(full)
-        if not feedback:
+        app.model_lock.acquire()
+        self.original_keys = list(PROVIDER_KEYS)
+        try:
+            self.apply_candidate(self.route_candidates[0])
+            final_raw, validation_errors = "", []
+            for round_index in range(self.MAX_ROUNDS):
+                trim_history(self.messages, self.model)
+                CONTEXT_PCT = 0 if get_remote_model(self.model) else context_percent(self.messages)
+                if round_index == 0 and W.DESKTOP_VISUAL_REQUEST_RE.search(self.user_text):
+                    final_raw = ("I can't capture or view your live desktop, screen, or GUI. Attach a screenshot to show me "
+                                 "what is on screen. Both modes can read files the current OS account may access; file "
+                                 "changes and commands still require your approval.")
+                    console.print(Text("K › ", style="bold bright_green"), end="")
+                    console.print(final_raw)
+                    break
+                if round_index == 0 and self.mode == "normal" and W.NORMAL_MODE_LOCAL_ACCESS_RE.search(self.user_text):
+                    self.log("Local access is available in Normal mode too.", True,
+                             "Reads and listings use your OS account's permissions; changes and commands need approval.")
+                raw = self.generate()
+                raw = W.ALT_ACTION_OPENER_RE.sub("\n@@@ ", raw)
+                rationale_blocks, _reply = W.split_thinking(raw)
+                round_rationale = "\n\n".join(p for p in (self.last_reasoning, rationale_blocks.strip()) if p).strip()
+                if round_rationale:
+                    self.worklog.append({"kind": "thinking", "text": "Thinking", "ok": None, "detail": round_rationale[:12000]})
+                if rationale_blocks.strip():
+                    console.print(Panel(Text(rationale_blocks.strip()[:RATIONALE_PANEL_LIMIT], style="dim"),
+                                        title="Rationale", border_style="dim", expand=False))
+                actions = self.collect_actions(raw)
+                if actions:
+                    if round_index >= self.MAX_ROUNDS - 1:
+                        validation_errors.append("Kurt reached the maximum of {} tool rounds.".format(self.MAX_ROUNDS))
+                    else:
+                        results = self.run_actions(actions)
+                        self.messages.append({"role": "assistant", "content": raw})
+                        failed_search = any("did not complete" in str(item) for item in results)
+                        self.messages.append({"role": "user", "content": "\n\n".join(results)
+                            + "\n\nUse these actual results. Continue the task; do not repeat completed actions."
+                            + ("\nWeb search failed. Do not retry it more than once more. If it keeps failing, answer in plain text from your own knowledge and say clearly that it could not be verified online."
+                               if failed_search else "")})
+                        continue
+                edit_marker = re.search(W.ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT|SYSTEM_PROMPT|AGENT_WRITE)\b", raw, re.I)
+                if not actions and not edit_marker:
+                    _r, probe = W.split_thinking(raw)
+                    probe = BLOCK_RE.sub("", W.strip_unsupported_actions(probe)).strip()
+                    if not re.search(r"\w", probe) and round_index < self.MAX_ROUNDS - 1:
+                        self.log("The model produced no visible answer. Asking it to answer in plain text.", False)
+                        self.messages.append({"role": "assistant", "content": raw})
+                        self.messages.append({"role": "user", "content": "Your previous reply had no visible answer: it contained only reasoning, an unsupported tool call, or an incomplete action block. Answer the user's last question directly in plain text now. If you need current information, use exactly one complete block: @@@ SEARCH, the query on the next line, then @@@ END. Do not use any other tool-call format."})
+                        continue
+                if edit_marker:
+                    preamble = raw[:edit_marker.start()]
+                    has_summary = re.search(r"(?i)change\s+summary|planned\s+changes|changes\s+to\s+make", preamble)
+                    if not has_summary and round_index < self.MAX_ROUNDS - 1:
+                        self.log("Requesting the required file-by-file change summary before accepting edits.", False)
+                        self.messages.append({"role": "assistant", "content": raw})
+                        self.messages.append({"role": "user", "content": "Your response contains WRITE/EDIT actions but no clear file-by-file Change summary before them. Provide a detailed Change summary describing exactly what each file will change and why, then reproduce the complete action blocks. Do not omit or shorten file contents."})
+                        continue
+                    if not has_summary:
+                        validation_errors.append("File changes were withheld because Kurt did not provide the required change summary.")
+                        final_raw = "Kurt proposed file changes but did not provide the required file-by-file Change summary. No files from that response were accepted."
+                        break
+                new_artifacts, validation_errors = app.artifacts_from_answer(raw, s.chat_id)
+                for artifact in [a for a in new_artifacts if a.get("kind") == "system_prompt"]:
+                    self.propose_system_prompt(artifact)
+                if validation_errors and round_index < self.MAX_ROUNDS - 1:
+                    details = "\n".join("- " + item for item in validation_errors)
+                    self.log("A generated file did not pass validation. Asking Kurt to repair it.", False, details)
+                    self.messages.append({"role": "assistant", "content": raw})
+                    self.messages.append({"role": "user", "content": "The application rejected these file changes during syntax/structure validation:\n" + details + "\nFix the reported problems, provide a concise Change summary, and return complete corrected file actions. Do not claim checks passed unless they do."})
+                    continue
+                final_raw = raw
+                break
+            self.finish(final_raw, validation_errors)
+        except TurnAborted:
+            console.print("[dim]Turn stopped. Your message is saved; ask again or rephrase.[/]")
+        except KeyboardInterrupt:
+            console.print("\n[yellow]⏹ interrupted[/]")
+        except Exception as exc:
+            console.print(f"\n[red]Error talking to the model:[/] {escape(str(exc))}")
+        finally:
+            PROVIDER_KEYS[:] = self.original_keys
+            app.model_lock.release()
+
+    def propose_system_prompt(self, artifact):
+        content = str(artifact.get("content") or "").strip()
+        if not content:
             return
-        messages.append({"role": "user", "content": feedback})
-    console.print("[yellow]Stopped after several automatic steps. Say 'continue' to go on.[/]")
+        console.print(Panel(Text(_redact_keys(content)[:6000]), title="Proposed Kurt system prompt", border_style="yellow"))
+        if self.ask("Apply this prompt to Kurt?"):
+            self.app.settings["system_prompt"] = content
+            self.app.save_settings()
+            self.log("Applied the proposed system prompt.", True)
+        else:
+            self.log("Declined the proposed system prompt.", True)
+
+    def finish(self, final_raw, validation_errors):
+        W, app, s = self.W, self.app, self.s
+        chat = s.chat
+        stats = self.stats()
+        _unused, reply = W.split_thinking(final_raw)
+        reply = re.sub(r"\n{3,}", "\n\n", W.strip_unsupported_actions(reply)).strip()
+        if validation_errors:
+            reply = (reply + "\n\n**Validation warning:** " + "; ".join(validation_errors)).strip()
+            console.print(f"[yellow]Validation warning:[/] {escape('; '.join(validation_errors))}")
+        visible = BLOCK_RE.sub("", reply).strip()
+        visible, code_artifacts = W.extract_long_code_artifacts(visible)
+        for artifact in code_artifacts:
+            stem, suffix = os.path.splitext(artifact["path"])
+            candidate, number = artifact["path"], 2
+            taken = {str(n).casefold() for n in self.artifacts}
+            while candidate.casefold() in taken:
+                candidate = "{}-{}{}".format(stem or "code-block", number, suffix)
+                number += 1
+            artifact["path"] = candidate
+            self.artifacts[candidate] = artifact
+        artifacts = list(self.artifacts.values())
+        if visible and chat.get("title") in (None, "New conversation"):
+            chat["title"] = app.generate_chat_title(self.user_text, visible, self.model)
+        if (not visible or not re.search(r"\w", visible)) and not artifacts:
+            visible = W.EMPTY_REPLY_PLACEHOLDER_PREFIX + " or validated file artifact. Check the work log for tool and validation results."
+        rationale = "\n\n".join(str(i.get("detail") or "") for i in self.worklog
+                                if isinstance(i, dict) and i.get("kind") == "thinking").strip()
+        chat["messages"].append({
+            "role": "assistant", "content": visible, "artifacts": artifacts,
+            "worklog": self.worklog, "reasoning": rationale,
+            "thinking_seconds": round(self.thinking_seconds, 1),
+            "effort": self.effort, "mode": self.mode, "route": self.route_info["route"],
+            "model": self.model, "stats": stats,
+        })
+        chat["updated"] = time.time()
+        chat["model"] = self.model
+        chat["effort"] = self.effort
+        chat["mode"] = self.mode
+        s.save()
 
 
-HELP = """[bold]Commands[/]
-  /help           show this help
-  /models         switch, add or remove local and API models; configure agents
-  /keys           add, edit, group, or remove provider API keys
-  /speed          show the detected hardware and the speed settings in use
-                  (/speed refresh re-detects it)
-  /think [on|off] turn thinking on or off (off is much faster on computers without a GPU)
-  /fast [model]   switch to a small, much faster model (default qwen2.5-coder:3b)
-  /files          list project files
-  /add <path>     put a file's contents into the conversation (or use @path in a message)
-  /auto           toggle auto-accept for edits (new files and view-only commands never ask)
-  /undo           revert the last applied change
-  /context        show how full the model's context window is
-  /compact        summarise the conversation so far to free up context
-  /clear          forget the conversation
-  /exit           quit  (Ctrl+C while Kurt is typing stops generation)
+def run_chat_turn(session, user_text, model_text=None):
+    ChatTurn(session, user_text, model_text).run()
 
+
+# ------------------------------------------------------------------ commands ---
+HELP = """[bold]Conversations[/]  (shared with the browser interface)
+  /new              start a new conversation
+  /chats            pick a saved conversation to resume
+  /resume \\[n|id]    resume by list number, id prefix, or the latest one
+  /rename <title>   rename this conversation
+  /delete           delete this conversation with its workspace and environment
+
+[bold]Working[/]
+  /mode \\[normal|agent]  Normal: everyday help · Agent: multi-step work with subagents
+  /link \\[path]      let Kurt edit a folder (default: the current one); every change still needs approval
+  /unlink           go back to this conversation's private workspace
+  /workspace        show the working folder, private workspace, environment and sandbox
+  /env \\[pip|reset]  show, prepare (with pip) or delete this conversation's private Python environment
+  /files            list the files in the working folder
+  /add <path>       copy a file into this conversation's workspace (or use @path in a message)
+  /undo             restore the last file Kurt saved in this session
+
+[bold]Models[/]
+  /models           switch, add or remove local and API models
+  /route            choose an API key, failover group or model route for this conversation
+  /keys             add, edit or remove provider API keys
+  /system-prompt \\[file <path>|reset]  show, replace or reset Kurt's system prompt
+  /speed \\[refresh]  hardware report and speed settings
+  /think \\[on|off|auto]  thinking for local models
+  /fast \\[model]     switch to a small, fast local model
+  /context          how full the model's context window is
+  /exit             quit  (Esc stops a response)
+
+Every command and every file change asks for approval first.
 [bold]Tip[/] put standing instructions for a project in a KURT.md file in its root folder."""
 
 
-def new_messages(announce=False):
-    system = SYSTEM.replace("{cwd}", str(Path.cwd()))
-    notes = project_notes()
-    if notes:
-        system += "\nProject notes from KURT.md (the user wrote these; follow them):\n" + notes + "\n"
-        if announce:
-            console.print("[dim]📌 loaded project notes from KURT.md[/]")
-    return [{"role": "system", "content": system}]
+def show_system_prompt(session):
+    prompt = session.app.chat_system_prompt(session.chat_id, mode=session.mode,
+                                            effort="thinking" if session.mode == "normal" else "expert")
+    console.print(Panel(Text(_redact_keys(prompt)), title="Active Kurt system prompt", border_style="green"))
+    console.print(f"[dim]{DEFAULT_PROMPT_NOTE} API keys are redacted. Change it with /system-prompt file <path> or reset it with /system-prompt reset.[/]")
 
 
-def context_report(messages):
-    used, budget = context_chars(messages), context_budget()
-    pct = context_percent(messages)
-    style = "green" if pct < 70 else "yellow" if pct < 90 else "red"
-    console.print(
-        f"context: [{style}]{pct}%[/] full · about {used // 3:,} of {budget // 3:,} tokens · "
-        f"{len(messages)} messages"
-    )
-    if pct >= 70:
-        console.print("[dim]Running low: /compact summarises the chat, /clear starts fresh.[/]")
+def chat_label(chat, index=None):
+    title = chat.get("title") or "New conversation"
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(chat.get("updated") or 0))
+    head = f"{index}. " if index else ""
+    return "{}{}".format(head, title), "{} · {} · {}{}".format(
+        chat.get("mode", "normal"), when, (chat.get("id") or "")[:8], " · linked" if chat.get("linked_folder") else "")
 
 
-def compact_conversation(messages):
-    """Replace the middle of the conversation with a model-written summary."""
-    tail = 2 if len(messages) >= 4 and messages[-2]["role"] == "user" else 1
-    middle = messages[1:len(messages) - tail]
-    if len(middle) < 4:
-        console.print("[dim]nothing worth compacting yet[/]")
+def reload_chats(session):
+    session.app.chats = session.web._load_json(session.web.CHATS_FILE, session.app.chats)
+
+
+def discard_empty(app, chat_id):
+    """Conversations that never received a message are not kept."""
+    chat = app.get_chat(chat_id)
+    if chat is None or chat.get("messages"):
         return
-    before = context_chars(messages)
-    parts = []
-    for m in middle:
-        who = "User" if m["role"] == "user" else "Kurt"
-        parts.append(f"{who}: {m['content'][:1500]}")
-    transcript = "\n\n".join(parts)[-max(6000, CTX * 2):]
-    prompt = (
-        "Summarise this coding session so the assistant can carry on without the full history. "
-        "List: the user's goals, files that were read or changed (and how), decisions made, "
-        "problems still open, and any facts worth remembering. Plain text, under 300 words. "
-        "Do not use @@@ blocks.\n\n" + transcript
-    )
-    try:
-        with console.status("Summarising the conversation..."):
-            summary = chat_once(MODEL, [{"role": "user", "content": prompt}], temperature=0.1,
-                                timeout=600, think=False)
-    except Exception as e:
-        console.print(f"[red]Could not summarise:[/] {escape(str(e))}")
-        return
-    summary = summary.replace("@@@", "@ @ @")
-    if not summary:
-        console.print("[red]The model returned an empty summary; nothing was changed.[/]")
-        return
-    head = messages[0]
-    rest = messages[len(messages) - tail:]
-    messages[:] = [
-        head,
-        {"role": "user", "content": f"[Summary of the earlier conversation]\n{summary}\n\n"
-                                    f"Files in this project:\n{project_tree()}"},
-        {"role": "assistant", "content": "Understood. I'll continue from that summary."},
-    ] + rest
-    after = context_chars(messages)
-    console.print(f"[green]✔ compacted[/] {before // 3:,} → {after // 3:,} tokens "
-                  f"({context_percent(messages)}% full)")
+    app.chats[:] = [c for c in app.chats if c.get("id") != chat_id]
+    app.save_chats()
+    for folder in (CONFIG_DIR / "web_workspaces" / chat_id, CONFIG_DIR / "web_envs" / chat_id):
+        shutil.rmtree(folder, ignore_errors=True)
 
 
-def handle_command(line, messages):
-    global AUTO, THINK
+def switch_chat(session, chat):
+    if session.chat_id != chat["id"]:
+        discard_empty(session.app, session.chat_id)
+    session.chat_id = chat["id"]
+    session.route = str(chat.get("route") or "")
+    session.undo = []
+    session.sync_cwd()
+    linked = chat.get("linked_folder")
+    console.print(f"[green]✔ {escape(chat.get('title') or 'New conversation')}[/] [dim]· {session.tag()} · {escape(short_path(Path.cwd(), 60))}[/]")
+
+
+def offer_link(session):
+    here = session.origin
+    if here == Path.home().resolve() or here == Path(here.anchor):
+        console.print("[dim]Working in this conversation's private workspace. Use /link <folder> to let Kurt edit a project.[/]")
+        session.sync_cwd()
+        return
+    answer = Prompt.ask(
+        f"Link {short_path(here, 60)} so Kurt can read and edit it? (each change still needs your approval)",
+        choices=["y", "n"], default="y", console=console)
+    if answer == "y":
+        session.chat["linked_folder"] = str(here)
+        session.save()
+        console.print("[green]✔ linked[/]")
+    session.sync_cwd()
+
+
+def new_session_chat(session, mode=None):
+    chat = session.app.create_chat()
+    if mode in CLI_MODES:
+        chat["mode"] = mode
+        chat["effort"] = "thinking" if mode == "normal" else "expert"
+    session.chat_id = chat["id"]
+    session.route = str(chat.get("route") or "")
+    session.undo = []
+    session.save()
+    return chat
+
+
+def env_report(session):
+    app = session.app
+    env_root = app.chat_environment(session.chat_id)
+    bin_dir = env_root / ("Scripts" if os.name == "nt" else "bin")
+    python = bin_dir / ("python.exe" if os.name == "nt" else "python")
+    pip = bin_dir / ("pip.exe" if os.name == "nt" else "pip")
+    table = Table(box=None, show_header=False, padding=(0, 2))
+    table.add_column(style="bold")
+    table.add_column()
+    table.add_row("Conversation", f"{session.chat.get('title')}  [dim]{session.chat_id[:8]}[/]")
+    table.add_row("Mode", session.mode)
+    table.add_row("Working folder", escape(str(session.work_root())) + ("  [dim](linked)[/]" if session.linked else "  [dim](private)[/]"))
+    table.add_row("Private workspace", escape(str(app.chat_workspace(session.chat_id))))
+    table.add_row("Python environment", escape(str(env_root)) + ("  [green]ready[/]" if python.is_file() else "  [dim]built on first command[/]"))
+    table.add_row("pip", "installed" if pip.exists() else "added on first pip command")
+    table.add_row("Command sandbox", "macOS Seatbelt" if sandbox_available() else "[red]unavailable on this platform: commands will not run[/]")
+    console.print(Panel(table, title="Workspace", border_style="green", expand=False))
+
+
+def handle_command(session, line):
+    global THINK, MODEL, SAVED_MODEL
+    app, W = session.app, session.web
     cmd, _, arg = line.partition(" ")
-    cmd = cmd.lower()
+    cmd, arg = cmd.lower(), arg.strip()
     if cmd in ("/exit", "/quit", "/q"):
         return "exit"
     if cmd == "/help":
         console.print(HELP)
+    elif cmd in ("/new", "/clear"):
+        discard_empty(app, session.chat_id)
+        new_session_chat(session)
+        console.print("[green]✔ new conversation[/]")
+        offer_link(session)
+    elif cmd in ("/chats", "/resume"):
+        reload_chats(session)
+        chats = list(app.chats)
+        if not chats:
+            console.print("[dim]no saved conversations[/]")
+            return None
+        pick = None
+        if cmd == "/resume" and arg:
+            if arg.isdigit() and 1 <= int(arg) <= len(chats):
+                pick = chats[int(arg) - 1]
+            else:
+                pick = next((c for c in chats if str(c.get("id", "")).startswith(arg)), None)
+            if pick is None and arg.lower() == "latest":
+                pick = chats[0]
+        else:
+            options = []
+            for number, chat in enumerate(chats[:30], 1):
+                label, description = chat_label(chat)
+                options.append({"label": label, "description": description})
+            choice = select_menu("Conversations · shared with the browser", options)
+            if choice is None:
+                for number, chat in enumerate(chats[:30], 1):
+                    label, description = chat_label(chat, number)
+                    console.print(f"  {escape(label)}  [dim]{escape(description)}[/]")
+                console.print("[dim]Use /resume <number> to open one.[/]")
+                return None
+            pick = chats[choice]
+        if pick is None:
+            console.print("[red]No such conversation.[/]")
+        else:
+            switch_chat(session, pick)
+    elif cmd == "/rename":
+        if not arg:
+            console.print("usage: /rename <title>", markup=False)
+        else:
+            session.chat["title"] = arg[:80]
+            session.save()
+            console.print("[green]✔ renamed[/]")
+    elif cmd == "/delete":
+        title = session.chat.get("title")
+        if Prompt.ask(f"Delete '{title}' with its workspace and environment? This cannot be undone.",
+                      choices=["y", "n"], default="n", console=console) != "y":
+            return None
+        old = session.chat_id
+        app.chats[:] = [c for c in app.chats if c.get("id") != old]
+        for folder in (CONFIG_DIR / "web_workspaces" / old, CONFIG_DIR / "web_envs" / old):
+            shutil.rmtree(folder, ignore_errors=True)
+        new_session_chat(session)
+        session.sync_cwd()
+        console.print("[green]✔ deleted[/] [dim]· started a new conversation (use /link to relink a folder)[/]")
+    elif cmd == "/mode":
+        wanted = arg.lower()
+        if not wanted:
+            console.print(f"mode: [bold]{session.mode}[/]  [dim](/mode normal · /mode agent)[/]")
+        elif wanted in CLI_MODES:
+            session.chat["mode"] = wanted
+            session.chat["effort"] = "thinking" if wanted == "normal" else "expert"
+            session.save()
+            session.sync_cwd()
+            console.print(f"[green]✔ {wanted} mode[/]")
+        else:
+            console.print("usage: /mode [normal|agent]", markup=False)
+    elif cmd == "/link":
+        target = Path(arg).expanduser() if arg else session.origin
+        if not target.is_absolute():
+            target = session.origin / target
+        if target.is_symlink() or not target.is_dir():
+            console.print("[red]That is not a regular folder.[/]")
+            return None
+        target = target.resolve()
+        if target == Path(target.anchor):
+            console.print("[red]Refusing to link the filesystem root.[/]")
+            return None
+        if target == Path.home().resolve() and Prompt.ask(
+                "That is your whole home folder. Link it anyway?", choices=["y", "n"], default="n", console=console) != "y":
+            return None
+        session.chat["linked_folder"] = str(target)
+        session.save()
+        session.sync_cwd()
+        console.print(f"[green]✔ linked[/] {escape(str(target))} [dim]· changes and commands still need approval[/]")
+    elif cmd == "/unlink":
+        session.chat["linked_folder"] = ""
+        session.save()
+        session.sync_cwd()
+        console.print("[green]✔ unlinked[/] [dim]· working in the private workspace[/]")
+    elif cmd in ("/workspace", "/where"):
+        env_report(session)
+    elif cmd == "/env":
+        sub = arg.lower()
+        if sub == "pip":
+            with console.status("Preparing this conversation's environment with pip..."):
+                try:
+                    app.ensure_chat_environment(session.chat_id, with_pip=True)
+                except Exception as exc:
+                    console.print(f"[red]{escape(str(exc))}[/]")
+        elif sub == "reset":
+            if Prompt.ask("Delete this conversation's Python environment? It is rebuilt on the next command.",
+                          choices=["y", "n"], default="n", console=console) == "y":
+                shutil.rmtree(app.chat_environment(session.chat_id), ignore_errors=True)
+                with app._env_jobs_lock:
+                    app._env_jobs.clear()
+                console.print("[green]✔ environment removed[/]")
+        env_report(session)
     elif cmd == "/models":
+        before = MODEL
         models_menu()
+        app.invalidate_installed_models()
+        if MODEL != before:
+            session.route = "model|" + MODEL
+            session.chat["route"] = session.route
+            session.chat["model"] = MODEL
+            app.settings["model"] = MODEL
+            app.save_settings()
+            session.save()
+        retune()
+    elif cmd == "/route":
+        app.sync_api_groups()
+        routes = app.list_chat_routes()
+        if not routes:
+            console.print("[yellow]No routes yet. Add a model with /models.[/]")
+            return None
+        choice = select_menu("Route for this conversation", [{"label": r["label"], "description": r.get("kind", "")} for r in routes])
+        if choice is not None:
+            session.route = routes[choice]["value"]
+            session.chat["route"] = session.route
+            session.save()
+            console.print(f"[green]✔ route:[/] {escape(routes[choice]['label'])}")
     elif cmd == "/keys":
         provider_keys_menu()
+    elif cmd == "/system-prompt":
+        sub, _, rest = arg.partition(" ")
+        if sub.lower() == "reset":
+            app.settings["system_prompt"] = ""
+            app.save_settings()
+            console.print("[green]✔ Kurt's default system prompt restored[/]")
+        elif sub.lower() == "file" and rest.strip():
+            try:
+                text = Path(rest.strip()).expanduser().read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                console.print(f"[red]Could not read that file:[/] {escape(str(exc))}")
+                return None
+            app.settings["system_prompt"] = text.strip()
+            app.save_settings()
+            console.print("[green]✔ system prompt replaced[/]")
+        elif sub:
+            console.print("usage: /system-prompt [file <path>|reset]", markup=False)
+        else:
+            show_system_prompt(session)
     elif cmd == "/speed":
-        speed_report(refresh=arg.strip().lower() == "refresh")
+        speed_report(refresh=arg.lower() == "refresh")
     elif cmd == "/fast":
-        name = arg.strip() or FAST_MODEL
+        name = arg or FAST_MODEL
         if not any(same_model(m["name"], name) for m in installed_models()):
             console.print(f"[bold]Downloading[/] {escape(name)} (small, one time) ...")
             if not pull_model(name):
                 console.print("[red]Download failed.[/] Check the name and your connection.")
                 return None
         set_model(name)
+        app.invalidate_installed_models()
+        session.route = "model|" + name
+        session.chat["route"] = session.route
+        session.save()
         console.print("[dim]Use /models to go back to the bigger model.[/]")
     elif cmd == "/think":
-        a = arg.strip().lower()
-        if a in ("on", "off"):
-            THINK = a == "on"
-        elif a in ("auto", "default"):
+        wanted = arg.lower()
+        if wanted in ("on", "off"):
+            THINK = wanted == "on"
+        elif wanted in ("auto", "default"):
             THINK = None
-        elif a:
+        elif wanted:
             console.print("usage: /think [on|off|auto]", markup=False)
             return None
         else:
             THINK = not think_enabled()
         save_config()
         retune()
-        console.print(f"thinking: [bold]{'ON' if think_enabled() else 'OFF'}[/]"
-                      + (" [dim](auto)[/]" if THINK is None else ""))
+        console.print(f"thinking: [bold]{'ON' if think_enabled() else 'OFF'}[/]" + (" [dim](auto)[/]" if THINK is None else ""))
     elif cmd == "/files":
-        console.print(project_tree(), markup=False)
-    elif cmd == "/context":
-        context_report(messages)
-    elif cmd == "/compact":
-        compact_conversation(messages)
-    elif cmd == "/clear":
-        messages[:] = new_messages(announce=True)
-        PENDING_NOTES.clear()
-        console.print("[dim]conversation cleared[/]")
-    elif cmd == "/auto":
-        AUTO = not AUTO
-        console.print(f"auto-accept edits: [bold]{'ON' if AUTO else 'OFF'}[/]")
+        console.print(app.tree(session.work_root()), markup=False)
     elif cmd == "/add":
-        p = safe_path(arg)
-        if not p or not p.is_file():
-            console.print("[red]file not found[/]")
+        source = Path(arg).expanduser() if arg else None
+        if source is not None and not source.is_absolute():
+            source = (session.linked and Path(session.linked) or session.origin) / source
+        if source is None or not source.is_file() or source.is_symlink():
+            console.print("[red]Give the path of a regular file.[/]")
+        elif app._skip_context_name(source.name):
+            console.print("[red]That file looks like it holds credentials, so it was not copied.[/]")
+        elif source.stat().st_size > 20_000_000:
+            console.print("[red]That file is larger than 20 MB.[/]")
         else:
-            text, _ = read_file(p)
-            if looks_binary(text):
-                console.print("[red]that looks like a binary file[/]")
-                return None
-            messages.append({"role": "user", "content": f"[File {arg}]\n{clip_text(text, arg.strip(), file_cap())}"})
-            messages.append({"role": "assistant", "content": f"Got it, I have {arg}."})
-            console.print(f"[dim]added {arg}[/]")
+            destination = app.chat_workspace(session.chat_id) / source.name
+            number = 2
+            while destination.exists():
+                destination = destination.with_name(f"{source.stem}-{number}{source.suffix}")
+                number += 1
+            shutil.copy2(source, destination)
+            console.print(f"[dim]added {escape(source.name)} to this conversation's workspace; the original is untouched[/]")
+    elif cmd == "/context":
+        console.print(f"context: {CONTEXT_PCT}% of the local model's window" if CONTEXT_PCT
+                      else "context: not tracked for hosted models or an empty history")
     elif cmd == "/undo":
-        if not UNDO:
-            console.print("[dim]nothing to undo[/]")
+        if not session.undo:
+            console.print("[dim]nothing to undo in this session[/]")
         else:
-            p, old, crlf = UNDO.pop()
+            path, old = session.undo.pop()
             if old is None:
-                p.unlink(missing_ok=True)
+                path.unlink(missing_ok=True)
             else:
-                write_file(p, old, crlf)
-            console.print(f"[green]↩ reverted {p.name}[/]")
+                write_file(path, old, False)
+            console.print(f"[green]↩ reverted {escape(path.name)}[/]")
     else:
         console.print("[red]unknown command[/] — try /help")
     return None
-
 
 
 # --------------------------------------------------------------- Input box ---
@@ -4045,44 +4444,62 @@ def read_input():
     """Read from Kurt's fixed bottom input box when the terminal supports it."""
     if TERMINAL_UI and TERMINAL_UI.enabled:
         return TERMINAL_UI.read_line()
-    return console.input("[bold bright_green]kurt >[/] [dim]/help · /models · /keys · @file[/] ")
+    return console.input("[bold bright_green]kurt >[/] [dim]/help · /mode · /models · @file[/] ")
 
 
 def _cfg_is_first_scan():
     return not HW_CACHE_FILE.exists()
 
 
-def main():
+def pick_resume(app, resume):
+    chats = list(app.chats)
+    if not chats:
+        return None
+    if resume in ("", "latest"):
+        return chats[0]
+    if resume.isdigit() and 1 <= int(resume) <= len(chats):
+        return chats[int(resume) - 1]
+    return next((c for c in chats if str(c.get("id", "")).startswith(resume)), None)
+
+
+def cli_main(resume=None, mode=None):
     global TERMINAL_UI, TIP_SHOWN, CONTEXT_PCT, MODEL, SAVED_MODEL
-    args = [arg for arg in sys.argv[1:] if arg not in ("-h", "--help", "-v", "--version")]
-    if len(sys.argv) > 1 and sys.argv[1] in ("-v", "--version"):
-        print(f"kurt {__version__}")
-        return
-    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
-        print(__doc__)
-        print("\nLaunch modes: kurt (terminal) · kurt --localhost (browser interface)")
-        print("Env: KURT_MODEL, KURT_CTX, KURT_THREADS, KURT_BATCH, KURT_THINK, KURT_TUNE,")
-        print("     KURT_AGENTS, KURT_MAX_AGENTS, OLLAMA_HOST")
-        return
-    if args == ["--localhost"]:
-        from kurt_web import launch_web
-        launch_web()
-        return
-    if args:
-        print("Usage: kurt [--localhost]")
-        sys.exit(2)
+    sys.modules.setdefault("kurt", sys.modules[__name__])
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
     if os.name == "nt":
         os.system("")
-
-    print_brand()
+    import kurt_web as web
+    app = web.KurtWebApp()
+    app.sync_api_groups()
     if MODEL.startswith("remote:") and not get_remote_model(MODEL):
         console.print("[yellow]The saved API model no longer exists. Choose another model with /models.[/]")
         MODEL = SAVED_MODEL = DEFAULT_MODEL
         save_config()
+    chat = pick_resume(app, resume) if resume is not None else None
+    if resume is not None and chat is None:
+        console.print("[yellow]No matching conversation; starting a new one.[/]")
+    fresh = chat is None
+    if fresh:
+        chat = app.create_chat()
+        if mode in CLI_MODES:
+            chat["mode"] = mode
+            chat["effort"] = "thinking" if mode == "normal" else "expert"
+            app.save_chats()
+    elif mode in CLI_MODES:
+        chat["mode"] = mode
+        chat["effort"] = "thinking" if mode == "normal" else "expert"
+        app.save_chats()
+    session = CliSession(app, web, chat)
+    if not fresh and session.linked:
+        session.sync_cwd()
+    elif not fresh:
+        session.sync_cwd()
+
+    print_brand([f"{session.mode} mode · {'linked folder' if session.linked else 'private workspace'}",
+                 f"conversation: {(chat.get('title') or 'New conversation')[:50]}"])
     if get_remote_model(MODEL):
         console.print(f"[dim green]☁ {escape(short_model(MODEL, 70))}[/]")
     else:
@@ -4100,25 +4517,23 @@ def main():
         console.print("[dim]Tip: /speed shows Ollama settings that can make it even faster.[/]")
         TIP_SHOWN = True
         save_config()
-
-    messages = new_messages(announce=True)
-    messages.append(
-        {"role": "user", "content": f"Files in this project:\n{project_tree()}"}
-    )
-    messages.append(
-        {"role": "assistant", "content": "Understood. I can READ, EDIT, WRITE and RUN as needed. What should we work on?"}
-    )
+    if not sandbox_available():
+        console.print("[yellow]Command execution needs macOS (Seatbelt sandbox). Reading, searching and file edits still work; commands will not run.[/]")
+    if fresh:
+        offer_link(session)
+    console.print(f"[dim]{session.tag()} · /help for commands · Kurt asks before every command and file change[/]")
 
     ui = TerminalUI()
+    ui.tag = session.tag()
     if not ui.enabled:
-        console.print("[dim]/help · /models · /keys · @file[/]")
+        console.print("[dim]/help · /mode · /models · @file[/]")
     if ui.start():
         TERMINAL_UI = ui
         ui.draw_footer(preserve_cursor=True)
 
     try:
         while True:
-            CONTEXT_PCT = context_percent(messages)
+            CONTEXT_PCT = 0
             try:
                 line = read_input().strip()
             except (EOFError, KeyboardInterrupt):
@@ -4128,45 +4543,93 @@ def main():
                 continue
             if TERMINAL_UI and TERMINAL_UI.enabled:
                 console.print()
-                console.print(
-                    Text.assemble(("> ", "bold bright_green"), (TERMINAL_UI.last_display.strip(), "bold"))
-                )
-            if line.startswith("/"):
+                console.print(Text.assemble(("> ", "bold bright_green"), (TERMINAL_UI.last_display.strip(), "bold")))
+            if line.startswith("/") and not web.SYSTEM_PROMPT_REQUEST_RE.fullmatch(line):
                 try:
-                    if handle_command(line, messages) == "exit":
+                    if handle_command(session, line) == "exit":
                         break
                 except (KeyboardInterrupt, EOFError):
                     console.print("\n[yellow]cancelled[/]")
+                except Exception as exc:
+                    console.print(f"[red]{escape(str(exc))}[/]")
                 continue
-            content = attach_mentions(line)
-            if PENDING_NOTES:
-                content = ("[Earlier changes the user rejected]\n" + "\n".join(PENDING_NOTES)
-                           + "\n\n" + content)
-                PENDING_NOTES.clear()
-            messages.append({"role": "user", "content": content})
-            if AGENTS:
-                try:
-                    if TERMINAL_UI and TERMINAL_UI.enabled:
-                        TERMINAL_UI.set_busy(True)
-                    with BusyListener():
-                        extra = run_agents(line)
-                except KeyboardInterrupt:
-                    console.print("\n[yellow]⏹ interrupted[/]")
-                    messages.pop()
-                    continue
-                finally:
-                    if TERMINAL_UI and TERMINAL_UI.enabled:
-                        TERMINAL_UI.set_busy(False)
-                if extra:
-                    messages[-1]["content"] += extra
+            if web.SYSTEM_PROMPT_REQUEST_RE.fullmatch(line):
+                show_system_prompt(session)
+                continue
             try:
-                run_turn(messages)
+                run_chat_turn(session, line, attach_mentions(line))
             except KeyboardInterrupt:
                 console.print("\n[yellow]⏹ interrupted[/]")
     finally:
         if TERMINAL_UI and TERMINAL_UI.enabled:
             TERMINAL_UI.stop()
         TERMINAL_UI = None
+        discard_empty(app, session.chat_id)
+
+
+# -------------------------------------------------------------- Entry point ---
+USAGE = """usage: kurt [--cli] [options]
+
+  kurt                  open the browser interface on localhost (default)
+  kurt --cli            use Kurt in this terminal instead
+
+options:
+  --port N              browser interface port (default 1277, or KURT_WEB_PORT)
+  --resume [id|n]       (--cli) continue the latest or a chosen conversation
+  --mode normal|agent   (--cli) mode for the new or resumed conversation
+  -v, --version         show the version
+  -h, --help            show this help"""
+
+
+def main():
+    argv = sys.argv[1:]
+    if any(a in ("-v", "--version") for a in argv):
+        print(f"kurt {__version__}")
+        return
+    if any(a in ("-h", "--help") for a in argv):
+        print(__doc__)
+        print(USAGE)
+        print("\nEnv: KURT_MODEL, KURT_CTX, KURT_THREADS, KURT_BATCH, KURT_THINK, KURT_TUNE,")
+        print("     KURT_WEB_PORT, KURT_WEB_FALLBACK_PORT, KURT_MAX_AGENTS, OLLAMA_HOST")
+        return
+    cli, resume, mode, port = False, None, None, None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        nxt = argv[i + 1] if i + 1 < len(argv) else None
+        if arg == "--cli":
+            cli = True
+        elif arg in ("--localhost", "--web"):
+            pass
+        elif arg == "--resume":
+            if nxt is not None and not nxt.startswith("-"):
+                resume, i = nxt, i + 1
+            else:
+                resume = "latest"
+        elif arg == "--mode" and nxt in CLI_MODES:
+            mode, i = nxt, i + 1
+        elif arg == "--port" and nxt and nxt.isdigit():
+            port, i = nxt, i + 1
+        else:
+            print(USAGE)
+            sys.exit(2)
+        i += 1
+    if (resume is not None or mode is not None) and not cli:
+        print("--resume and --mode only apply to --cli.\n")
+        print(USAGE)
+        sys.exit(2)
+    sys.modules.setdefault("kurt", sys.modules[__name__])
+    if not cli:
+        if port:
+            os.environ["KURT_WEB_PORT"] = port
+        try:
+            from kurt_web import launch_web
+            launch_web()
+        except RuntimeError as exc:
+            print(f"kurt: {exc}")
+            sys.exit(1)
+        return
+    cli_main(resume=resume, mode=mode)
 
 
 if __name__ == "__main__":
