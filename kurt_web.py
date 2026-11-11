@@ -76,6 +76,22 @@ KURT WEB INTERFACE RULES:
 
 
 
+ACTION_SYNTAX_INSTRUCTIONS = r"""
+KURT ACTION BLOCK SYNTAX:
+- To run a terminal command, output exactly this block and nothing else for that step:
+@@@ RUN
+mkdir discord-bot
+@@@ END
+- To read a file: @@@ READ on one line, the absolute or relative path on the next line, then @@@ END.
+- To list a directory: @@@ LIST, the path on the next line, then @@@ END.
+- To search the web: @@@ SEARCH, the query on the next line, then @@@ END.
+- Every block must be closed with @@@ END on its own line. Put one command per RUN block.
+- Never ask the user to type "confirm" or "yes" in chat before an action. The application itself
+  shows an Approve/Decline card the moment you emit a RUN or WRITE block, so emit the block
+  immediately and wait for the result. Never describe the command in prose instead of emitting it.
+- Relative paths and commands run inside the session working root named in this prompt.
+"""
+
 KURT_IDENTITY_INSTRUCTIONS = r"""
 KURT IDENTITY AND SELF-CONFIGURATION:
 You are Kurt, the assistant configured by this local application. The user owns this local
@@ -164,13 +180,21 @@ def valid_mode_value(value, fallback="normal"):
     return raw if raw in ("normal", "agent") else (fallback if fallback in ("normal", "agent") else "normal")
 
 ACTION_MARKER_RE = r"@\s*@\s*@"
-RUN_ACTION_RE = re.compile(ACTION_MARKER_RE + r"\s*RUN\s*([^\n]*)\r?\n(.*?)\r?\n?" + ACTION_MARKER_RE + r"\s*END", re.I | re.S)
-SEARCH_ACTION_RE = re.compile(ACTION_MARKER_RE + r"\s*SEARCH\s*([^\n]*)\r?\n?(.*?)\r?\n?" + ACTION_MARKER_RE + r"\s*END", re.I | re.S)
-READ_ACTION_RE = re.compile(ACTION_MARKER_RE + r"\s*READ\s*([^\n]*)\r?\n?(.*?)\r?\n?" + ACTION_MARKER_RE + r"\s*END", re.I | re.S)
-LIST_ACTION_RE = re.compile(ACTION_MARKER_RE + r"\s*LIST\s*([^\n]*)\r?\n?(.*?)\r?\n?" + ACTION_MARKER_RE + r"\s*END", re.I | re.S)
-AGENT_RUN_ACTION_RE = re.compile(ACTION_MARKER_RE + r"\s*AGENT_RUN\s*([^\n]*)\r?\n?(.*?)\r?\n?" + ACTION_MARKER_RE + r"\s*END", re.I | re.S)
-AGENT_READ_ACTION_RE = re.compile(ACTION_MARKER_RE + r"\s*AGENT_READ\s*([^\n]*)\r?\n?(.*?)\r?\n?" + ACTION_MARKER_RE + r"\s*END", re.I | re.S)
-AGENT_LIST_ACTION_RE = re.compile(ACTION_MARKER_RE + r"\s*AGENT_LIST\s*([^\n]*)\r?\n?(.*?)\r?\n?" + ACTION_MARKER_RE + r"\s*END", re.I | re.S)
+def _tolerant_action_re(name):
+    return re.compile(
+        ACTION_MARKER_RE + r"\s*" + name + r"\b[ \t]*([^\n]*?)[ \t]*(?:\r?\n((?:(?!@\s*@\s*@).)*?))?"
+        r"(?:\r?\n?" + ACTION_MARKER_RE + r"\s*END\b|\s*(?=" + ACTION_MARKER_RE + r")|\s*\Z)",
+        re.I | re.S,
+    )
+
+
+RUN_ACTION_RE = _tolerant_action_re("RUN")
+SEARCH_ACTION_RE = _tolerant_action_re("SEARCH")
+READ_ACTION_RE = _tolerant_action_re("READ")
+LIST_ACTION_RE = _tolerant_action_re("LIST")
+AGENT_RUN_ACTION_RE = _tolerant_action_re("AGENT_RUN")
+AGENT_READ_ACTION_RE = _tolerant_action_re("AGENT_READ")
+AGENT_LIST_ACTION_RE = _tolerant_action_re("AGENT_LIST")
 SUBAGENT_ACTION_RE = re.compile(ACTION_MARKER_RE + r"\s*SUBAGENT\s+([^\n]+)\r?\n(.*?)\r?\n?" + ACTION_MARKER_RE + r"\s*END", re.I | re.S)
 AGENT_WRITE_ACTION_RE = re.compile(ACTION_MARKER_RE + r"\s*AGENT_WRITE\s+([^\n]+)\r?\n(.*?)\r?\n?" + ACTION_MARKER_RE + r"\s*END", re.I | re.S)
 RATIONALE_ACTION_RE = re.compile(r"@{2,3}\s*RATIONALE\s*\n(.*?)\n?@{2,3}\s*END", re.I | re.S)
@@ -2275,10 +2299,18 @@ TOOL_CALL_BLOCK_RE = re.compile(
 )
 
 
+EMPTY_REPLY_PLACEHOLDER_PREFIX = "Kurt completed the request without a text response"
+
+
 def action_argument(match):
     """Join an action header and optional body; tolerate commands split across lines."""
     header = str(match.group(1) or "").strip()
     body = str(match.group(2) or "").strip()
+    if not re.search(ACTION_MARKER_RE + r"\s*END\s*$", match.group(0), re.I):
+        if header:
+            return header
+        first_line = next((line.strip() for line in body.splitlines() if line.strip()), "")
+        return first_line
     if header and body:
         return header + " " + re.sub(r"\s+", " ", body)
     return header or re.sub(r"\s+", " ", body)
@@ -3403,9 +3435,10 @@ class KurtWebApp:
         custom = str(self.settings.get("system_prompt") or "").strip()
         base = custom or K.SYSTEM.replace("{cwd}", str(root))
         if "{cwd}" in base: base = base.replace("{cwd}", str(root))
-        if "WEB INTERFACE FILE OUTPUT RULES:" not in base and "KURT WEB WORKSPACE RULES:" not in base:
-            base += WEB_INSTRUCTIONS
-        if "KURT WEB WORKSPACE RULES:" not in base: base += "\n" + WEB_INSTRUCTIONS
+        if "KURT WEB INTERFACE RULES:" not in base:
+            base += "\n" + WEB_INSTRUCTIONS
+        if "KURT ACTION BLOCK SYNTAX:" not in base:
+            base += "\n" + ACTION_SYNTAX_INSTRUCTIONS
         mode_rules = NORMAL_MODE_INSTRUCTIONS if mode == "normal" else AGENT_MODE_INSTRUCTIONS
         effort_rules = EFFORT_INSTRUCTIONS.get(effort, EFFORT_INSTRUCTIONS["thinking"])
         linked = str(chat.get("linked_folder") or "").strip()
@@ -4599,7 +4632,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, 400)
             return
 
-        previous = chat.get("messages", [])[-MAX_MESSAGES_PER_CHAT:]
+        previous = [
+            item for item in chat.get("messages", [])[-MAX_MESSAGES_PER_CHAT:]
+            if not (item.get("role") == "assistant" and (
+                str(item.get("content") or "").startswith(EMPTY_REPLY_PLACEHOLDER_PREFIX)
+                or not str(item.get("content") or "").strip()
+            ))
+        ]
         if already_saved:
             previous = [item for item in previous if item.get("message_id") != message_id]
         message_number = len(chat.get("messages", [])) if already_saved else len(chat.get("messages", [])) + 1
@@ -4754,8 +4793,12 @@ class Handler(BaseHTTPRequestHandler):
                 available.remove(active_candidate_index)
                 available.insert(0, active_candidate_index)
             last_error = None
-            for candidate_index in available:
+            queue = list(available)
+            empty_retries = {}
+            while queue:
+                candidate_index = queue.pop(0)
                 candidate = route_candidates[candidate_index]
+                retrying_empty = empty_retries.get(candidate_index, 0) > 0
                 emit({"type": "draft_reset"})
                 chunks = []
                 rationale_chunks = []
@@ -4768,10 +4811,16 @@ class Handler(BaseHTTPRequestHandler):
                 stream = None
                 try:
                     apply_route_candidate(candidate)
+                    call_messages = messages
+                    if retrying_empty:
+                        call_messages = list(messages) + [{
+                            "role": "system",
+                            "content": "Your previous reply was empty. Reply now with visible text or one complete action block (@@@ RUN ... @@@ END). Do not answer with reasoning only.",
+                        }]
                     stream = K.stream_chat(
-                        messages,
+                        call_messages,
                         model=model,
-                        think=use_thinking,
+                        think=False if retrying_empty else use_thinking,
                         temperature=temperature,
                         max_tokens=max_tokens,
                         reasoning_effort=reasoning_effort,
@@ -4863,6 +4912,16 @@ class Handler(BaseHTTPRequestHandler):
                     last_error = exc
                     if rationale_chunks:
                         emit({"type": "reasoning_reset", "text": "".join(model_rationale_chunks).strip()})
+                    if str(exc) == "The model returned no response text." and empty_retries.get(candidate_index, 0) < 2:
+                        empty_retries[candidate_index] = empty_retries.get(candidate_index, 0) + 1
+                        queue.insert(0, candidate_index)
+                        log_step(
+                            "The model returned an empty reply. Retrying once more…",
+                            None,
+                            status="Retrying…",
+                            detail="Entry: {}".format(candidate.get("member_label") or candidate.get("model")),
+                        )
+                        continue
                     failed_candidate_indices.add(candidate_index)
                     remaining = [index for index in range(len(route_candidates)) if index not in failed_candidate_indices]
                     if not remaining:
@@ -5234,7 +5293,7 @@ class Handler(BaseHTTPRequestHandler):
             if visible and chat.get("title") in (None, "New conversation"):
                 chat["title"] = self.app.generate_chat_title(user_text, visible, model)
             if not visible and not artifacts:
-                visible = "Kurt completed the request without a text response or validated file artifact. Check the work log for tool and validation results."
+                visible = EMPTY_REPLY_PLACEHOLDER_PREFIX + " or validated file artifact. Check the work log for tool and validation results."
             if visible or artifacts:
                 record = {
                     "role": "assistant", "content": visible, "artifacts": artifacts,
