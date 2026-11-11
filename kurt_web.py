@@ -5216,6 +5216,23 @@ class Handler(BaseHTTPRequestHandler):
                         })
                         continue
 
+                if not tool_actions and not re.search(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT|SYSTEM_PROMPT|AGENT_WRITE)\b", raw, re.I):
+                    _rationale_probe, reply_probe = split_thinking(raw)
+                    reply_probe = K.BLOCK_RE.sub("", strip_unsupported_actions(reply_probe)).strip()
+                    if not reply_probe and round_index < max_rounds - 1:
+                        log_step(
+                            "The model produced no visible answer. Asking it to answer in plain text.",
+                            False,
+                            status="Retrying…",
+                            detail="The reply contained only reasoning, an unsupported or incomplete tool call, or an unterminated action block, so there was nothing to show. The application is asking the model again instead of finishing with an empty reply.",
+                        )
+                        messages.append({"role": "assistant", "content": raw})
+                        messages.append({
+                            "role": "user",
+                            "content": "Your previous reply had no visible answer: it contained only reasoning, an unsupported tool call, or an incomplete action block. Answer the user's last question directly in plain text now. If you need current information, use exactly one complete block: @@@ SEARCH, the query on the next line, then @@@ END. Do not use any other tool-call format.",
+                        })
+                        continue
+
                 first_edit = re.search(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT|SYSTEM_PROMPT|AGENT_WRITE)\b", raw, re.I)
                 if first_edit:
                     preamble = raw[:first_edit.start()]
