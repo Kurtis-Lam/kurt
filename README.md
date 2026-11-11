@@ -11,15 +11,13 @@ Nothing runs and nothing is written without your approval, in either interface.
 
 ## Setup
 
-1. Keep `kurt.py`, `kurt_web.py`, `kurt_sandbox.py` and `providers.py` together in one folder.
-2. Install the one dependency into the Python you use to run Kurt: `pip install rich`
-3. Make `kurt` a command, for example:
+1. Download / Clone this repo and unzip it. 
+2. Install kurt by:
    ```sh
-   chmod +x /path/to/kurt.py
-   ln -s /path/to/kurt.py /usr/local/bin/kurt
+   bash install.sh   # macOS
+   install.bat       # Windows
    ```
-   or add `alias kurt='python3 /path/to/kurt.py'` to your shell profile.
-4. For local models, install Ollama. Kurt starts it for you and offers to download the default model on first use. Hosted models only need an API key (`/keys` in the terminal, or Settings in the browser).
+3. For local models, install Ollama. Kurt starts it for you and offers to download the default model on first use. Hosted models only need an API key (`/keys` in the terminal, or Settings in the browser).
 
 ## Using the browser interface
 
