@@ -2302,10 +2302,18 @@ TOOL_CALL_BLOCK_RE = re.compile(
 EMPTY_REPLY_PLACEHOLDER_PREFIX = "Kurt completed the request without a text response"
 
 
+def _clean_action_text(text):
+    text = re.sub(r"<\|tool_call_(?:start|end)\|>", "", str(text or ""), flags=re.I).strip()
+    wrapped = re.search(r"\b(?:path|query|command|cmd|file|directory|dir)\s*=\s*(['\"])(.*?)\1", text, re.S)
+    if wrapped:
+        return wrapped.group(2).strip()
+    return text
+
+
 def action_argument(match):
     """Join an action header and optional body; tolerate commands split across lines."""
-    header = str(match.group(1) or "").strip()
-    body = str(match.group(2) or "").strip()
+    header = _clean_action_text(match.group(1))
+    body = _clean_action_text(match.group(2))
     if not re.search(ACTION_MARKER_RE + r"\s*END\s*$", match.group(0), re.I):
         if header:
             return header
@@ -2502,11 +2510,11 @@ class _SearchHTMLParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         classes = set(str(attrs.get("class", "")).split())
-        if tag == "a" and "result__a" in classes:
+        if tag == "a" and ("result__a" in classes or "result-link" in classes):
             self._capture = "title"
             self._href = str(attrs.get("href") or "")
             self._text = []
-        elif "result__snippet" in classes:
+        elif "result__snippet" in classes or "result-snippet" in classes:
             self._capture = "snippet"
             self._text = []
 
@@ -2518,15 +2526,17 @@ class _SearchHTMLParser(HTMLParser):
         if self._capture == "title" and tag == "a":
             title = re.sub(r"\s+", " ", "".join(self._text)).strip()
             href = self._href
+            if href.startswith("//"):
+                href = "https:" + href
             parsed = urlparse(href)
             if "duckduckgo.com" in (parsed.hostname or ""):
                 target = parse_qs(parsed.query).get("uddg", [""])[0]
                 href = target or href
-            if title and href.startswith(("http://", "https://")):
+            if title and href.startswith(("http://", "https://")) and "duckduckgo.com/y.js" not in href:
                 self.results.append({"title": title, "url": href, "snippet": ""})
             self._capture = None
             self._text = []
-        elif self._capture == "snippet" and tag in ("div", "a"):
+        elif self._capture == "snippet" and tag in ("div", "a", "td"):
             snippet = re.sub(r"\s+", " ", "".join(self._text)).strip()
             if snippet and self.results and not self.results[-1].get("snippet"):
                 self.results[-1]["snippet"] = snippet
@@ -2534,26 +2544,78 @@ class _SearchHTMLParser(HTMLParser):
             self._text = []
 
 
+def _bing_target(href):
+    href = html.unescape(str(href or ""))
+    parsed = urlparse(href)
+    if (parsed.hostname or "").endswith("bing.com") and parsed.path.startswith("/ck/"):
+        token = parse_qs(parsed.query).get("u", [""])[0]
+        if token.startswith("a1"):
+            token = token[2:]
+            try:
+                decoded = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)).decode("utf-8", "replace")
+                if decoded.startswith(("http://", "https://")):
+                    return decoded
+            except Exception:
+                return ""
+        return ""
+    return href if href.startswith(("http://", "https://")) else ""
+
+
+def _parse_bing_results(body):
+    results = []
+    for block in re.findall(r'<li[^>]+class="[^"]*\bb_algo\b[^"]*"[^>]*>([\s\S]*?)</li>', body, re.I):
+        link = re.search(r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)</a>', block, re.I)
+        if not link:
+            continue
+        url = _bing_target(link.group(1))
+        title = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", link.group(2)))).strip()
+        snippet_match = re.search(r"<p[^>]*>([\s\S]*?)</p>", block, re.I)
+        snippet = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", snippet_match.group(1)))).strip() if snippet_match else ""
+        if url and title:
+            results.append({"title": title, "url": url, "snippet": snippet})
+    return results
+
+
+_SEARCH_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Accept": "text/html,application/xhtml+xml",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def _fetch_search_page(url, data=None):
+    request = urllib.request.Request(url, data=data, headers=_SEARCH_HEADERS)
+    with urllib.request.urlopen(request, timeout=18) as response:
+        return response.read(2_000_000).decode("utf-8", "replace")
+
+
 def _web_search(query, limit=6):
     query = re.sub(r"\s+", " ", str(query or "")).strip()
     if not query or len(query) > 500:
         return {"ok": False, "results": [], "message": "Enter a focused web-search query (500 characters or fewer)."}
-    url = "https://html.duckduckgo.com/html/?" + urlencode({"q": query})
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "Mozilla/5.0 (compatible; KurtLocal/1.0)", "Accept": "text/html"},
+    limit = max(1, min(int(limit), 10))
+    encoded = urlencode({"q": query})
+    providers = (
+        ("DuckDuckGo", lambda: _fetch_search_page("https://html.duckduckgo.com/html/", data=encoded.encode("utf-8")), "ddg"),
+        ("DuckDuckGo Lite", lambda: _fetch_search_page("https://lite.duckduckgo.com/lite/", data=encoded.encode("utf-8")), "ddg"),
+        ("Bing", lambda: _fetch_search_page("https://www.bing.com/search?" + urlencode({"q": query, "setlang": "en-US"})), "bing"),
     )
-    try:
-        with urllib.request.urlopen(request, timeout=18) as response:
-            body = response.read(2_000_000).decode("utf-8", "replace")
-        parser = _SearchHTMLParser()
-        parser.feed(body)
-        results = parser.results[:max(1, min(int(limit), 10))]
-        if not results:
-            return {"ok": False, "results": [], "message": "The search provider returned no parseable results."}
-        return {"ok": True, "results": results, "message": "Found {} web result(s).".format(len(results))}
-    except Exception as exc:
-        return {"ok": False, "results": [], "message": "Web search failed: {}".format(exc)}
+    failures = []
+    for name, fetch, kind in providers:
+        try:
+            body = fetch()
+            if kind == "bing":
+                results = _parse_bing_results(body)
+            else:
+                parser = _SearchHTMLParser()
+                parser.feed(body)
+                results = parser.results
+            if results:
+                return {"ok": True, "results": results[:limit], "message": "Found {} web result(s) via {}.".format(len(results[:limit]), name)}
+            failures.append("{}: no parseable results".format(name))
+        except Exception as exc:
+            failures.append("{}: {}".format(name, exc))
+    return {"ok": False, "results": [], "message": "The search providers returned no usable results (" + "; ".join(failures) + ")."}
 
 
 def _atomic_json(path, value):
@@ -5212,14 +5274,16 @@ class Handler(BaseHTTPRequestHandler):
                         messages.append({"role": "assistant", "content": raw})
                         messages.append({
                             "role": "user",
-                            "content": "\n\n".join(results) + "\n\nUse these actual results. Continue the task; do not repeat completed actions.",
+                            "content": "\n\n".join(results) + "\n\nUse these actual results. Continue the task; do not repeat completed actions." + (
+                                "\nWeb search failed. Do not retry it more than once more. If it keeps failing, answer in plain text from your own knowledge and say clearly that it could not be verified online."
+                                if any("did not complete" in str(item) for item in results) else ""),
                         })
                         continue
 
                 if not tool_actions and not re.search(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT|SYSTEM_PROMPT|AGENT_WRITE)\b", raw, re.I):
                     _rationale_probe, reply_probe = split_thinking(raw)
                     reply_probe = K.BLOCK_RE.sub("", strip_unsupported_actions(reply_probe)).strip()
-                    if not reply_probe and round_index < max_rounds - 1:
+                    if not re.search(r"\w", reply_probe) and round_index < max_rounds - 1:
                         log_step(
                             "The model produced no visible answer. Asking it to answer in plain text.",
                             False,
@@ -5309,7 +5373,7 @@ class Handler(BaseHTTPRequestHandler):
             artifacts = list(artifacts_by_path.values())
             if visible and chat.get("title") in (None, "New conversation"):
                 chat["title"] = self.app.generate_chat_title(user_text, visible, model)
-            if not visible and not artifacts:
+            if (not visible or not re.search(r"\w", visible)) and not artifacts:
                 visible = EMPTY_REPLY_PLACEHOLDER_PREFIX + " or validated file artifact. Check the work log for tool and validation results."
             if visible or artifacts:
                 record = {
