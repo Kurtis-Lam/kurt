@@ -112,18 +112,59 @@ def _messages_for_openai(messages):
     ]
 
 
+def _anthropic_content(content):
+    if not isinstance(content, list):
+        return content if isinstance(content, str) else str(content or "")
+    blocks = []
+    for part in content:
+        if not isinstance(part, dict):
+            blocks.append({"type": "text", "text": str(part)})
+            continue
+        if part.get("type") == "text":
+            text = str(part.get("text") or "")
+            if text:
+                blocks.append({"type": "text", "text": text})
+            continue
+        image_url = part.get("image_url")
+        url = image_url.get("url") if isinstance(image_url, dict) else None
+        if isinstance(url, str):
+            match = re.match(r"^data:(image/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$", url, re.I)
+            if match:
+                media_type = match.group(1).lower()
+                blocks.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": media_type, "data": match.group(2)},
+                })
+    return blocks or [{"type": "text", "text": "(No supported image or text content.)"}]
+
+
+def _anthropic_join_content(left, right):
+    if isinstance(left, list) or isinstance(right, list):
+        def as_blocks(value):
+            if isinstance(value, list):
+                return value
+            text = str(value or "")
+            return [{"type": "text", "text": text}] if text else []
+        return as_blocks(left) + [{"type": "text", "text": "\n\n"}] + as_blocks(right)
+    return str(left or "") + "\n\n" + str(right or "")
+
+
 def _anthropic_messages(messages):
     system = []
     converted = []
     for item in messages:
         role = item.get("role")
-        content = item.get("content", "") or ""
+        raw_content = item.get("content", "") or ""
+        content = _anthropic_content(raw_content)
         if role == "system":
             if content:
-                system.append(content)
+                if isinstance(content, list):
+                    system.extend(block.get("text", "") for block in content if block.get("type") == "text")
+                else:
+                    system.append(content)
         elif role in ("user", "assistant"):
             if converted and converted[-1]["role"] == role:
-                converted[-1]["content"] += "\n\n" + content
+                converted[-1]["content"] = _anthropic_join_content(converted[-1]["content"], content)
             else:
                 converted.append({"role": role, "content": content})
     if not converted:
@@ -211,7 +252,7 @@ class ProviderClient:
         skipped = len(rotated) - len(available)
         return pool_id, available, skipped, matching
 
-    def _headers_and_payload(self, model_config, key, messages, stream, temperature, max_tokens, reasoning_effort=None):
+    def _headers_and_payload(self, model_config, key, messages, stream, temperature, max_tokens):
         mode, url, _base = _endpoint(model_config)
         provider = str(model_config.get("provider", "")).lower()
         model = str(model_config.get("model", "")).strip()
@@ -228,23 +269,6 @@ class ProviderClient:
             }
             if system:
                 payload["system"] = system
-            model_lower = model.lower()
-            effort = str(reasoning_effort or "").lower()
-            if effort in ("low", "medium", "high"):
-                adaptive_model = bool(
-                    re.search(r"claude-(?:(?:opus|sonnet|haiku)-4-(?:6|7|8|9)|(?:mythos|fable)-5)", model_lower)
-                )
-                legacy_thinking_model = bool(
-                    re.search(r"claude-(?:(?:sonnet|opus)-4-5|3-7)", model_lower)
-                )
-                if adaptive_model:
-                    payload["thinking"] = {"type": "adaptive"}
-                    payload["output_config"] = {"effort": effort}
-                    payload.pop("temperature", None)
-                elif legacy_thinking_model:
-                    budget = min(max(1024, int((max_tokens or 4096) * (0.5 if effort == "medium" else 0.65))), max(1024, (max_tokens or 4096) - 1))
-                    payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
-                    payload.pop("temperature", None)
             headers = {
                 "Authorization": "Bearer " + key,
                 "anthropic-version": "2026-10-21",
@@ -259,17 +283,10 @@ class ProviderClient:
                 "stream": stream,
             }
             model_lower = model.lower()
-            if provider in ("openai",) and (model_lower.startswith(("gpt-5", "gpt-6")) or re_model_reasoning(model_lower)):
+            if provider in ("openai",) and (model_lower.startswith("gpt-5") or re_model_reasoning(model_lower)):
                 payload["max_completion_tokens"] = payload.pop("max_tokens")
                 if model_lower.startswith(("o1", "o3", "o4")):
                     payload.pop("temperature", None)
-                effort = str(reasoning_effort or "").lower()
-                if effort in ("low", "medium", "high"):
-                    payload["reasoning_effort"] = effort
-            if provider == "openrouter":
-                effort = str(reasoning_effort or "").lower()
-                if effort in ("none", "minimal", "low", "medium", "high", "xhigh"):
-                    payload["reasoning_effort"] = effort
             if stream and provider in ("openai", "openrouter"):
                 payload["stream_options"] = {"include_usage": True}
             headers = {
@@ -281,7 +298,7 @@ class ProviderClient:
                 headers["X-Title"] = "Kurt"
         return url, headers, payload, mode
 
-    def stream_chat(self, model_config, messages, keys, timeout=900, temperature=0.2, max_tokens=8192, reasoning_effort=None):
+    def stream_chat(self, model_config, messages, keys, timeout=900, temperature=0.2, max_tokens=8192):
         pool_id, ordered, skipped, matching = self._ordered_keys(model_config, keys)
         if not ordered:
             raise ProviderError("Every API key in this group has exhausted its OpenRouter free-model quota.")
@@ -290,7 +307,7 @@ class ProviderClient:
             key = str(key_entry["value"])
             try:
                 url, headers, payload, mode = self._headers_and_payload(
-                    model_config, key, messages, True, temperature, max_tokens, reasoning_effort
+                    model_config, key, messages, True, temperature, max_tokens
                 )
                 response = _request(url, payload, headers, timeout, stream=True)
             except ProviderError as exc:
