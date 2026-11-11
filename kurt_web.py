@@ -1053,6 +1053,75 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
  .main.has-artifacts .artifact-pane .artifact-body .codebox pre{max-height:calc(100dvh - 250px)}
 }
 
+/* Approval prompts: command shown in a fenced block */
+:root{--amber:#e2b747;--tk-kw:#c4a1f0;--tk-str:#a5d37a;--tk-com:#6f8578;--tk-num:#e9b872;--tk-fn:#7cc6ea;--tk-ty:#e6c46b}
+:root[data-theme=light]{--amber:#9a6a00;--tk-kw:#7b3fa8;--tk-str:#2b7a25;--tk-com:#7a8a80;--tk-num:#a35b00;--tk-fn:#0b6a99;--tk-ty:#8a6a00}
+.approval-pause{display:block;padding:0;overflow:hidden;border:1px solid var(--line2);border-radius:12px;background:var(--panel);box-shadow:none}
+.approval-pause.waiting{border-color:color-mix(in srgb,var(--amber) 60%,var(--line2));box-shadow:0 0 0 3px color-mix(in srgb,var(--amber) 13%,transparent)}
+.approval-pause.resolved{background:var(--panel);box-shadow:none}
+.approval-pause .approval-head{display:flex;align-items:center;gap:8px;padding:11px 14px 2px}
+.approval-pause .approval-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--amber)}
+.approval-pause .approval-dot.ok{background:var(--green)}
+.approval-pause .approval-dot.no{background:var(--muted)}
+.approval-pause .approval-title{margin:0;color:var(--text);font-size:13px;font-weight:650}
+.approval-pause.resolved .approval-title{color:var(--muted)}
+.approval-pause .approval-question{padding:2px 14px 8px;color:var(--muted);font:400 12.5px/1.5 var(--sans);white-space:normal}
+.approval-pause .codebox{margin:0 14px 10px;border-radius:9px}
+.approval-pause .codebox pre{padding:10px 13px;max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:12.5px;line-height:1.6}
+.approval-pause .approval-note{padding:0 14px 11px;color:var(--muted);font:400 12px/1.5 var(--sans);white-space:pre-wrap;overflow-wrap:anywhere}
+.approval-pause .approval-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0;padding:10px 14px;border-top:1px solid var(--line);background:color-mix(in srgb,var(--bg) 55%,var(--panel))}
+.approval-pause .approval-actions button{padding:6px 13px;font-size:12.5px}
+.approval-pause .approval-allow{background:var(--green);border-color:var(--green);color:var(--green-ink);font-weight:650}
+.approval-pause .approval-allow:hover{filter:brightness(1.08)}
+.approval-pause .approval-deny{background:transparent;border-color:var(--line2);color:var(--text)}
+.approval-pause .approval-result{margin-left:auto;color:var(--muted);font-size:12px}
+.work-log.open .work-log-body:has(.approval-pause.waiting){max-height:min(70vh,640px)}
+
+/* Right-hand file pane */
+.artifact-trigger{border-radius:12px;background:var(--panel)}
+.artifact-trigger.selected{border-color:var(--green);background:var(--raise);box-shadow:0 0 0 3px var(--green-soft)}
+.artifact-trigger-open .ic{width:15px;height:15px;transform:rotate(-90deg)}
+.main.has-artifacts .chat-area{border-right:0}
+.main.has-artifacts .artifact-pane{height:auto;align-self:stretch;margin:10px 12px 12px 0;border:1px solid var(--line2);border-radius:14px;background:var(--panel);overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.2)}
+.main.has-artifacts .artifact-pane-head{gap:10px;padding:10px 10px 10px 14px;background:var(--panel);-webkit-backdrop-filter:none;backdrop-filter:none;border-bottom:1px solid var(--line)}
+.artifact-pane-head>.ap-title{flex:1;flex-direction:row;align-items:center;gap:11px;min-width:0}
+.artifact-pane-head>.ap-actions{flex:none;flex-direction:row;align-items:center;gap:4px}
+.ap-icon{display:grid;place-items:center;flex:none;width:32px;height:32px;border-radius:8px;background:var(--raise);color:var(--green)}
+.ap-icon .ic{width:16px;height:16px}
+.ap-titles{display:flex;flex-direction:column;min-width:0;gap:1px}
+.main.has-artifacts .artifact-pane-head strong{font:600 13.5px/1.3 var(--sans);letter-spacing:0}
+.main.has-artifacts .artifact-pane-count{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ap-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line2);border-radius:8px;background:transparent;color:var(--muted);font-size:12.5px}
+.ap-btn .ic{width:15px;height:15px}
+.ap-btn:hover{color:var(--text);background:var(--raise)}
+.ap-btn.done{color:var(--green);border-color:var(--green)}
+.ap-btn.icon-only{padding:6px 8px}
+.main.has-artifacts .artifact-pane-content{display:block;flex:1 1 auto;min-height:0;gap:0;padding:0;overflow:auto;overscroll-behavior:contain;background:var(--code)}
+.ap-view{display:flex;flex-direction:column;min-height:100%}
+.ap-status{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;min-width:0;padding:7px 14px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--code) 90%,var(--line));color:var(--muted);font:12px/1.4 var(--sans)}
+.ap-status .dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--muted)}
+.ap-status.wait{color:var(--amber)}.ap-status.wait .dot{background:var(--amber)}
+.ap-status.ok{color:var(--green)}.ap-status.ok .dot{background:var(--green)}
+.ap-status.bad{color:var(--danger)}.ap-status.bad .dot{background:var(--danger)}
+.ap-pre{flex:1 0 auto;min-width:max-content;margin:0;padding:12px 0 28px;color:var(--text);font:12.75px/1.65 var(--mono);white-space:pre;tab-size:4;counter-reset:line}
+.ap-pre .cl{display:block;padding-right:20px}
+.ap-pre.numbered .cl::before{counter-increment:line;content:counter(line);display:inline-block;position:sticky;left:0;width:3.6em;margin-right:14px;text-align:right;background:var(--code);color:color-mix(in srgb,var(--muted) 75%,transparent);user-select:none;-webkit-user-select:none}
+.ap-pre.term{padding:14px 16px 28px}
+.ap-pre.term .cl{padding-right:0}
+.ap-pre .term-cmd{color:var(--green);font-weight:600}
+.ap-pre .term-exit.ok{color:var(--green)}
+.ap-pre .term-exit.bad{color:var(--danger)}
+.tk-kw{color:var(--tk-kw)}
+.tk-str{color:var(--tk-str)}
+.tk-com{color:var(--tk-com);font-style:italic}
+.tk-num{color:var(--tk-num)}
+.tk-fn{color:var(--tk-fn)}
+.tk-ty{color:var(--tk-ty)}
+@media(max-width:700px){
+ .main.has-artifacts .artifact-pane{margin:0;border:0;border-radius:0;box-shadow:var(--shadow)}
+ .ap-btn span{display:none}
+}
+
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -1111,7 +1180,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 </div>
 </section>
 <aside class="artifact-pane" id="artifactPane" aria-label="Selected file preview">
-<div class="artifact-pane-head"><div><strong id="artifactPaneTitle">File preview</strong><span class="artifact-pane-count" id="artifactCount">Select a file card to preview</span></div><button class="pane-copy" id="artifactPaneCopy" type="button">Copy</button><button class="icon-btn artifact-pane-close" id="closeArtifactPane" type="button" title="Close file preview" aria-label="Close file preview">×</button></div>
+<div class="artifact-pane-head"><div class="ap-title"><span class="ap-icon"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span><div class="ap-titles"><strong id="artifactPaneTitle">File preview</strong><span class="artifact-pane-count" id="artifactCount">Select a file card to preview</span></div></div><div class="ap-actions"><button class="ap-btn" id="artifactPaneCopy" type="button" title="Copy file contents"><svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg><span>Copy</span></button><button class="ap-btn icon-only" id="artifactPaneDownload" type="button" title="Download file" aria-label="Download file"><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg></button><button class="icon-btn artifact-pane-close" id="closeArtifactPane" type="button" title="Close file preview" aria-label="Close file preview">×</button></div></div>
 <div class="artifact-pane-content" id="artifactPaneContent"></div>
 </aside>
 </main>
@@ -1359,6 +1428,8 @@ function setThink(node,entries){
  items.forEach(item=>{
   const data=typeof item==='string'?{text:item}:item||{};
   if(data.kind==='approval'&&data.approval){body.appendChild(createApprovalRow(node,data));return}
+  const PAUSE='Paused for your approval: ';
+  if(typeof data.text==='string'&&data.text.startsWith(PAUSE)&&items.some(x=>x&&x.kind==='approval'&&x.approval&&String(x.text||x.approval.title||'')===data.text.slice(PAUSE.length)))return;
   const label=String(data.text||'Activity'),detail=String(data.detail||'');
   const row=document.createElement(detail&&detail!==label?'details':'div');
   row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');
@@ -1368,13 +1439,36 @@ function setThink(node,entries){
  if(scrollBottom)body.scrollTop=body.scrollHeight;
  const head=panel.querySelector('.work-log-head');if(head)head.textContent='Activity · '+items.length+' event(s)';
 }
+function fenceBlock(lang,text){
+ const value=String(text||'');
+ const box=document.createElement('div');box.className='codebox approval-fence';
+ const head=document.createElement('div');head.className='codehead';
+ const label=document.createElement('span');label.textContent=lang;
+ const copy=document.createElement('button');copy.type='button';copy.className='copy-mini';copy.textContent='Copy';
+ copy.onclick=()=>navigator.clipboard.writeText(value).then(()=>{copy.textContent='Copied';clearTimeout(copy._t);copy._t=setTimeout(()=>{copy.textContent='Copy'},1400)}).catch(()=>toast('Could not copy'));
+ head.append(label,copy);
+ const pre=document.createElement('pre');const code=document.createElement('code');code.textContent=value;pre.appendChild(code);
+ box.append(head,pre);return box;
+}
 function createApprovalRow(node,item){
- const approval=item.approval||{};const box=document.createElement('div');box.className='approval-pause '+(item.approved===null||item.approved===undefined?'waiting':'resolved');box.dataset.approvalId=approval.id||'';
- const title=document.createElement('div');title.className='approval-title';title.textContent=item.approved===true?'Approved':item.approved===false?'Declined':approval.title||'Approval required';
- const detail=document.createElement('div');detail.className='approval-detail';
- detail.textContent=approval.kind==='command'?'Run this command?\n'+(approval.command||'') : approval.kind==='file'?'Approve file change?\n'+(approval.path||'')+'\n'+(approval.detail||'') : approval.kind==='link_folder'?'Link this folder to the current session?\n'+(approval.path||'') : String(approval.detail||'Review this action.');
- box.append(title,detail);
- if(item.approved===null||item.approved===undefined){
+ const approval=item.approval||{};const pending=item.approved===null||item.approved===undefined;
+ const box=document.createElement('div');box.className='approval-pause '+(pending?'waiting':'resolved');box.dataset.approvalId=approval.id||'';
+ const head=document.createElement('div');head.className='approval-head';
+ const dot=document.createElement('span');dot.className='approval-dot'+(item.approved===true?' ok':item.approved===false?' no':'');
+ const title=document.createElement('div');title.className='approval-title';
+ const base=approval.title||'Approval required';
+ title.textContent=item.approved===true?'Approved · '+base:item.approved===false?'Declined · '+base:base;
+ head.append(dot,title);box.appendChild(head);
+ const kind=approval.kind;
+ const question=document.createElement('div');question.className='approval-question';
+ question.textContent=kind==='command'?'Run this command?':kind==='file'?'Save this file change?':kind==='link_folder'?'Link this folder to the current session?':String(approval.detail||'Review this action.');
+ box.appendChild(question);
+ let note='';
+ if(kind==='command'){box.appendChild(fenceBlock('bash',approval.command||''));note=String(approval.detail||'')}
+ else if(kind==='file'){box.appendChild(fenceBlock('path',approval.path||''));note=String(approval.detail||'')}
+ else if(kind==='link_folder'){box.appendChild(fenceBlock('path',approval.path||''))}
+ if(note){const noteEl=document.createElement('div');noteEl.className='approval-note';noteEl.textContent=note;box.appendChild(noteEl)}
+ if(pending){
   const actions=document.createElement('div');actions.className='approval-actions';
   const yes=document.createElement('button');yes.type='button';yes.className='approval-allow';yes.textContent='Approve';
   const no=document.createElement('button');no.type='button';no.className='approval-deny';no.textContent='Decline';
@@ -1385,8 +1479,9 @@ function createApprovalRow(node,item){
    catch(error){yes.disabled=false;no.disabled=false;result.textContent='Could not submit decision: '+error.message;toast(error.message)}
   };
   yes.onclick=()=>decide(true);no.onclick=()=>decide(false);
-  if(approval.artifactPath){const open=document.createElement('button');open.type='button';open.textContent='Open file preview';open.onclick=()=>{const t=Array.from(document.querySelectorAll('.artifact-trigger')).find(b=>b.dataset.path===approval.artifactPath);if(t)t.click()};actions.appendChild(open)}
-  actions.append(yes,no,result);box.appendChild(actions);
+  actions.append(yes,no);
+  if(approval.artifactPath){const open=document.createElement('button');open.type='button';open.className='ghost';open.textContent='Open file preview';open.onclick=()=>{const t=Array.from(document.querySelectorAll('.artifact-trigger')).find(b=>b.dataset.path===approval.artifactPath);if(t)t.click()};actions.appendChild(open)}
+  actions.appendChild(result);box.appendChild(actions);
  }
  return box;
 }
@@ -1484,32 +1579,139 @@ function renderArtifactTriggers(container,artifacts){
   const promptCard=a.kind==='system_prompt',commandCard=a.kind==='command',agentCommandCard=a.kind==='agent_command',agentFileCard=a.kind==='agent_file',terminalCard=a.kind==='terminal_output';
   const button=document.createElement('button');button.type='button';button.className='artifact-trigger';
   button.dataset.path=String(a.target_path||a.path||'');button.setAttribute('aria-controls','artifactPane');button.setAttribute('aria-expanded','false');
-  button.innerHTML='<span class="artifact-trigger-icon"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span><span class="artifact-trigger-text"><span class="artifact-trigger-name"></span><span class="artifact-trigger-status"></span></span><span class="artifact-trigger-open">'+(terminalCard?'Open →':'Review →')+'</span>';
+  button.innerHTML='<span class="artifact-trigger-icon"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span><span class="artifact-trigger-text"><span class="artifact-trigger-name"></span><span class="artifact-trigger-status"></span></span><span class="artifact-trigger-open" aria-hidden="true"><svg class="ic"><use href="#i-chev"/></svg></span>';
   button.querySelector('.artifact-trigger-name').textContent=promptCard?'System prompt proposal':commandCard?'Code command approval':agentCommandCard?'Agent command approval':agentFileCard?'Agent file change':terminalCard?'Terminal output':String(a.path||'Generated file');
-  button.querySelector('.artifact-trigger-status').textContent=a.workspace_written?(a.kind==='linked_file'?'Saved in linked folder after approval':'Saved to private workspace after approval'):(a.validation?.message||(a.approval_required?'Ready for approval · not saved':'Preview'));
+  button.querySelector('.artifact-trigger-status').textContent=artifactLang(a)+' · '+(a.workspace_written?(a.kind==='linked_file'?'Saved in linked folder after approval':'Saved to private workspace after approval'):(a.validation?.message||(a.approval_required?'Ready for approval · not saved':'Preview')));
   button.setAttribute('aria-label','Review '+(a.path||'generated file'));button.onclick=()=>openArtifactPreview(a,button);container.appendChild(button);
  });
  if(selectedPath){const selected=Array.from(container.querySelectorAll('.artifact-trigger')).find(button=>button.dataset.path===selectedPath);if(selected)selected.click()}
 }
+const LANG_BY_EXT={py:'Python',pyw:'Python',js:'JavaScript',mjs:'JavaScript',cjs:'JavaScript',jsx:'JSX',ts:'TypeScript',tsx:'TSX',json:'JSON',html:'HTML',htm:'HTML',xml:'XML',svg:'SVG',css:'CSS',scss:'SCSS',md:'Markdown',sh:'Shell',bash:'Shell',zsh:'Shell',yml:'YAML',yaml:'YAML',toml:'TOML',ini:'INI',cfg:'Config',sql:'SQL',java:'Java',c:'C',h:'C',cpp:'C++',cc:'C++',hpp:'C++',cs:'C#',go:'Go',rs:'Rust',rb:'Ruby',php:'PHP',swift:'Swift',kt:'Kotlin',txt:'Text',csv:'CSV'};
+const HL_FAMILY={py:'py',pyw:'py',js:'js',mjs:'js',cjs:'js',jsx:'js',ts:'js',tsx:'js',java:'js',c:'js',h:'js',cpp:'js',cc:'js',hpp:'js',cs:'js',go:'js',rs:'js',swift:'js',kt:'js',php:'js',sh:'sh',bash:'sh',zsh:'sh',yml:'conf',yaml:'conf',toml:'conf',ini:'conf',cfg:'conf',json:'json',html:'html',htm:'html',xml:'html',svg:'html',css:'css',scss:'css'};
+const HL_CFG=(()=>{
+ const set=text=>new Set(text.split(/\s+/).filter(Boolean));
+ const NUM=/\b0[xX][\da-fA-F]+\b|\b\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?\b/.source;
+ const CSS_NUM=/#[\da-fA-F]{3,8}\b|\d+(?:\.\d+)?(?:px|rem|em|vh|vw|ms|s|deg|%)?/.source;
+ const DQ=/"(?:\\.|[^"\\\n])*"/.source;
+ const SQ=/'(?:\\.|[^'\\\n])*'/.source;
+ const BT=/`(?:\\[\s\S]|[^`\\])*`/.source;
+ const TRI=/"{3}[\s\S]*?"{3}|'{3}[\s\S]*?'{3}/.source;
+ const HASH=/#[^\n]*/.source;
+ const SLASH=/\/\/[^\n]*|\/\*[\s\S]*?\*\//.source;
+ const BLOCK=/\/\*[\s\S]*?\*\//.source;
+ const MARKUP=/<!--[\s\S]*?-->/.source;
+ const mk=(com,str,num,word)=>new RegExp('('+com+')|('+str+')|('+num+')|('+word+')','g');
+ return {
+  py:{re:mk(HASH,TRI+'|'+DQ+'|'+SQ,NUM,/[A-Za-z_]\w*/.source),kw:set('and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield match case'),lit:set('True False None'),types:true},
+  js:{re:mk(SLASH,DQ+'|'+SQ+'|'+BT,NUM,/[A-Za-z_$][\w$]*/.source),kw:set('abstract as async await break case catch class const continue debugger default defer delete do else enum export extends final finally for from fn func function go goto if impl implements import in instanceof interface let match mod mut namespace new of override package private protected pub public readonly return static struct super switch this throw trait try type typeof use using var virtual void volatile where while with yield'),lit:set('true false null undefined nil NULL'),types:true},
+  sh:{re:mk(HASH,DQ+'|'+SQ,NUM,/\$\{?[A-Za-z_]\w*\}?|[A-Za-z_][\w-]*/.source),kw:set('if then else elif fi for while until do done case esac in function select return exit break continue export local readonly declare unset shift source alias cd echo printf test eval exec set trap'),lit:set('true false')},
+  conf:{re:mk(HASH,DQ+'|'+SQ,NUM,/[A-Za-z_][\w.-]*/.source),kw:set(''),lit:set('true false null yes no on off True False'),keys:true},
+  json:{re:mk('(?!)',DQ,NUM,/[A-Za-z_]\w*/.source),kw:set(''),lit:set('true false null'),keys:true},
+  html:{re:mk(MARKUP,DQ+'|'+SQ,'(?!)',/<\/?[A-Za-z][\w:-]*|[A-Za-z_:@][\w:.-]*(?=\s*=)/.source),kw:set(''),lit:set(''),html:true},
+  css:{re:mk(BLOCK,DQ+'|'+SQ,CSS_NUM,/@?[A-Za-z_-][\w-]*/.source),kw:set(''),lit:set(''),css:true}
+ };
+})();
+function hlFamily(a){
+ if(a.kind==='command'||a.kind==='agent_command')return 'sh';
+ const name=String(a.path||''),ext=name.includes('.')?name.split('.').pop().toLowerCase():'';
+ return HL_FAMILY[ext]||'';
+}
+function highlightToLines(code,cfg){
+ const re=new RegExp(cfg.re.source,'g');
+ const wrap=(cls,text)=>esc(text).split('\n').map(part=>'<span class="tk-'+cls+'">'+part+'</span>').join('\n');
+ let out='',last=0,m;
+ while((m=re.exec(code))){
+  if(m[0]===''){re.lastIndex++;continue}
+  out+=esc(code.slice(last,m.index));
+  const t=m[0];let cls='';
+  if(m[1]!==undefined)cls='com';
+  else if(m[2]!==undefined)cls=(cfg.keys&&/^\s*:/.test(code.slice(re.lastIndex,re.lastIndex+40)))?'fn':'str';
+  else if(m[3]!==undefined)cls='num';
+  else if(m[4]!==undefined){
+   if(cfg.html)cls=t.charAt(0)==='<'?'kw':'ty';
+   else if(cfg.css)cls=t.charAt(0)==='@'?'kw':(/^\s*:/.test(code.slice(re.lastIndex,re.lastIndex+40))?'fn':'');
+   else if(t.charAt(0)==='$')cls='ty';
+   else if(cfg.kw.has(t))cls='kw';
+   else if(cfg.lit.has(t))cls='num';
+   else if(cfg.keys&&/^[ \t]*:/.test(code.slice(re.lastIndex,re.lastIndex+40)))cls='fn';
+   else if(code.charAt(re.lastIndex)==='(')cls='fn';
+   else if(cfg.types&&/^[A-Z][a-z]/.test(t))cls='ty';
+  }
+  out+=cls?wrap(cls,t):esc(t);
+  last=re.lastIndex;
+ }
+ out+=esc(code.slice(last));
+ return out.split('\n');
+}
+function artifactLang(a){
+ if(a.kind==='terminal_output')return 'Terminal';
+ if(a.kind==='command'||a.kind==='agent_command')return 'Shell';
+ const name=String(a.path||''),ext=name.includes('.')?name.split('.').pop().toLowerCase():'';
+ return LANG_BY_EXT[ext]||(ext&&ext.length<=5?ext.toUpperCase():'Text');
+}
+function artifactState(a){
+ const message=String((a.validation&&a.validation.message)||'');
+ if(a.kind==='terminal_output')return {cls:(a.validation&&a.validation.ok===false)?'bad':'ok',text:message||'Terminal output'};
+ if(a.workspace_written)return {cls:'ok',text:'Saved after approval'};
+ if(/declined/i.test(message))return {cls:'',text:message};
+ if(a.validation&&a.validation.ok===false)return {cls:'bad',text:message||'Needs attention'};
+ if(a.approval_required)return {cls:'wait',text:'Awaiting approval · not saved'};
+ return {cls:'',text:message||'Preview'};
+}
 function openArtifactPreview(a,trigger){
  const pane=$('artifactPaneContent');if(!pane)return;pane.replaceChildren(artifactCard(a));$('main').classList.add('has-artifacts');
  document.querySelectorAll('.artifact-trigger').forEach(button=>{const selected=button===trigger;button.classList.toggle('selected',selected);button.setAttribute('aria-expanded',String(selected))});
- const title=$('artifactPaneTitle');if(title)title.textContent=String(a.path||'File preview');
- const count=$('artifactCount');if(count)count.textContent=a.kind==='terminal_output'?(a.validation?.message||'Terminal command result'):(a.workspace_written?'Saved after approval':a.approval_required?'Awaiting approval · not saved':'Selected file preview');
- state.activeArtifactContent=String(a.content||'');$('artifactPane').scrollTop=0;
+ const full=String(a.path||'File preview'),base=full.split('/').pop()||full;
+ const title=$('artifactPaneTitle');if(title){title.textContent=base;title.title=full}
+ const content=String(a.content||''),lines=content?content.replace(/\n$/,'').split('\n').length:0;
+ const count=$('artifactCount');if(count)count.textContent=artifactLang(a)+(a.kind==='terminal_output'?'':' · '+lines+' line'+(lines===1?'':'s'));
+ state.activeArtifactContent=content;state.activeArtifactName=base;
+ pane.scrollTop=0;const outer=$('artifactPane');if(outer)outer.scrollTop=0;
 }
 function artifactCard(a){
- const card=document.createElement('div');card.className='artifact open';
- const name=String(a.path||'Generated file');
- const suffix=name.includes('.')?name.split('.').pop().toUpperCase():'TEXT';
- const status=a.kind==='terminal_output'?(a.validation?.message||'Terminal output'):(a.workspace_written?'Saved after approval':a.approval_required?'Awaiting approval · not saved':(a.validation?.message||'Preview'));
- card.innerHTML='<div class="file-check" style="padding:10px 12px;border-bottom:1px solid var(--line)"></div><div class="artifact-body open"><div class="codebox"><div class="codehead"><span></span></div><pre><code></code></pre></div></div>';
- card.querySelector('.file-check').textContent=status;
- card.querySelector('.codehead span').textContent=a.kind==='terminal_output'?'TERMINAL OUTPUT':suffix;
- card.querySelector('code').textContent=String(a.content||'');
- return card;
+ const info=artifactState(a);
+ const view=document.createElement('div');view.className='ap-view';
+ const status=document.createElement('div');status.className='ap-status'+(info.cls?' '+info.cls:'');
+ const dot=document.createElement('span');dot.className='dot';
+ const label=document.createElement('span');label.textContent=info.text;
+ status.append(dot,label);
+ const pre=document.createElement('pre');const code=document.createElement('code');
+ const content=String(a.content||'').replace(/\r\n?/g,'\n');
+ let lines;
+ if(a.kind==='terminal_output'){
+  pre.className='ap-pre term';
+  const raw=content.replace(/\n$/,'').split('\n');
+  lines=raw.map((line,index)=>{
+   const safe=esc(line)||' ';
+   if(index===0&&line.startsWith('$ '))return '<span class="term-cmd">'+safe+'</span>';
+   if(/^Exit code:/.test(line))return '<span class="term-exit '+(info.cls==='bad'?'bad':'ok')+'">'+safe+'</span>';
+   return safe;
+  });
+ }else{
+  pre.className='ap-pre numbered';
+  const cfg=HL_CFG[hlFamily(a)];
+  lines=(cfg&&content.length<300000)?highlightToLines(content,cfg):esc(content).split('\n');
+  if(lines.length>1&&lines[lines.length-1]==='')lines.pop();
+ }
+ code.innerHTML=lines.map(line=>'<span class="cl">'+line+'\n</span>').join('');
+ pre.appendChild(code);view.append(status,pre);
+ return view;
 }
-
+function copyActiveArtifact(){
+ const button=$('artifactPaneCopy');
+ navigator.clipboard.writeText(state.activeArtifactContent||'').then(()=>{
+  toast('File contents copied');if(!button)return;
+  const label=button.querySelector('span');button.classList.add('done');if(label)label.textContent='Copied';
+  clearTimeout(button._t);button._t=setTimeout(()=>{button.classList.remove('done');if(label)label.textContent='Copy'},1600);
+ }).catch(()=>toast('Could not copy'));
+}
+function downloadActiveArtifact(){
+ const text=state.activeArtifactContent||'';if(!text){toast('Nothing to download');return}
+ let name=String(state.activeArtifactName||'kurt-file').replace(/[^\w.\-]+/g,'_');if(!name.includes('.'))name+='.txt';
+ const url=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'}));
+ const link=document.createElement('a');link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();
+ setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
 
 
 const SUGGESTIONS=[['Understand my project','Inspect the current project structure and explain its architecture.'],['Build a feature','Help me plan and implement a new feature. Ask for any missing requirements first.'],['Generate a file','Write a small utility script and return it as a file card.'],['Debug code','Help me debug this issue. Start by asking for the relevant error and files.']];
@@ -1939,7 +2141,7 @@ async function send(){
  }
 }
 $('messages').addEventListener('scroll',()=>{const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});$('toBottom').onclick=()=>{follow=true;scrollEnd(true);$('toBottom').classList.remove('show')};
-$('closeArtifactPane').onclick=closeArtifactPane;$('artifactPaneCopy').onclick=()=>navigator.clipboard.writeText(state.activeArtifactContent||'').then(()=>toast('File contents copied'));$('linkFolderBtn').onclick=linkSessionFolder;
+$('closeArtifactPane').onclick=closeArtifactPane;$('artifactPaneCopy').onclick=copyActiveArtifact;$('artifactPaneDownload').onclick=downloadActiveArtifact;$('linkFolderBtn').onclick=linkSessionFolder;
 $('sendBtn').onclick=()=>{if(state.busy){if(state.abort)state.abort.abort()}else send()};
 $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!state.busy)send()}});
 $('prompt').addEventListener('input',()=>{autosize();updateSend()});
