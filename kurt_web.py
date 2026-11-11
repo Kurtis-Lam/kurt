@@ -2342,6 +2342,9 @@ class KurtWebApp:
         self.settings.setdefault("api_groups", [])
         self.model_lock = threading.RLock()
         self.pending_approvals = {}
+        self._env_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="kurt-env")
+        self._env_jobs = {}
+        self._env_jobs_lock = threading.Lock()
         self._installed_lock = threading.Lock()
         self._installed_cache = None
         self.migrate_legacy_api_groups()
@@ -2773,7 +2776,7 @@ class KurtWebApp:
                 pass
         return root
 
-    def chat_work_root(self, chat_id):
+    def chat_work_root(self, chat_id, create=True):
         chat = self.get_chat(chat_id)
         linked = str((chat or {}).get("linked_folder") or "").strip()
         if linked:
@@ -2784,7 +2787,7 @@ class KurtWebApp:
             if not root.is_dir():
                 raise ValueError("The linked session folder is no longer available.")
             return root
-        return self.chat_workspace(chat_id)
+        return self.chat_workspace(chat_id, create=create)
 
     def resolve_working_path(self, chat_id, value, allow_missing=True):
         raw = str(value or "").strip()
@@ -3102,7 +3105,7 @@ class KurtWebApp:
                 'workspace': str(workspace), 'message': f'Added files to this chat workspace. Automatically unpacked {archives} folder/archive ZIP(s).'}
 
     def context_contents(self, chat_id):
-        root = self.chat_workspace(chat_id)
+        root = self.chat_workspace(chat_id, create=False)
         chunks = []
         used = 0
         skipped = 0
@@ -3157,7 +3160,7 @@ class KurtWebApp:
 
     def chat_system_prompt(self, chat_id, mode="normal", effort="thinking"):
         chat = self.get_chat(chat_id) or {}
-        root = self.chat_work_root(chat_id)
+        root = self.chat_work_root(chat_id, create=False)
         custom = str(self.settings.get("system_prompt") or "").strip()
         base = custom or K.SYSTEM.replace("{cwd}", str(root))
         if "{cwd}" in base: base = base.replace("{cwd}", str(root))
@@ -3289,19 +3292,44 @@ class KurtWebApp:
             pass
         return root
 
-    def ensure_chat_environment(self, chat_id):
-        """Give every conversation its own Python environment, separate from project files."""
-        env_root = self.chat_environment(chat_id)
-        python = env_root / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    @staticmethod
+    def _command_needs_pip(command):
+        return bool(re.search(r"(?i)\bpip3?\b|-m\s+pip\b|\bensurepip\b", str(command or "")))
+
+    def _build_environment(self, env_root, with_pip):
+        bin_dir = env_root / ("Scripts" if os.name == "nt" else "bin")
+        python = bin_dir / ("python.exe" if os.name == "nt" else "python")
         if not python.is_file():
-            venv.EnvBuilder(with_pip=True, clear=False).create(env_root)
+            venv.EnvBuilder(with_pip=False, clear=False, symlinks=(os.name != "nt")).create(env_root)
         if not python.is_file():
             raise RuntimeError("The private environment for this conversation could not be created.")
+        if with_pip:
+            pip = bin_dir / ("pip.exe" if os.name == "nt" else "pip")
+            if not pip.exists():
+                result = subprocess.run([str(python), "-m", "ensurepip", "--default-pip"],
+                                        capture_output=True, text=True, timeout=180, check=False)
+                if result.returncode != 0:
+                    raise RuntimeError("Could not install pip into the private environment: " + (result.stderr or result.stdout or "").strip()[-400:])
         return env_root
+
+    def prewarm_chat_environment(self, chat_id, with_pip=False):
+        """Start building this chat's venv in the background; reuse any build already running."""
+        env_root = self.chat_environment(chat_id)
+        key = (str(env_root), bool(with_pip))
+        with self._env_jobs_lock:
+            job = self._env_jobs.get(key)
+            if job is None or (job.done() and job.exception() is not None):
+                job = self._env_pool.submit(self._build_environment, env_root, bool(with_pip))
+                self._env_jobs[key] = job
+        return job
+
+    def ensure_chat_environment(self, chat_id, with_pip=False):
+        """Only built when a command actually needs it; waits for a background prewarm if one is running."""
+        return self.prewarm_chat_environment(chat_id, with_pip=with_pip).result()
 
     def run_command(self, chat_id, command, timeout=120):
         private_workspace = self.chat_workspace(chat_id)
-        env_root = self.ensure_chat_environment(chat_id)
+        env_root = self.ensure_chat_environment(chat_id, with_pip=self._command_needs_pip(command))
         active_root = self.chat_work_root(chat_id)
         return run_workspace_command(
             private_workspace, env_root, command, timeout=timeout,
@@ -3398,7 +3426,9 @@ class KurtWebApp:
 
 
     def store_chat_input(self, chat_id, content, turn_number):
-        root = self.chat_workspace(chat_id)
+        root = self.chat_workspace(chat_id, create=False)
+        if not root.is_dir():
+            return
         folder = root / '.kurt_inputs'
         folder.mkdir(parents=True, exist_ok=True)
         try:
@@ -3418,7 +3448,7 @@ class KurtWebApp:
 
     def context_image_parts(self, chat_id, max_images=6, max_total_bytes=16 * 1024 * 1024):
         """Return vision input blocks for explicitly uploaded images in this chat."""
-        root = self.chat_workspace(chat_id)
+        root = self.chat_workspace(chat_id, create=False)
         parts, used, omitted = [], 0, 0
         for item in self.context_file_list(chat_id):
             if not item.get("image"):
@@ -3438,8 +3468,10 @@ class KurtWebApp:
         return parts, note
 
     def context_file_list(self, chat_id):
-        root = self.chat_workspace(chat_id)
+        root = self.chat_workspace(chat_id, create=False)
         items = []
+        if not root.is_dir():
+            return items
         for current, dirs, files in os.walk(root):
             dirs[:] = sorted(d for d in dirs if not self._skip_context_dir(d) and d not in ('.kurt_imports', '.kurt_inputs'))
             for name in sorted(files):
@@ -3503,8 +3535,6 @@ class KurtWebApp:
                 if initial_message.get("route"):
                     chat["route"] = str(initial_message.get("route"))
                 chat["updated"] = now
-        self.chat_workspace(chat["id"])
-        self.ensure_chat_environment(chat["id"])
         with self.lock:
             self.chats.insert(0, chat)
             self.save_chats()
@@ -4333,11 +4363,17 @@ class Handler(BaseHTTPRequestHandler):
         previous = chat.get("messages", [])[-MAX_MESSAGES_PER_CHAT:]
         if already_saved:
             previous = [item for item in previous if item.get("message_id") != message_id]
-        self.app.chat_workspace(chat_id)
         message_number = len(chat.get("messages", [])) if already_saved else len(chat.get("messages", [])) + 1
         self.app.store_chat_input(chat_id, user_text, message_number)
-        workspace_context = self.app.context_contents(chat_id)
-        image_parts, image_note = self.app.context_image_parts(chat_id)
+        if self.app.chat_workspace(chat_id, create=False).is_dir():
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                context_job = pool.submit(self.app.context_contents, chat_id)
+                image_job = pool.submit(self.app.context_image_parts, chat_id)
+                workspace_context = context_job.result()
+                image_parts, image_note = image_job.result()
+        else:
+            workspace_context = self.app.context_contents(chat_id)
+            image_parts, image_note = [], "0 uploaded image(s) sent to this model as visual input."
         messages = [
             {"role": "system", "content": self.app.chat_system_prompt(chat_id, mode=mode, effort=effort)},
             {"role": "system", "content": workspace_context + "\n" + image_note + "\nUploaded files are copied into this chat's private workspace. Separately, READ/LIST may inspect local paths that the current OS account can access; uploads do not alter the originals."},
@@ -4797,6 +4833,8 @@ class Handler(BaseHTTPRequestHandler):
                                 if not argument:
                                     results.append("[Command rejected] The command action did not include a command.")
                                 else:
+                                    try: self.app.prewarm_chat_environment(chat_id, with_pip=self.app._command_needs_pip(argument))
+                                    except Exception: pass
                                     approved = wait_for_user_approval("command", "Run terminal command", command=argument,
                                         detail="This exact command will run in the session's isolated workspace" + (" / linked folder" if chat.get("linked_folder") else "") + ".")
                                     if not approved:
