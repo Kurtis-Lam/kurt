@@ -112,59 +112,18 @@ def _messages_for_openai(messages):
     ]
 
 
-def _anthropic_content(content):
-    if not isinstance(content, list):
-        return content if isinstance(content, str) else str(content or "")
-    blocks = []
-    for part in content:
-        if not isinstance(part, dict):
-            blocks.append({"type": "text", "text": str(part)})
-            continue
-        if part.get("type") == "text":
-            text = str(part.get("text") or "")
-            if text:
-                blocks.append({"type": "text", "text": text})
-            continue
-        image_url = part.get("image_url")
-        url = image_url.get("url") if isinstance(image_url, dict) else None
-        if isinstance(url, str):
-            match = re.match(r"^data:(image/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$", url, re.I)
-            if match:
-                media_type = match.group(1).lower()
-                blocks.append({
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": media_type, "data": match.group(2)},
-                })
-    return blocks or [{"type": "text", "text": "(No supported image or text content.)"}]
-
-
-def _anthropic_join_content(left, right):
-    if isinstance(left, list) or isinstance(right, list):
-        def as_blocks(value):
-            if isinstance(value, list):
-                return value
-            text = str(value or "")
-            return [{"type": "text", "text": text}] if text else []
-        return as_blocks(left) + [{"type": "text", "text": "\n\n"}] + as_blocks(right)
-    return str(left or "") + "\n\n" + str(right or "")
-
-
 def _anthropic_messages(messages):
     system = []
     converted = []
     for item in messages:
         role = item.get("role")
-        raw_content = item.get("content", "") or ""
-        content = _anthropic_content(raw_content)
+        content = item.get("content", "") or ""
         if role == "system":
             if content:
-                if isinstance(content, list):
-                    system.extend(block.get("text", "") for block in content if block.get("type") == "text")
-                else:
-                    system.append(content)
+                system.append(content)
         elif role in ("user", "assistant"):
             if converted and converted[-1]["role"] == role:
-                converted[-1]["content"] = _anthropic_join_content(converted[-1]["content"], content)
+                converted[-1]["content"] += "\n\n" + content
             else:
                 converted.append({"role": role, "content": content})
     if not converted:
@@ -283,10 +242,7 @@ class ProviderClient:
                     payload["output_config"] = {"effort": effort}
                     payload.pop("temperature", None)
                 elif legacy_thinking_model:
-                    budget = min(
-                        max(1024, int((max_tokens or 4096) * (0.5 if effort == "medium" else 0.65))),
-                        max(1024, (max_tokens or 4096) - 1),
-                    )
+                    budget = min(max(1024, int((max_tokens or 4096) * (0.5 if effort == "medium" else 0.65))), max(1024, (max_tokens or 4096) - 1))
                     payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
                     payload.pop("temperature", None)
             headers = {
@@ -303,7 +259,7 @@ class ProviderClient:
                 "stream": stream,
             }
             model_lower = model.lower()
-            if provider == "openai" and (model_lower.startswith(("gpt-5", "gpt-6")) or re_model_reasoning(model_lower)):
+            if provider in ("openai",) and (model_lower.startswith(("gpt-5", "gpt-6")) or re_model_reasoning(model_lower)):
                 payload["max_completion_tokens"] = payload.pop("max_tokens")
                 if model_lower.startswith(("o1", "o3", "o4")):
                     payload.pop("temperature", None)
