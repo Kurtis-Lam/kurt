@@ -188,6 +188,10 @@ def _tolerant_action_re(name):
     )
 
 
+ALT_ACTION_OPENER_RE = re.compile(
+    r"<\|?/?tool_call(?:_start)?\|?>\s*(?:@\s*@\s*@\s*)?(?=(?:RUN|SEARCH|READ|LIST|AGENT_RUN|AGENT_READ|AGENT_LIST)\b)",
+    re.I,
+)
 RUN_ACTION_RE = _tolerant_action_re("RUN")
 SEARCH_ACTION_RE = _tolerant_action_re("SEARCH")
 READ_ACTION_RE = _tolerant_action_re("READ")
@@ -444,8 +448,9 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .model-download-card .row input{flex:1 1 240px;min-width:0;background:var(--panel);border:1px solid var(--line2);border-radius:8px;padding:8px 10px;outline:none}
 .model-download-card .row input:focus{border-color:var(--green)}
 .model-download-card .row button{flex:0 0 auto}
-.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.field{display:grid;gap:5px;margin-bottom:13px}
+.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px;align-items:start}
+.field{display:grid;gap:5px;margin-bottom:13px;align-content:start}
+.field>.inline-note{margin:2px 0 0}
 .field label{font-size:13px;color:var(--muted)}
 .field input,.field select,.field textarea{background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:8px 10px;outline:none;width:100%;min-width:0;max-width:100%}
 .field input{overflow:hidden;text-overflow:ellipsis}
@@ -5088,6 +5093,8 @@ class Handler(BaseHTTPRequestHandler):
                     final_raw = raw
                     break
                 raw = generate_response()
+                if raw:
+                    raw = ALT_ACTION_OPENER_RE.sub("\n@@@ ", raw)
                 if not raw:
                     final_raw = "Kurt did not return any response text. Check the selected model and provider configuration."
                     break
