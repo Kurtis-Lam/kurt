@@ -15,6 +15,7 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -44,27 +45,24 @@ MAX_MESSAGES_PER_CHAT = 300
 WEB_INSTRUCTIONS = r"""
 KURT WEB INTERFACE RULES:
 - You are Kurt, the local assistant in this application. Speak as Kurt.
-- Normal mode has no access to local files, attachments, directories, terminal commands, or
-  other computer resources. In Normal mode, do not request or emit local-access actions.
-- Code mode can read and list files only beneath the configured project directory, subject to
-  the server's protected-path exclusions. Uploaded attachments are available only in Code mode.
-- Before proposing a file or prompt change, provide a concise Change summary that names the
-  target and explains what will change and why.
-- WRITE and EDIT blocks create review cards only. They never save a file by themselves. A
-  user-confirmed Download saves a copy; a separately confirmed Apply to project action writes
-  to the configured project directory when project writes are enabled in Settings.
-- RUN blocks create command-review cards only. They never execute until the user approves
-  the specific command in the interface. The command runner is restricted to the isolated
-  conversation workspace and its allowlisted developer checks; it is not an unrestricted shell.
-- READ and LIST are read-only and may address only paths inside the configured project root.
-  Never attempt path traversal, symbolic-link access, or access to protected/system directories.
+- Normal mode can use only files explicitly uploaded by the user. Uploads are copied to the isolated
+  conversation workspace and may be included as text or multimodal image input. Normal mode has
+  no access to other laptop files, directories, terminal commands, or computer resources.
+- Code mode is isolated to the conversation's temporary workspace. It cannot inspect the user's
+  project directory, home directory, desktop, or any other laptop path.
+- Agent mode can read/list accessible ordinary host files. File proposals are review cards and do
+  not write by themselves. Applying each file requires the user's explicit confirmation.
+- Code-mode WRITE/EDIT actions save only inside this chat's isolated workspace, and Code-mode RUN
+  actions execute in the restricted workspace runner. Agent-mode WRITE/EDIT actions create review
+  cards and require per-file approval; Agent-mode RUN actions require a command-specific approval
+  before running on the host with the Kurt process's existing OS permissions.
 - SEARCH may request external web research when needed. Do not invent search results.
 - SYSTEM_PROMPT creates a review card. It is not saved until the user confirms applying it.
-- Uploaded ZIP archives and folders are unpacked into the conversation workspace in Code mode.
-  Treat extracted paths as their uploaded relative paths. Do not claim to inspect binary images
-  unless the selected model has vision input or an available image-reading capability.
-- Never claim a file was read, a command ran, or a change was saved unless the application
-  returned the actual result. Never imply access beyond the configured project directory.
+- Uploaded ZIP archives and folders are unpacked into the conversation workspace. Treat extracted
+  paths as uploaded relative paths. Never claim an image was inspected unless image data was
+  actually included and the selected model/provider supports vision.
+- Never claim a file was read, a command ran, or a change was saved unless the application returned
+  the actual result. Never imply access beyond the active mode's enforced scope.
 """
 
 KURT_IDENTITY_INSTRUCTIONS = r"""
@@ -113,45 +111,88 @@ RESPONSE FORMAT:
 """
 
 EFFORT_INSTRUCTIONS = {
-    "thinking": "THINKING EFFORT: use medium reasoning where the provider supports effort controls. For substantive requests, provide a concise, user-facing rationale explaining the approach, decisive considerations, assumptions, and checks. Use a provider-supplied reasoning-summary channel when available; otherwise put the rationale in the RATIONALE block. Mention uncertainty honestly. Do not turn it into a recap or generic summary, and never expose private chain-of-thought or internal monologue.",
-    "expert": "EXPERT EFFORT: use high/deep reasoning where the provider supports effort controls and verify important details carefully. For substantive requests, provide a detailed, user-facing rationale explaining consequential decisions, trade-offs, evidence, alternatives, and checks. Use a provider-supplied reasoning-summary channel when available; otherwise put the rationale in the RATIONALE block. Be precise about uncertainty; do not produce a generic summary or expose private chain-of-thought or internal monologue.",
+    "thinking": "STANDARD RESPONSE EFFORT: use the provider's normal supported reasoning controls. For substantive requests, provide a concise user-facing rationale explaining the approach, decisive considerations, assumptions, and checks. Use only provider-designated reasoning-summary channels; never display private reasoning or internal monologue.",
 }
-
 NORMAL_MODE_INSTRUCTIONS = r"""
-NORMAL MODE — NO LOCAL FILE OR COMPUTER ACCESS:
-- You cannot inspect, list, search, read, create, edit, delete, move, upload, download, or otherwise access local files or folders.
-- You cannot access the configured project directory, chat workspace, attachments, local models' files, or the user's computer through tools or action blocks.
-- Do not request, emit, or simulate READ, LIST, RUN, WRITE, EDIT, or SYSTEM_PROMPT actions. The server blocks these actions as well.
-- You may answer general questions and request external web research with SEARCH.
-- When the user asks you to inspect or change local files, run commands, or work on their project, explicitly tell them to switch this conversation to Code mode. Explain that Code mode can read and list files under the configured project directory and chat workspace, while changes and commands require separate approval. Do not pretend to have inspected anything.
-- If the user asks to see their live desktop, screen, or GUI, explain that switching to Code mode enables project-file access but does not provide live screen capture or remote GUI control; ask them to attach a screenshot for visual inspection.
+NORMAL MODE — DAILY TASKS, UPLOADS ONLY:
+- You cannot access the user's laptop, project folders, desktop, terminal, or unuploaded files.
+- You may inspect files the user explicitly uploads. They are copied to this chat's isolated
+  temporary workspace; uploaded text and supported image attachments are sent to the model.
+- Never request or emit READ, LIST, READ_LOCAL, LIST_LOCAL, RUN, WRITE, EDIT, or other
+  computer-access actions in Normal mode.
+- For a complex coding workflow (implementing, refactoring, debugging a project, editing files,
+  running tests, or changing a codebase), ask whether the user wants to switch to Code mode.
+  Do not claim to have inspected or changed anything. Code mode works only in an isolated
+  temporary workspace; Agent mode is for approved access to the user's actual computer.
 """
 
 CODE_MODE_INSTRUCTIONS = r"""
-CODE MODE — PROJECT FILE ACCESS WITH USER APPROVAL:
-- You may read and list files inside the configured Code mode project directory using:
+CODE MODE — ISOLATED CODING WORKSPACE:
+- You may read and list files only beneath this conversation's isolated temporary workspace:
   @@@ LIST relative/path
   @@@ END
   @@@ READ relative/path.ext
   @@@ END
-  Use LIST with an empty path to inspect the configured project directory root.
-- The read/list tools are read-only. The server restricts them to the configured project directory and excludes credential, secret, system, and dependency locations. Never imply that you can access paths outside that configured root.
-- You may inspect attached files and the isolated conversation workspace. Uploaded attachments are copied into that workspace by the user's explicit upload action.
-- Propose complete file replacements using WRITE or EDIT. These create review cards only; they do not write to the project or workspace. The user must explicitly download a proposal or approve the confirmed Apply to project action before a project file changes.
-- You may propose a developer command using one RUN action block. It is never executed automatically. The user must review and approve each command in the interface first. Approved commands run only through the restricted per-chat developer runner in the isolated chat workspace, not with unrestricted shell access to the computer.
-- Never claim a read, command, or write succeeded unless the application returned its actual result. Run targeted checks only after the user approves the command.
-- Syntax validation is not proof of end-to-end correctness. State when no test harness exists and describe any remaining uncertainty.
+  Use LIST with an empty path to inspect the workspace root.
+- The workspace contains only files explicitly uploaded to this conversation and files created
+  during this conversation. Never use the configured Agent starting directory, home directory,
+  or another laptop path.
+- Use complete WRITE or EDIT actions to save validated files directly inside this chat's isolated
+  workspace. These writes never touch the user's project, home directory, or other laptop paths.
+- RUN executes through the restricted per-chat runner with the isolated workspace as its working
+  directory. It is confined to the runner's command allowlist; inspect the actual output and exit
+  status, and never claim success when the command failed.
+- Do not emit READ_LOCAL or LIST_LOCAL in Code mode. For whole-computer access, ask the user to
+  switch to Agent mode.
+- Never claim a read, command, or write succeeded unless the application returned its result.
+"""
+
+AGENT_MODE_INSTRUCTIONS = r"""
+AGENT MODE — HOST COMPUTER ACCESS WITH WRITE APPROVAL:
+- You may read and list ordinary local files which the Kurt process can access, including paths
+  outside the project folder. Supported local images can be passed to your vision-capable model as
+  actual image input. Use explicit paths with:
+  @@@ LIST_LOCAL /absolute/directory/path
+  @@@ END
+  @@@ READ_LOCAL /absolute/file/path
+  @@@ END
+  Relative paths resolve from the configured Agent starting directory. LIST_LOCAL with / lists
+  the filesystem root. Do not recursively index the whole disk without a user request.
+- Reads and listings do not require approval, but protected credentials, API keys, private-key
+  files, virtual OS filesystems, and inaccessible paths remain blocked. Do not attempt sudo or
+  privilege escalation; access is limited to the account running Kurt.
+- RUN creates a host-command approval card. Explain its effect and wait for the user's explicit
+  approval before execution. Approved commands run on the host in the configured Agent starting
+  directory, with the Kurt process's existing OS permissions.
+- WRITE and EDIT targets must be absolute paths or paths relative to the Agent starting
+  directory. They create review cards only. Never write, overwrite, create folders, or delete
+  anything until the user confirms the specific Apply to computer action. Re-check the target
+  immediately before writing and reject protected paths and symlinks.
+- You may delegate bounded work using up to three SUBAGENT blocks per turn:
+  @@@ SUBAGENT Researcher
+  A clearly scoped task and expected deliverable.
+  @@@ END
+  The application runs delegated work as separate model tasks and records the lead's delegation,
+  each agent's task/status, and its summarized result. Agent execution is sequential in this
+  version; do not claim simultaneous workers. Never reveal private chain-of-thought. Show only
+  task plans, observable actions, status, and concise findings.
+- Do not claim live desktop/screen capture or GUI interaction. Ask the user to upload a screenshot
+  when visual inspection is required.
+- Never claim a read, command, or write succeeded unless the application returned its result.
 """
 
 RUN_ACTION_RE = re.compile(r"@@@\s*RUN\s*([^\n]*)\n(.*?)\n?@@@\s*END", re.I | re.S)
 SEARCH_ACTION_RE = re.compile(r"@@@\s*SEARCH\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
 READ_ACTION_RE = re.compile(r"@@@\s*READ\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
 LIST_ACTION_RE = re.compile(r"@@@\s*LIST\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
+READ_LOCAL_ACTION_RE = re.compile(r"@@@\s*READ_LOCAL\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
+LIST_LOCAL_ACTION_RE = re.compile(r"@@@\s*LIST_LOCAL\s*([^\n]*)\n?(.*?)\n?@@@\s*END", re.I | re.S)
+SUBAGENT_ACTION_RE = re.compile(r"@@@\s*SUBAGENT\s+([^\n]+)\n(.*?)\n?@@@\s*END", re.I | re.S)
 RATIONALE_ACTION_RE = re.compile(r"@{2,3}\s*RATIONALE\s*\n(.*?)\n?@{2,3}\s*END", re.I | re.S)
 SUMMARY_ACTION_RE = re.compile(r"@{2,3}\s*SUMMARY\s*\n(.*?)\n?@{2,3}\s*END", re.I | re.S)  # Legacy compatibility
 SYSTEM_PROMPT_ACTION_RE = re.compile(r"@@@\s*SYSTEM_PROMPT\s*\n(.*?)\n?@@@\s*END", re.I | re.S)
 WEB_ACTION_RE = re.compile(
-    r"@@@\s*(?:RUN|SEARCH|READ|LIST|SYSTEM_PROMPT)\b[^\n]*\n[\s\S]*?@@@\s*END", re.I
+    r"@@@\s*(?:RUN|SEARCH|READ|LIST|READ_LOCAL|LIST_LOCAL|SUBAGENT|SYSTEM_PROMPT)\b[^\n]*\n[\s\S]*?@@@\s*END", re.I
 )
 SYSTEM_PROMPT_REQUEST_RE = re.compile(
     r"^\s*(?:/system-prompt|(?:what\s+is|what's)\s+(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt|(?:show|share|reveal|print|display|quote|give)\s+(?:me\s+)?(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt)\s*[?!.\s]*$",
@@ -161,6 +202,11 @@ SYSTEM_PROMPT_REQUEST_RE = re.compile(
 NORMAL_MODE_LOCAL_ACCESS_RE = re.compile(
     r"(?:\b(?:see|view|look\s+at|access|inspect|read|browse|list|open|find|search|check|modify|edit|write|delete|create|run|execute)\b.{0,100}\b(?:my\s+)?(?:mac(?:book)?|computer|desktop|screen|files?|folders?|directories|project|codebase|repository|repo|terminal|drive|disk|local\s+(?:files?|folders?|machine))\b"
     r"|\b(?:my\s+)?(?:mac(?:book)?|computer|desktop|screen|local\s+(?:files?|folders?|machine)|project\s+(?:files?|folder|directory)|codebase|repository|repo)\b.{0,100}\b(?:access|inspect|read|browse|list|open|find|search|check|modify|edit|write|delete|create|run|execute)\b)",
+    re.I,
+)
+NORMAL_MODE_CODING_RE = re.compile(
+    r"\b(?:implement|refactor|debug|fix|modify|edit|rewrite|build|create|extend|integrate|test|run|wire\s+up|set\s+up)\b.{0,120}\b(?:code|script|program|app|application|website|web\s+app|project|repository|repo|feature|api|backend|frontend|bug|tests?|game|cli|tool|module|package|python|javascript|typescript|html|css)\b|"
+    r"\b(?:codebase|repository|repo|project\s+files|source\s+files|multiple\s+files)\b.{0,90}\b(?:change|modify|fix|debug|implement|refactor|test|run|rewrite|extend)\b",
     re.I,
 )
 DESKTOP_VISUAL_REQUEST_RE = re.compile(
@@ -706,7 +752,13 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 .attachment-remove{width:25px;height:25px;flex:none;padding:0;border:0;background:transparent;color:var(--muted);font-size:17px}
 .attachment-remove:hover{color:var(--danger);background:var(--raise)}
 .upload-list{display:grid;gap:7px;padding:8px 0;color:var(--muted);font-size:12px}
-.upload-item{display:flex;align-items:center;gap:9px;min-width:0;padding:8px 9px;border:1px solid var(--line);border-radius:9px;background:var(--bg)}
+ .upload-item{display:flex;align-items:center;gap:9px;min-width:0;padding:8px 9px;border:1px solid var(--line);border-radius:9px;background:var(--bg)}
+.message-attachments{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px;max-width:100%}
+.message-attachment{display:flex;align-items:center;gap:8px;max-width:100%;padding:6px 8px;border:1px solid var(--line2);border-radius:10px;background:var(--panel);font:12px/1.35 var(--sans)}
+.message-attachment-image{display:block;max-width:min(300px,100%);max-height:230px;object-fit:contain;border-radius:8px;background:var(--bg)}
+.message-attachment-meta{min-width:0;overflow-wrap:anywhere;color:var(--muted)}
+.message-attachment-meta strong{display:block;color:var(--text);font-weight:600}
+.message-attachment-pending{display:grid;place-items:center;min-width:90px;min-height:52px;padding:8px;color:var(--muted)}
 .upload-item .attachment-thumb,.upload-item .attachment-file-icon{width:34px;height:34px}
 .upload-item .attachment-name{font-size:12px}
 .upload-item .attachment-meta{font-size:10.5px}
@@ -872,6 +924,15 @@ body.nav-open .sidebar{box-shadow:var(--shadow)}
 body.nav-open .scrim{opacity:1;visibility:visible;pointer-events:auto}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+/* Independent conversation and preview columns, with a quiet editor-like right pane. */
+.main.has-artifacts .chat-area{flex:0 0 52%;width:52%;max-width:52%;border-right:1px solid var(--line);}
+.main.has-artifacts .artifact-pane{width:calc((100vw - var(--side-w)) * .48);background:var(--panel);border-left:0;}
+.artifact-pane-content{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;}
+.artifact-pane .artifact{box-shadow:none;}
+.artifact-pane .artifact-body .codebox pre{max-height:calc(100dvh - 245px);}
+@media(max-width:900px){.main.has-artifacts .chat-area{flex-basis:52%;width:52%;max-width:52%;}.main.has-artifacts .artifact-pane{width:calc((100vw - var(--side-w)) * .48);}}
+@media(max-width:700px){.main.has-artifacts .chat-area{flex:1 1 100%;width:100%;max-width:100%;}.main.has-artifacts .artifact-pane{width:100vw;}}
+
 /* Let the complete public rationale expand and scroll instead of truncating at 420px. */
 .reasoning-panel.open .think-body{max-height:min(72vh,1100px);overflow:auto;overscroll-behavior:contain;white-space:pre-wrap;overflow-wrap:anywhere}
 .reasoning-panel.live .think-body{scroll-behavior:smooth}
@@ -889,6 +950,26 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 .settings-nav-btn,.local-model-row,.key-row,.pool-card,.group-member{transition:none}
 .settings-nav-btn{transition:background-color .12s ease,color .12s ease}
 @media(prefers-reduced-motion:reduce){.settings-panel.active{animation:none}}
+
+/* Three-mode workbench and Claude-style split view */
+.route-picker{flex:0 0 auto}
+.custom-select.mode-pill{max-width:150px;min-width:96px}
+.custom-select.mode-pill .custom-select-trigger{font-weight:600;color:var(--text);background:var(--panel)}
+.main.has-artifacts .chat-area{flex:0 0 52%;width:52%;max-width:52%;border-right:1px solid var(--line)}
+.artifact-pane{width:calc((100vw - var(--side-w)) * .48);padding:0;background:var(--panel);border-left:0;box-shadow:none}
+.artifact-pane-head{top:0;margin:0;padding:14px 18px;background:var(--panel);border-bottom:1px solid var(--line)}
+.artifact-pane-head strong{font-size:13.5px;letter-spacing:.01em}
+.artifact-pane-count{font-size:11.5px}
+.artifact-pane-content{padding:14px 18px 24px;gap:12px}
+.artifact-pane .artifact{border-radius:12px;background:var(--bg)}
+.artifact-pane .artifact-top{padding:12px 14px}
+.artifact-pane .artifact-body{border-top-color:var(--line)}
+.artifact-pane .artifact-body .codebox pre{max-height:calc(100dvh - 250px);overflow:auto}
+.main.has-artifacts .messages{padding-top:22px}
+.main.has-artifacts .composer-wrap{padding-bottom:max(10px,env(safe-area-inset-bottom))}
+@media(max-width:900px){.main.has-artifacts .chat-area{flex-basis:52%;width:52%;max-width:52%}.artifact-pane{width:calc((100vw - var(--side-w)) * .48)}}
+@media(max-width:700px){.main.has-artifacts .chat-area{flex:1 1 100%;width:100%;max-width:100%;border-right:0}.main.has-artifacts .artifact-pane{width:100vw;padding:0}.artifact-pane-content{padding:12px 14px 20px}}
+
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -938,13 +1019,12 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="compose-bottom">
 <button class="icon-btn" id="contextBtn" title="Add files from this computer" aria-label="Add files from this computer"><svg class="ic"><use href="#i-plus"/></svg></button>
 <span class="spacer"></span>
-<select id="effortSelect" class="mode-pill" title="Response effort" aria-label="Response effort"><option value="thinking" selected>Thinking</option><option value="expert">Expert</option></select>
-<select id="operationMode" class="mode-pill" title="Operating mode" aria-label="Operating mode"><option value="normal" selected>Normal</option><option value="code">Code</option></select>
+<select id="operationMode" class="mode-pill" title="Operating mode" aria-label="Operating mode"><option value="normal" selected>Normal</option><option value="code">Code</option><option value="agent">Agent</option></select>
 <div class="route-picker" id="routePicker" aria-label="Choose model route"><button class="route-current" id="routeCurrent" type="button" aria-haspopup="true" aria-expanded="false">Choose model</button></div><select id="topModel" hidden aria-label="Selected model route"></select><input id="composerFiles" type="file" multiple hidden>
 <button class="send" id="sendBtn" title="Send message" aria-label="Send message" disabled><svg class="ic"><use href="#i-up"/></svg></button>
 </div>
 </div>
-<div class="compose-hint" id="composeHint">Normal mode has no local file access. Code mode can inspect the configured project folder; changes require your approval.</div>
+<div class="compose-hint" id="composeHint">Normal · daily tasks and uploads only. Code · isolated workspace. Agent · host access with approval for every write.</div>
 </div>
 </section>
 <aside class="artifact-pane" id="artifactPane" aria-label="Selected file preview">
@@ -964,9 +1044,8 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 </nav>
 <div class="settings-panel-area">
 <section class="settings-panel active" data-settings-panel="general">
-<h3>General</h3><div class="inline-note">Choose the default route and configure which local folder Code mode may inspect.</div>
-<div class="settings-grid"><div class="field"><label>Default chat route</label><select id="settingsModel"></select></div><div class="field"><label>Code mode project access root</label><input id="projectRoot" placeholder="/Users/you/project"><div class="inline-note">Choose one project folder, not your home folder or system root. Code mode can read files beneath this folder, except protected credential and system locations.</div></div></div>
-<label class="check-row"><input id="allowProjectWrites" type="checkbox"> Allow applying generated files to the project (each file still requires confirmation)</label>
+<h3>General</h3><div class="inline-note">Choose the default model route and the Agent starting directory. Normal and Code never access this directory.</div>
+<div class="settings-grid"><div class="field"><label>Default chat route</label><select id="settingsModel"></select></div><div class="field"><label>Agent starting directory</label><input id="projectRoot" placeholder="/Users/you/Projects"><div class="inline-note">Agent reads only requested paths, using the permissions of the account running Kurt. Root/system locations are not elevated; protected credential files remain blocked. Every write requires its own confirmation.</div></div></div>
 <div class="field"><label>System prompt</label><textarea id="systemPrompt" style="min-height:180px"></textarea><div class="inline-note">Kurt can review and propose edits to this prompt in chat. Proposed prompt changes appear as a review card and require your approval before saving. Type /system-prompt in chat to display the exact active Kurt prompt for the selected mode.</div></div>
 <div class="row"><button class="primary" id="saveSettings">Save settings</button><button id="reloadSettings">Reload from disk</button></div>
 </section>
@@ -997,13 +1076,13 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="section"><h3>Saved groups</h3><div class="inline-note">Drag a saved entry to change its priority, or press Edit to rearrange and add models.</div><div id="apiGroupsList"></div></div>
 </section>
 </div></div></div></div>
-<div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files</h2><button class="ghost" data-close="filesModal">Close</button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Choose individual files or an entire folder from Finder or File Explorer. Images are retained as image files in this chat. Only a folder selection is packaged internally as a ZIP, then unpacked automatically. Large pasted text is attached as a .txt file. Your original files are never changed.</p><div class="file-source"><h3>From this computer</h3><div class="file-actions"><button id="chooseLocalFiles" class="primary">Choose files</button><button id="chooseLocalFolder">Choose folder</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList" aria-live="polite">No files selected.</div></div><div class="file-source"><h3>From the configured project</h3><div class="row"><input id="fileFolder" value="" placeholder="Project folder path"><button id="refreshFiles">Open</button><button id="selectCurrentFolder">Add this folder</button></div><div class="file-picker" id="filePicker"></div></div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
+<div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files</h2><button class="ghost" data-close="filesModal">Close</button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Choose individual files or an entire folder from Finder or File Explorer. Images are retained as image files in this chat. Only a folder selection is packaged internally as a ZIP, then unpacked automatically. Large pasted text is attached as a .txt file. Your original files are never changed.</p><div class="file-source"><h3>From this computer</h3><div class="file-actions"><button id="chooseLocalFiles" class="primary">Choose files</button><button id="chooseLocalFolder">Choose folder</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList" aria-live="polite">No files selected.</div></div><div class="inline-note">Uploads are copied into this conversation’s isolated temporary workspace and sent with your next message. Code cannot browse your laptop. Use Agent mode for approved host-file access.</div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
 <div class="toast" id="toast"></div>
 <div class="route-flyout" id="routeFlyout" hidden><div class="route-flyout-column route-flyout-categories"></div><div class="route-flyout-column route-flyout-options"></div></div>
 <div class="chat-context-menu" id="chatContextMenu" role="menu"></div>
 <div class="dialog-backdrop" id="appDialogBackdrop"><form class="app-dialog" id="appDialogForm"><h2 id="appDialogTitle"></h2><p class="dialog-message" id="appDialogMessage"></p><div class="dialog-fields" id="appDialogFields"></div><div class="dialog-actions"><button type="button" id="appDialogCancel">Cancel</button><button type="submit" class="primary" id="appDialogConfirm">Save</button></div></form></div>
 <script>
-const TOKEN='__TOKEN__';const HINT='Normal mode has no local file or computer access. Switch to Code mode to inspect project files and propose changes for your approval.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[]};
+const TOKEN='__TOKEN__';const HINT='Normal · daily tasks and uploads only. Code · isolated workspace. Agent · host access with approval for every write.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[],newAttachmentPaths:[]};
 const $=id=>document.getElementById(id);const api=async(path,body)=>{const res=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:body?JSON.stringify(body):undefined});const data=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(data.error||res.statusText);return data};
 function toast(msg){const el=$('toast');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600)}
 
@@ -1196,8 +1275,8 @@ function setReasoning(node,text,live=false,seconds=0){
   if(panel.dataset.userOpen!=='1')setReasoningOpen(panel,false);
  }
 }
-function setThink(node,entries){const panel=node.querySelector('.work-log');if(!panel)return;const items=Array.isArray(entries)?entries.slice(-120):[];if(!items.length){panel.hidden=true;return}panel.hidden=false;const body=panel.querySelector('.work-log-body');const open=panel.dataset.initialized!=='1'||panel.classList.contains('open');panel.dataset.initialized='1';panel.classList.toggle('open',open);panel.querySelector('.work-log-head').setAttribute('aria-expanded',String(open));body.replaceChildren();items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const label=String(data.text||'Activity');const detail=String(data.detail||'');const row=document.createElement(detail&&detail!==label?'details':'div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');if(row.tagName==='DETAILS'){row.open=true;const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;body.appendChild(row)});panel.querySelector('.think-label').textContent='Full activity log · '+items.length+' event(s)'}
-function pushWorkStep(node,text,ok,detail){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok&&last.detail===detail)return;entries.push({text,ok,detail:detail||''});if(entries.length>120)entries.shift();setThink(node,entries)}
+function setThink(node,entries){const panel=node.querySelector('.work-log');if(!panel)return;const items=Array.isArray(entries)?entries.slice(-120):[];if(!items.length){panel.hidden=true;return}panel.hidden=false;const body=panel.querySelector('.work-log-body');const open=panel.dataset.initialized!=='1'||panel.classList.contains('open');panel.dataset.initialized='1';panel.classList.toggle('open',open);panel.querySelector('.work-log-head').setAttribute('aria-expanded',String(open));body.replaceChildren();items.forEach(item=>{const data=typeof item==='string'?{text:item}:item||{};const label=String(data.text||'Activity');const detail=String(data.detail||'');const row=document.createElement(detail&&detail!==label?'details':'div');row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');if(row.tagName==='DETAILS'){row.open=true;const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;if(data.agent)summary.textContent=String(data.agent.name||'Sub-agent')+' · '+String(data.agent.state||'activity')+' · '+label;row.append(summary,content)}else row.textContent=label;body.appendChild(row)});const agentRows=items.filter(item=>item&&item.agent);const agentStates=new Map();agentRows.forEach(item=>agentStates.set(item.agent.name,item.agent.state));const running=[...agentStates.values()].filter(value=>value==='running').length;const completed=[...agentStates.values()].filter(value=>value==='completed').length;panel.querySelector('.think-label').textContent=agentRows.length?'Agent activity · '+running+' running · '+completed+' completed · '+items.length+' event(s)':'Workspace activity · '+items.length+' event(s)'}
+function pushWorkStep(node,text,ok,detail,agent){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok&&last.detail===detail)return;entries.push({text,ok,detail:detail||'',agent:agent||null});if(entries.length>120)entries.shift();setThink(node,entries)}
 function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const panel=node.querySelector('.reasoning-panel');if(panel){panel.classList.remove('live');if(panel._head)panel._head.classList.remove('live');const label=panel._label;if(label&&label.textContent.indexOf('Thinking')===0)label.textContent='Thought process'}}
 let follow=true;
 function scrollEnd(force){if(!force&&!follow)return;const m=$('messages');m.scrollTop=m.scrollHeight}
@@ -1205,12 +1284,58 @@ function setEmpty(on){$('main').classList.toggle('empty',on);if(on)$('toBottom')
 function setTitle(title,meta){$('chatTitle').textContent=title||'New chat';$('chatMeta').textContent=meta||''}
 function autosize(){const t=$('prompt');t.style.height='auto';t.style.height=Math.min(t.scrollHeight,220)+'px'}
 function updateSend(){$('sendBtn').disabled=!state.busy&&!$('prompt').value.trim()}
-function hint(){const base=state.contextCount?state.contextCount+' item(s) in this chat’s isolated workspace':HINT;$('composeHint').textContent=state.mode==='code'?'Code mode can read files only under the configured project directory, not the whole computer. File changes are previews until you approve Apply to project; every terminal command also requires approval and runs in the isolated chat workspace.':HINT}
+function hint(){const base=state.contextCount?state.contextCount+' item(s) in this chat’s isolated workspace':HINT;const text=state.mode==='normal'?'Normal · daily tasks and uploaded files only. Complex coding workflows should switch to Code.':state.mode==='code'?'Code · isolated workspace only. Files are written here; commands run in the isolated runner.':'Agent · host files can be read on request. Every file write and host command requires explicit approval.';$('composeHint').textContent=(state.contextCount?base+' · ':'')+text}
 function setBusy(b){state.busy=b;const btn=$('sendBtn');btn.querySelector('use').setAttribute('href',b?'#i-stop':'#i-up');btn.title=b?'Stop response':'Send message';btn.setAttribute('aria-label',btn.title);updateSend()}
 function cancelRun(){if(state.abort)state.abort.abort();state.abort=null;state.run++;setBusy(false)}
 function responseModelLabel(ref){if(!ref)return'';const item=state.models.find(m=>m.ref===ref);return item?`${item.label||item.name||item.model} · ${item.provider}`:String(ref)}
 function setResponseMeta(node,stats,model){const el=node?.querySelector('.response-metrics');if(!el)return;const parts=[];const seconds=Number(stats?.thought_seconds);const speed=Number(stats?.tokens_per_second);if(Number.isFinite(seconds)&&seconds>0)parts.push(`Generated in ${seconds.toFixed(seconds<10?1:0)}s`);if(Number.isFinite(speed)&&speed>0)parts.push(`${stats?.tokens_estimated?'~':''}${speed.toFixed(speed<10?1:0)} tok/s`);const label=responseModelLabel(model);if(label)parts.push(label);el.textContent=parts.join(' · ');if(stats?.tokens_estimated)el.title='Token rate is estimated from generated text length because the provider did not report output-token usage.'}
-function renderMessage(role,content,artifacts,extra){const wrap=document.createElement('div');wrap.className='message '+role;let safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<\/?think)/i.test(String(content||'')))safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.';wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);if(role==='user'){if(hasMathMarkup(safeContent)){const userContent=document.createElement('div');userContent.className='content user-content';userContent.innerHTML=renderMarkdown(safeContent);bubble.appendChild(userContent);typesetMath(userContent)}else bubble.textContent=content}else{bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');const reasoning=reasoningBlock();const headingRow=bubble.querySelector('.assistant-heading');headingRow.insertBefore(reasoning._head,headingRow.querySelector('.assistant-status'));bubble.appendChild(reasoning);bubble.appendChild(thinkBlock());bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindCopy(wrap);wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];setReasoning(wrap,extra?.reasoning||'',false,extra?.thinkingSeconds||0);setThink(wrap,extra?.worklog||[]);setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'))}$('messages').appendChild(wrap);return wrap}
+function renderMessageAttachments(bubble,attachments){
+ const items=Array.isArray(attachments)?attachments:[];if(!items.length)return;
+ const root=document.createElement('div');root.className='message-attachments';
+ items.forEach(item=>{
+  const path=String(item.path||'');const image=!!item.image||String(item.type||item.mime||'').startsWith('image/');
+  const card=document.createElement('div');card.className='message-attachment';card.dataset.attachmentPath=path;
+  if(image){
+   if(item.previewUrl){const img=document.createElement('img');img.className='message-attachment-image';img.dataset.attachmentPath=path;img.src=item.previewUrl;img.alt=item.name||'Uploaded image';card.appendChild(img)}
+   else{const placeholder=document.createElement('div');placeholder.className='message-attachment-pending';placeholder.textContent='Image attached';card.appendChild(placeholder)}
+  }else{
+   const icon=document.createElement('span');icon.className='attachment-file-icon';icon.innerHTML='<svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>';card.appendChild(icon)
+  }
+  const meta=document.createElement('span');meta.className='message-attachment-meta';
+  const title=document.createElement('strong');title.textContent=item.name||path.split('/').pop()||'Attachment';
+  const detail=document.createElement('span');detail.textContent=formatFileSize(item.size||0);
+  meta.append(title,detail);card.appendChild(meta);root.appendChild(card);
+ });
+ bubble.appendChild(root);
+}
+function refreshMessageAttachmentPreviews(){
+ const byPath=new Map((state.uploadedFiles||[]).filter(item=>item.previewUrl).map(item=>[item.path,item]));
+ document.querySelectorAll('.message-attachment[data-attachment-path]').forEach(card=>{
+  const path=card.dataset.attachmentPath;const item=byPath.get(path);if(!item||card.querySelector('img'))return;
+  const placeholder=card.querySelector('.message-attachment-pending');if(!placeholder)return;
+  const img=document.createElement('img');img.className='message-attachment-image';img.dataset.attachmentPath=path;img.src=item.previewUrl;img.alt=item.name||'Uploaded image';placeholder.replaceWith(img);
+ });
+}
+function renderMessage(role,content,artifacts,extra){
+ const wrap=document.createElement('div');wrap.className='message '+role;
+ const safeContent=role==='assistant'?stripUnsupportedActions(content):String(content||'');
+ if(role==='assistant'&&!safeContent&&/(?:@@@\s*(?:RUN|READ|EXEC)|tool_call|<\/?think)/i.test(String(content||'')))safeContent='This earlier response contained an unsupported tool action. Kurt did not execute it.';
+ wrap.dataset.raw=safeContent;wrap.dataset.mode=extra?.mode||state.mode;
+ const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);
+ if(role==='user'){
+  if(hasMathMarkup(safeContent)){const userContent=document.createElement('div');userContent.className='content user-content';userContent.innerHTML=renderMarkdown(safeContent);bubble.appendChild(userContent);typesetMath(userContent)}else bubble.textContent=content;
+  renderMessageAttachments(bubble,extra?.attachments||[]);
+ }else{
+  bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');
+  const reasoning=reasoningBlock();const headingRow=bubble.querySelector('.assistant-heading');headingRow.insertBefore(reasoning._head,headingRow.querySelector('.assistant-status'));bubble.appendChild(reasoning);bubble.appendChild(thinkBlock());
+  bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');
+  const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindCopy(wrap);
+  wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];setReasoning(wrap,extra?.reasoning||'',false,extra?.thinkingSeconds||0);setThink(wrap,extra?.worklog||[]);setResponseMeta(wrap,extra?.stats,extra?.model);
+  renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);
+  bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'));
+ }
+ $('messages').appendChild(wrap);return wrap;
+}
 function clearArtifactPane(){const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';const main=$('main');if(main)main.classList.remove('has-artifacts');document.querySelectorAll('.artifact-trigger').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
 function closeArtifactPane(){const main=$('main');if(main)main.classList.remove('has-artifacts');const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';document.querySelectorAll('.artifact-trigger.selected').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
 function renderArtifactTriggers(container,artifacts){
@@ -1229,15 +1354,15 @@ function renderArtifactTriggers(container,artifacts){
 function openArtifactPreview(a,trigger){
  const pane=$('artifactPaneContent');if(!pane)return;pane.replaceChildren(artifactCard(a));$('main').classList.add('has-artifacts');
  document.querySelectorAll('.artifact-trigger').forEach(button=>{const selected=button===trigger;button.classList.toggle('selected',selected);button.setAttribute('aria-expanded',String(selected))});
- const title=$('artifactPaneTitle');if(title)title.textContent=a.kind==='system_prompt'?'System prompt proposal':a.kind==='command'?'Command approval':String(a.path||'File preview');
- const count=$('artifactCount');if(count)count.textContent=a.kind==='command'?'Not executed · approval required':(a.kind==='code'||a.download_only)?'Generated code · download only':a.approval_required?'Preview only · not saved':'Selected file preview';
+ const title=$('artifactPaneTitle');if(title)title.textContent=a.kind==='system_prompt'?'System prompt proposal':a.kind==='command'?(a.host_command?'Host command approval':'Isolated command approval'):String(a.path||'File preview');
+ const count=$('artifactCount');if(count)count.textContent=a.kind==='command'?'Not executed · approval required':(a.kind==='code'||a.download_only)?'Generated code · download only':a.approval_required?(a.target_mode==='agent'?'Host file · write approval required':'Isolated workspace · approval required'):'Selected file preview';
  $('artifactPane').scrollTop=0;
 }
 function artifactCard(a){
  const promptCard=a.kind==='system_prompt',commandCard=a.kind==='command';
  const card=document.createElement('div');card.className='artifact open'+(a.validation?.ok?'':' bad');
  const downloadOnly=a.kind==='code'||a.download_only===true;
- const actions=commandCard?'<button class="primary approve-command">Approve &amp; run</button>':promptCard?(a.preview_only?'':'<button class="primary apply-prompt">Apply prompt to Kurt</button>'):downloadOnly?'<button class="download-artifact">Download code file</button>':'<button class="download-artifact">Download file</button><button class="primary apply-artifact">Apply to project</button>';
+ const actions=commandCard?'<button class="primary approve-command">Approve &amp; run</button>':promptCard?(a.preview_only?'':'<button class="primary apply-prompt">Apply prompt to Kurt</button>'):downloadOnly?'<button class="download-artifact">Download code file</button>':'<button class="download-artifact">Download file</button><button class="primary apply-artifact">Apply approved change</button>';
  const heading=commandCard?'COMMAND REVIEW':promptCard?'SYSTEM PROMPT':esc((String(a.path||'file').split('.').pop()||'FILE').toUpperCase());
  const status=a.validation?.message||(a.approval_required?'Preview only · not saved':'Ready for review');
  card.innerHTML=`<div class="artifact-top"><div class="file-icon"><svg class="ic"><use href="#i-file"/></svg></div><div class="file-name">${esc(a.path)}</div><div class="file-check">${esc(status)}</div><span class="artifact-chev"><svg class="ic"><use href="#i-chev"/></svg></span></div><div class="artifact-body"><div class="codebox"><div class="codehead"><span>${heading}</span><button class="copy-mini copy-artifact">Copy</button></div><pre><code></code></pre></div><div class="artifact-actions">${actions}</div></div>`;
@@ -1246,13 +1371,13 @@ function artifactCard(a){
  if(commandCard){
   const button=card.querySelector('.approve-command');
   button.onclick=async()=>{
-   if(state.mode!=='code'){toast('Switch this conversation to Code mode before running a command.');return}
-   const approved=await confirmInApp('Approve command execution',`Run this command in the isolated workspace for this conversation?\n\n${a.content}\n\nIt has not run yet. The command runner only permits approved developer checks.`, 'Approve & run',true);
+   if(!['code','agent'].includes(state.mode)){toast('Switch to Code or Agent mode before running a command.');return}
+   const expectedMode=a.host_command?'agent':'code';if(state.mode!==expectedMode){toast('Switch back to '+(expectedMode==='agent'?'Agent':'Code')+' mode to approve this command.');return}const hostCommand=expectedMode==='agent';const approved=await confirmInApp(hostCommand?'Approve host command':'Approve isolated command',hostCommand?`Run this command on your computer from ${state.projectRoot}?\n\n${a.content}\n\nIt has not run yet. This command may change files or system state.`:`Run this command in this conversation’s isolated workspace?\n\n${a.content}\n\nIt has not run yet. The isolated runner permits approved developer checks only.`, 'Approve & run',true);
    if(!approved)return;
    button.disabled=true;button.textContent='Running…';
    try{
-    const result=await api('/api/command/run',{chat_id:state.chatId,command:a.content,approved:true});
-    const output=`Exit code: ${result.returncode}\nStatus: ${result.ok?'Succeeded':'Failed'}\n\n${String(result.output||'(No output.)').slice(0,12000)}`;
+    const result=await api('/api/command/run',{chat_id:state.chatId,command:a.content,approved:true,expected_mode:expectedMode});
+    const output=`Working directory: ${result.cwd||'isolated workspace'}\nScope: ${result.scope||'isolated'}\nExit code: ${result.returncode}\nStatus: ${result.ok?'Succeeded':'Failed'}\n\n${String(result.output||'(No output.)').slice(0,12000)}`;
     await inAppDialog({title:result.ok?'Command completed':'Command failed',message:output,confirmText:'Close'});
     button.textContent=result.ok?'Completed':'Failed';
     const fileCheck=card.querySelector('.file-check');if(fileCheck)fileCheck.textContent=result.ok?'Executed with approval':'Execution failed';
@@ -1260,25 +1385,25 @@ function artifactCard(a){
   };
  }else if(promptCard&&!a.preview_only){
   card.querySelector('.apply-prompt').onclick=async()=>{
-   if(state.mode!=='code'){toast('Switch this conversation to Code mode before changing the system prompt.');return}
+   if(state.mode==='normal'){toast('Switch to Code or Agent mode before changing the system prompt.');return}
    if(!await confirmInApp('Apply system prompt','Replace Kurt’s editable system prompt with this proposed version?','Apply',true))return;
    try{await api('/api/settings',{system_prompt:a.content,prompt_proposal:true,chat_id:state.chatId,approved:true});await refreshBootstrap();toast('Kurt system prompt updated')}catch(error){toast(error.message)}
   };
  }else if(!promptCard){
   card.querySelector('.download-artifact').onclick=async()=>{
    const title=downloadOnly?'Download generated code':'Download proposed file';
-   const detail=downloadOnly?`Save ${a.path} to your computer’s Downloads folder? This downloads the generated code only; it does not modify your project.`:`Save ${a.path} to your computer’s Downloads folder? This only downloads the proposed file; it does not modify the project.`;
+   const detail=downloadOnly?`Save ${a.path} to your Downloads folder? This downloads generated code only; it does not modify your workspace or computer.`:`Save ${a.path} to your Downloads folder? This only downloads the proposal; it does not apply the change.`;
    if(!await confirmInApp(title,detail,'Download',false))return;
    const blob=new Blob([a.content],{type:'application/octet-stream'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=a.path.split('/').pop();link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
   if(downloadOnly)return card;
   card.querySelector('.apply-artifact').onclick=async()=>{
-   if(state.mode!=='code'){toast('Switch this conversation to Code mode before applying a file.');return}
+   const targetMode=a.target_mode||'code';
+   if(!['code','agent'].includes(targetMode)||state.mode!==targetMode){toast('Switch back to '+(targetMode==='agent'?'Agent':'Code')+' mode to apply this proposal.');return}
    if(!a.validation?.ok){toast('Fix validation errors before applying');return}
-   if(!state.settings.allow_project_writes){toast('Enable project writes in Settings first');return}
-   const message=`Apply ${a.path} to ${state.projectRoot}?${a.exists?'\nThis will overwrite the existing project file.':''}\n\nThe proposed file has not been saved yet.`;
-   if(!await confirmInApp('Apply file to project',message,'Apply file',true))return;
-   try{const result=await api('/api/file/write',{path:a.path,content:a.content,overwrite:!!a.exists,chat_id:state.chatId,approved:true,authorized:true});toast(result.message||'Applied to project');const status=card.querySelector('.file-check');if(status)status.textContent='Applied to project with approval'}catch(error){toast(error.message)}
+   const hostWrite=targetMode==='agent';const destination=hostWrite?a.path:'this conversation’s isolated workspace';const message=`Apply ${a.path} to ${destination}?${a.exists?'\nThis will overwrite the existing file.':''}\n\nThe proposed file has not been saved yet. The specific write will occur only after this confirmation.`;
+   if(!await confirmInApp(hostWrite?'Apply file to computer':'Apply file to workspace',message,hostWrite?'Apply to computer':'Apply to workspace',true))return;
+   try{const result=await api('/api/file/write',{path:a.path,content:a.content,overwrite:!!a.exists,chat_id:state.chatId,approved:true,target_mode:targetMode});toast(result.message||'Applied with approval');const status=card.querySelector('.file-check');if(status)status.textContent=hostWrite?'Applied to computer with approval':'Applied to workspace with approval'}catch(error){toast(error.message)}
   };
  }
  return card;
@@ -1394,7 +1519,7 @@ async function renameChat(id,current){const result=await inAppDialog({title:'Ren
 async function togglePinChat(id,pinned){try{await api('/api/chats/'+encodeURIComponent(id),{pin:!!pinned});await refreshChats()}catch(error){toast(error.message)}}
 async function deleteChat(id){const chat=state.chats.find(item=>item.id===id);if(!await confirmInApp('Delete conversation',`Delete “${chat?.title||'this chat'}” and its temporary workspace? This cannot be undone.`,'Delete chat',true))return;if(state.chatId===id)cancelRun();try{await api('/api/chats/'+encodeURIComponent(id),{delete:true});if(state.chatId===id){state.chatId=null;resetComposer();showWelcome();setTitle('New chat','')}await refreshChats();toast('Chat deleted')}catch(error){toast(error.message)}}
 let bootstrapSig='';
-async function refreshBootstrap(force){const data=await api('/api/bootstrap');const sig=JSON.stringify(data);if(force===true){['projectRoot','systemPrompt','allowProjectWrites'].forEach(id=>{delete $(id).dataset.dirty})}else if(sig===bootstrapSig)return false;bootstrapSig=sig;state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.settings=data.settings||{};state.projectRoot=data.project_root||'';if(!$('projectRoot').dataset.dirty)$('projectRoot').value=state.projectRoot;if(!$('systemPrompt').dataset.dirty)$('systemPrompt').value=state.settings.system_prompt||'';if(!$('allowProjectWrites').dataset.dirty)$('allowProjectWrites').checked=!!state.settings.allow_project_writes;fillProviders();fillModels();renderKeys();renderApiKeyChecks(currentApiKeySelection());renderApiModels();renderApiGroups();refreshFailoverMemberOptions();enhanceAllSelects();return true}
+async function refreshBootstrap(force){const data=await api('/api/bootstrap');const sig=JSON.stringify(data);if(force===true){['projectRoot','systemPrompt'].forEach(id=>{delete $(id).dataset.dirty})}else if(sig===bootstrapSig)return false;bootstrapSig=sig;state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.settings=data.settings||{};state.projectRoot=data.project_root||'';if(!$('projectRoot').dataset.dirty)$('projectRoot').value=state.projectRoot;if(!$('systemPrompt').dataset.dirty)$('systemPrompt').value=state.settings.system_prompt||'';fillProviders();fillModels();renderKeys();renderApiKeyChecks(currentApiKeySelection());renderApiModels();renderApiGroups();refreshFailoverMemberOptions();enhanceAllSelects();return true}
 function fillProviders(){const providers=state.providers.map(item=>({value:item.id,label:item.label}));setSelectOptions($('keyProvider'),providers,'Choose provider')}
 function renderLocalModels(){
  const root=$('localModelList');if(!root)return;root.replaceChildren();
@@ -1616,43 +1741,55 @@ async function saveFailoverGroup(){
  }catch(error){toast(error.message)}
 }
 async function refreshChats(){const d=await api('/api/chats');state.chats=d.chats||[];renderChats()}
-function resetComposer(){$('prompt').value='';autosize();state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.uploadedFiles=[];state.contextCount=0;renderPendingUploads();hint();updateSend()}
+function resetComposer(){$('prompt').value='';autosize();state.selectedFiles=[];state.selectedFolders=[];state.newAttachmentPaths=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.uploadedFiles=[];state.contextCount=0;renderPendingUploads();hint();updateSend()}
 async function ensureChat(initialMessage){
- if(!state.chatId){const body={create:true,mode:state.mode,effort:state.effort};if(initialMessage)body.initial_message=initialMessage;const d=await api('/api/chats',body);state.chatId=d.id}
+ if(!state.chatId){const body={create:true,mode:state.mode};if(initialMessage)body.initial_message=initialMessage;const d=await api('/api/chats',body);state.chatId=d.id}
  else if(initialMessage){await api('/api/chats/'+encodeURIComponent(state.chatId),{append_user_message:initialMessage})}
- else{await api('/api/chats/'+encodeURIComponent(state.chatId),{mode:state.mode,effort:state.effort})}
+ else{await api('/api/chats/'+encodeURIComponent(state.chatId),{mode:state.mode})}
  return state.chatId;
 }
 async function newChat(){cancelRun();state.chatId=null;state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.effort=data.effort==='expert'?'expert':'thinking';state.mode=data.mode||'normal';$('effortSelect').value=state.effort;$('operationMode').value=state.mode;syncSelect($('effortSelect'));syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||'',state.effort+' · '+state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
+async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];state.newAttachmentPaths=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.mode=['normal','code','agent'].includes(data.mode)?data.mode:'normal';$('operationMode').value=state.mode;syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);const uploadsByPath=new Map((state.uploadedFiles||[]).map(item=>[item.path,item]));messages.forEach(message=>{const attachments=(message.attachments||[]).map(item=>({...uploadsByPath.get(item.path),...item}));renderMessage(message.role,message.content,message.artifacts||[],{attachments,mode:message.mode||state.mode,worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null})});follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||'',state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
 async function send(){
- const text=$('prompt').value.trim();if(!text||state.busy)return;
- const run=++state.run;state.effort=$('effortSelect').value;state.mode=$('operationMode').value;const route=$('topModel').value;
+ const typedText=$('prompt').value.trim();
+ const hasAttachments=!!((state.pendingUploads||[]).length||(state.newAttachmentPaths||[]).length);
+ const text=typedText||(hasAttachments?'Please inspect the attached file(s) and describe what you can determine.':'');
+ if(!text||state.busy)return;
+ const run=++state.run;state.mode=$('operationMode').value;const route=$('topModel').value;
  const messageId=(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2));
+ const selectedAttachmentPaths=[...new Set([...(state.newAttachmentPaths||[]),...(state.pendingUploads||[]).map(item=>item.path)])];
+ let messageAttachments=[];
  setBusy(true);
- try{await ensureChat({id:messageId,content:text,effort:state.effort,mode:state.mode,route})}catch(error){if(run===state.run)setBusy(false);toast(error.message);return}
+ try{
+  await ensureChat();
+  if(state.pendingUploads.length)await attachFiles({quiet:true});
+  const uploadedByPath=new Map((state.uploadedFiles||[]).map(item=>[item.path,item]));
+  messageAttachments=selectedAttachmentPaths.map(path=>uploadedByPath.get(path)).filter(Boolean).map(item=>({path:item.path,name:item.name,size:item.size,type:item.type,image:item.image,previewUrl:item.previewUrl||null}));
+  await ensureChat({id:messageId,content:text,mode:state.mode,route,attachments:messageAttachments.map(item=>item.path)});
+  state.newAttachmentPaths=(state.newAttachmentPaths||[]).filter(path=>!selectedAttachmentPaths.includes(path));
+ }catch(error){if(run===state.run)setBusy(false);toast(error.message);return}
  if(run!==state.run)return;
  $('prompt').value='';autosize();hint();
  if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
- follow=true;renderMessage('user',text);const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
- $('chatMeta').textContent=state.effort+' · '+state.mode+' · Generating…';
+ follow=true;renderMessage('user',text,[],{attachments:messageAttachments,mode:state.mode});const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
+ $('chatMeta').textContent=state.mode+' · Generating…';
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
  const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',blockRationale='',pending=false,thinkStart=0;const showReasoning=live=>{reasoning=[modelRationale,blockRationale].filter(Boolean).join('\n\n');setReasoning(node,reasoning,live)};
  const controller=new AbortController();state.abort=controller;
  const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseRationale(safeLiveDraft(raw),true);if(parsed.rationale){if(!thinkStart)thinkStart=performance.now();blockRationale=parsed.rationale;showReasoning(true)}const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
  try{
-  const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,route,effort:state.effort,mode:state.mode,message_id:messageId}),signal:controller.signal});
+  const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,route,mode:state.mode,message_id:messageId}),signal:controller.signal});
   if(!response.ok){const result=await response.json().catch(()=>({}));throw new Error(result.error||response.statusText)}
   node.querySelector('.assistant-status').textContent='Thinking…';const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
   while(true){const packet=await reader.read();if(packet.done)break;if(run!==state.run)return;buffer+=decoder.decode(packet.value,{stream:true});let separator;
    while((separator=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,separator);buffer=buffer.slice(separator+2);const line=frame.split('\n').find(value=>value.startsWith('data:'));if(!line)continue;const event=JSON.parse(line.slice(5).trim());
-    if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail);node.querySelector('.assistant-status').textContent=event.status||'Working…'}
+    if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail,event.agent);node.querySelector('.assistant-status').textContent=event.status||'Working…'}
     else if(event.type==='draft_reset'){raw='';blockRationale='';contentEl.replaceChildren();node.dataset.raw='';showReasoning(!!modelRationale);queue()}
     else if(event.type==='draft'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}
     else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();modelRationale+=event.text||'';node.querySelector('.assistant-status').textContent='Thinking…';showReasoning(true)}
     else if(event.type==='reasoning_reset'){modelRationale=event.text||'';showReasoning(!!modelRationale)}
-    else if(event.type==='done'){pending=false;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setReasoning(node,reasoning,false,event.thinking_seconds||(thinkStart?(performance.now()-thinkStart)/1000:0));setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.effort||state.effort,event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='done'){pending=false;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setReasoning(node,reasoning,false,event.thinking_seconds||(thinkStart?(performance.now()-thinkStart)/1000:0));setThink(node,event.worklog||node.__worklog||[]);setResponseMeta(node,event.stats,event.model);renderArtifactTriggers(node.querySelector('.message-artifacts'),event.artifacts||[]);setTitle(event.title||'Conversation',[event.model||'',event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
     else if(event.type==='error')throw new Error(event.message||'The model request failed');
    }
   }
@@ -1660,7 +1797,7 @@ async function send(){
   if(run===state.run){if(error.name==='AbortError'){paint();refreshChats().catch(()=>{})}else{contentEl.classList.add('err');contentEl.textContent='Error: '+error.message;toast(error.message)}}
  }finally{
   node.classList.remove('live');endThink(node);
-  if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent.includes('Generating…'))meta.textContent=[state.effort,state.mode,'Ready'].join(' · ')}
+  if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent.includes('Generating…'))meta.textContent=[state.mode,'Ready'].join(' · ')}
  }
 }
 $('messages').addEventListener('scroll',()=>{const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});$('toBottom').onclick=()=>{follow=true;scrollEnd(true);$('toBottom').classList.remove('show')};
@@ -1669,18 +1806,17 @@ $('sendBtn').onclick=()=>{if(state.busy){if(state.abort)state.abort.abort()}else
 $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!state.busy)send()}});
 $('prompt').addEventListener('input',()=>{autosize();updateSend()});
 $('prompt').addEventListener('paste',event=>{
- if(state.mode!=='code'&&Array.from(event.clipboardData?.items||[]).some(item=>String(item.type||'').startsWith('image/'))){event.preventDefault();toast('Normal mode cannot read pasted files or images. Switch to Code mode first.');return}
  const clipboardItems=Array.from(event.clipboardData?.items||[]);const pastedImages=clipboardItems.filter(item=>String(item.type||'').startsWith('image/')).map(item=>item.getAsFile()).filter(Boolean);
- if(pastedImages.length){event.preventDefault();stageUploadFiles(pastedImages);attachFiles();return}
+ if(pastedImages.length){event.preventDefault();stageUploadFiles(pastedImages);toast('Image added. It will be uploaded with your next message.');return}
  const pastedText=event.clipboardData?.getData('text/plain')||'';
- if(pastedText.length>16000&&state.mode==='code'){event.preventDefault();const stamp=new Date().toISOString().replace(/[:.]/g,'-');const file=new File([pastedText],'pasted-text-'+stamp+'.txt',{type:'text/plain'});if(file.size>10*1024*1024){toast('This pasted text exceeds the 10 MB attachment limit. Split it into smaller parts.');return}stageUploadFiles([file]);$('prompt').value='I attached a large pasted text file. Please read it and help me with its contents.';autosize();updateSend();toast('Large paste attached as a .txt file');attachFiles()}
+ if(pastedText.length>16000){event.preventDefault();const stamp=new Date().toISOString().replace(/[:.]/g,'-');const file=new File([pastedText],'pasted-text-'+stamp+'.txt',{type:'text/plain'});if(file.size>10*1024*1024){toast('This pasted text exceeds the 10 MB attachment limit. Split it into smaller parts.');return}stageUploadFiles([file]);$('prompt').value='I attached a large pasted text file. Please read it and help me with its contents.';autosize();updateSend();toast('Large paste attached as a .txt file')}
  });
-$('newChat').onclick=newChat;$('selectAllChats').onchange=()=>selectAllChats($('selectAllChats').checked);$('deleteSelectedChats').onclick=deleteSelectedChats;$('cancelChatSelect').onclick=()=>setChatSelectionMode(false);$('effortSelect').onchange=()=>{state.effort=$('effortSelect').value};$('operationMode').onchange=async()=>{state.mode=$('operationMode').value;hint();if(state.busy)cancelRun();if(state.mode!=='code'){state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.uploadedFiles=[];state.contextCount=0;renderPendingUploads();$('filesModal').classList.remove('show')}if(state.chatId){try{await api('/api/chats/'+encodeURIComponent(state.chatId),{mode:state.mode,effort:state.effort});if(state.mode==='code'){const context=await api('/api/context/status?chat_id='+encodeURIComponent(state.chatId));state.contextCount=context.files||0;state.uploadedFiles=context.items||[];renderPendingUploads();loadUploadedImagePreviews()}}catch(error){toast(error.message)}}hint()};
+$('newChat').onclick=newChat;$('selectAllChats').onchange=()=>selectAllChats($('selectAllChats').checked);$('deleteSelectedChats').onclick=deleteSelectedChats;$('cancelChatSelect').onclick=()=>setChatSelectionMode(false);$('operationMode').onchange=async()=>{state.mode=$('operationMode').value;hint();if(state.busy)cancelRun();if(state.chatId){try{await api('/api/chats/'+encodeURIComponent(state.chatId),{mode:state.mode});const context=await api('/api/context/status?chat_id='+encodeURIComponent(state.chatId));state.contextCount=context.files||0;state.uploadedFiles=context.items||[];renderPendingUploads();loadUploadedImagePreviews()}catch(error){toast(error.message)}}hint()};
 function activateSettingsTab(tab){document.querySelectorAll('[data-settings-tab]').forEach(button=>button.classList.toggle('active',button.dataset.settingsTab===tab));document.querySelectorAll('[data-settings-panel]').forEach(panel=>panel.classList.toggle('active',panel.dataset.settingsPanel===tab));const area=document.querySelector('.settings-panel-area');if(area)area.scrollTop=0}
 document.querySelectorAll('[data-settings-tab]').forEach(b=>b.onclick=()=>activateSettingsTab(b.dataset.settingsTab));
 async function openSettings(){activateSettingsTab('general');$('settingsModal').classList.add('show');try{await refreshBootstrap()}catch(error){toast('Settings could not be refreshed: '+error.message)}}
-async function saveSettings(){const payload={project_root:$('projectRoot').value,system_prompt:$('systemPrompt').value,allow_project_writes:$('allowProjectWrites').checked,default_route:$('settingsModel').value};const data=await api('/api/settings',payload);state.settings=data.settings||{};state.settings.allow_project_writes=$('allowProjectWrites').checked;state.projectRoot=data.project_root;await refreshBootstrap(true);toast('Settings saved')}
-async function browseFiles(){if(state.mode!=='code'){toast('Switch this conversation to Code mode to browse project files.');return}await ensureChat();const path=$('fileFolder').value.trim();const d=await api('/api/files?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()}}el.appendChild(row)})}
+async function saveSettings(){const payload={project_root:$('projectRoot').value,system_prompt:$('systemPrompt').value,default_route:$('settingsModel').value};const data=await api('/api/settings',payload);state.settings=data.settings||{};state.projectRoot=data.project_root;await refreshBootstrap(true);toast('Settings saved')}
+async function browseFiles(){if(state.mode!=='code'){toast('Switch this conversation to Code mode to browse this chat’s isolated workspace.');return}await ensureChat();const path=$('fileFolder').value.trim();const d=await api('/api/files?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()}}el.appendChild(row)})}
 function formatFileSize(value){const bytes=Math.max(0,Number(value)||0);if(bytes<1024)return bytes+' B';if(bytes<1024*1024)return (bytes/1024).toFixed(1)+' KB';return (bytes/1024/1024).toFixed(1)+' MB'}
 function fileIconNode(item){if(item.previewUrl&&String(item.type||item.mime||'').startsWith('image/')){const image=document.createElement('img');image.className='attachment-thumb';image.src=item.previewUrl;image.alt=item.name||'Uploaded image';return image}const icon=document.createElement('span');icon.className='attachment-file-icon';icon.innerHTML='<svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>';return icon}
 function makeUploadCard(item,{uploaded=false,removable=false,compact=false,index=-1}={}){
@@ -1695,7 +1831,7 @@ function makeUploadCard(item,{uploaded=false,removable=false,compact=false,index
 }
 function renderComposerAttachments(){const root=$('composerAttachments');if(!root)return;root.replaceChildren();const pending=state.pendingUploads||[],uploaded=state.uploadedFiles||[];pending.forEach((item,index)=>root.appendChild(makeUploadCard(item,{removable:true,index,compact:true})));uploaded.forEach(item=>root.appendChild(makeUploadCard(item,{uploaded:true,compact:true})));root.hidden=!pending.length&&!uploaded.length}
 function renderPendingUploads(){const root=$('uploadList');if(!root)return;root.replaceChildren();
- const pending=state.pendingUploads||[],uploaded=state.uploadedFiles||[];const projectCount=state.selectedFiles.length+state.selectedFolders.length;
+ const pending=state.pendingUploads||[],uploaded=state.uploadedFiles||[];const projectCount=0;
  if(!pending.length&&!projectCount&&!uploaded.length){const empty=document.createElement('div');empty.className='upload-empty';empty.textContent='No files selected.';root.appendChild(empty)}
  if(pending.length){const label=document.createElement('div');label.className='upload-section-label';label.textContent='Ready to add';root.appendChild(label);pending.forEach((item,index)=>root.appendChild(makeUploadCard(item,{removable:true,index}))) }
  if(state.selectedFiles.length||state.selectedFolders.length){const label=document.createElement('div');label.className='upload-section-label';label.textContent='From project workspace';root.appendChild(label);state.selectedFolders.forEach(path=>{const card=makeUploadCard({name:path.split('/').pop()||'Project folder',path,size:0,folderRoot:path},{removable:false});root.appendChild(card)});state.selectedFiles.forEach(path=>root.appendChild(makeUploadCard({name:path.split('/').pop(),path,size:0},{removable:false}))) }
@@ -1705,13 +1841,13 @@ function renderPendingUploads(){const root=$('uploadList');if(!root)return;root.
 function stageUploadFiles(files){for(const file of files||[]){const relative=String(file.webkitRelativePath||file.name).replace(/\\/g,'/');const folderRoot=file.webkitRelativePath?relative.split('/')[0]:'';if(state.pendingUploads.some(x=>x.path===relative))continue;const previewUrl=String(file.type||'').startsWith('image/')?URL.createObjectURL(file):null;state.pendingUploads.push({file,path:relative,name:file.name,size:file.size,type:file.type||'',folderRoot,previewUrl})}renderPendingUploads()}
 function stageLocalFiles(input){stageUploadFiles(Array.from(input.files||[]));input.value=''}
 function bytesToBase64(buffer){const bytes=new Uint8Array(buffer);let binary='';const chunk=0x8000;for(let i=0;i<bytes.length;i+=chunk)binary+=String.fromCharCode(...bytes.subarray(i,i+chunk));return btoa(binary)}
-async function loadUploadedImagePreviews(){const items=(state.uploadedFiles||[]).filter(item=>item.image&&!item.previewUrl);await Promise.all(items.map(async item=>{try{const url='/api/context/preview?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(item.path);const response=await fetch(url,{headers:{'X-Kurt-Token':TOKEN}});if(!response.ok)return;item.previewUrl=URL.createObjectURL(await response.blob())}catch(error){console.warn('Could not load an attachment preview:',error)}}));renderPendingUploads()}
-async function attachFiles(){try{if(state.mode!=='code'){toast('Normal mode cannot attach or read local files. Switch to Code mode first.');return}if(!state.selectedFiles.length&&!state.selectedFolders.length&&!state.pendingUploads.length){toast('Choose files first');return}const uploads=[];let total=0;for(const item of state.pendingUploads){if(item.file.size>10*1024*1024)throw new Error(item.file.name+' exceeds the 10 MB per-file limit.');total+=item.file.size;if(total>20*1024*1024)throw new Error('Local file selection exceeds the 20 MB import limit.');uploads.push({path:item.path,folder_root:item.folderRoot||'',content:bytesToBase64(await item.file.arrayBuffer())})}await ensureChat();const previewMap=new Map([...(state.uploadedFiles||[]),...state.pendingUploads].filter(item=>item.previewUrl).map(item=>[item.path,item.previewUrl]));const result=await api('/api/context/import',{chat_id:state.chatId,selected_files:state.selectedFiles,selected_folders:state.selectedFolders,uploads});state.contextCount=Number(result.items?.length??((state.contextCount||0)+Number(result.files||0)));state.uploadedFiles=(result.items||[]).map(item=>({...item,previewUrl:previewMap.get(item.path)||null}));state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl&&!state.uploadedFiles.some(uploaded=>uploaded.previewUrl===item.previewUrl))URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];renderPendingUploads();$('filesModal').classList.remove('show');hint();await refreshChats();loadUploadedImagePreviews();toast(result.message||'Files added to this chat')}catch(e){toast(e.message)}}
-function openComposerFilePicker(){if(state.mode!=='code'){toast('File attachments are available only in Code mode. Switch modes to continue.');return}const picker=$('composerFiles');if(!picker)return;picker.click()}
+async function loadUploadedImagePreviews(){const items=(state.uploadedFiles||[]).filter(item=>item.image&&!item.previewUrl);await Promise.all(items.map(async item=>{try{const url='/api/context/preview?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(item.path);const response=await fetch(url,{headers:{'X-Kurt-Token':TOKEN}});if(!response.ok)return;item.previewUrl=URL.createObjectURL(await response.blob())}catch(error){console.warn('Could not load an attachment preview:',error)}}));renderPendingUploads();refreshMessageAttachmentPreviews()}
+async function attachFiles({quiet=false}={}){try{if(!state.pendingUploads.length){if(!quiet)toast('Choose files first');return}const uploads=[];let total=0;for(const item of state.pendingUploads){if(item.file.size>10*1024*1024)throw new Error(item.file.name+' exceeds the 10 MB per-file limit.');total+=item.file.size;if(total>20*1024*1024)throw new Error('Local file selection exceeds the 20 MB upload limit.');uploads.push({path:item.path,folder_root:item.folderRoot||'',content:bytesToBase64(await item.file.arrayBuffer())})}await ensureChat();const previewMap=new Map([...(state.uploadedFiles||[]),...state.pendingUploads].filter(item=>item.previewUrl).map(item=>[item.path,item.previewUrl]));const result=await api('/api/context/import',{chat_id:state.chatId,uploads});state.contextCount=Number(result.items?.length??((state.contextCount||0)+Number(result.files||0)));state.uploadedFiles=(result.items||[]).map(item=>({...item,previewUrl:previewMap.get(item.path)||null}));state.newAttachmentPaths=[...new Set([...(state.newAttachmentPaths||[]),...state.pendingUploads.map(item=>item.path)])];state.pendingUploads.forEach(item=>{if(item.previewUrl&&!state.uploadedFiles.some(uploaded=>uploaded.previewUrl===item.previewUrl))URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];renderPendingUploads();$('filesModal').classList.remove('show');hint();await refreshChats();loadUploadedImagePreviews();if(!quiet)toast(result.message||'Files added to this chat')}catch(e){throw e}}
+function openComposerFilePicker(){const picker=$('composerFiles');if(!picker)return;picker.click()}
 async function handleComposerFiles(){const picker=$('composerFiles');if(!picker.files||!picker.files.length)return;stageLocalFiles(picker);await attachFiles()}
 async function startDownload(){const model=$('downloadModel').value.trim();if(!model){toast('Enter a model ID, repository or URL');return}try{const d=await api('/api/download',{model,source:$('downloadSource').value});$('downloadCaption').textContent='Queued: '+model;$('localDownloadStatus').textContent='Download queued: '+model;$('downloadModel').value='';toast('Download started in background');pollDownload()}catch(e){toast(e.message)}}
 async function pollDownload(){try{const d=await api('/api/download/status');const job=d.job;if(!job)return;const percent=job.total?job.completed/job.total*100:0;$('downloadFill').style.width=(job.state==='done'?100:percent)+'%';$('downloadCaption').textContent=job.state==='running'?`${job.model} · ${percent.toFixed(1)}% · ${job.human}`:`${job.model} · ${job.state}${job.error?' · '+job.error:''}`;if(job.state==='done'){await refreshBootstrap();$('localDownloadStatus').textContent=job.model+' installed successfully.';toast('Model download complete')}else if(job.state==='error'){$('localDownloadStatus').textContent=job.error||'Download failed';toast(job.error||'Download failed')}else{$('localDownloadStatus').textContent=job.model+' · '+percent.toFixed(1)+'% · '+job.human;setTimeout(pollDownload,1000)}}catch(e){console.error(e)}}
-$('sidebarSettings').onclick=openSettings;$('contextBtn').onclick=openComposerFilePicker;$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=()=>refreshBootstrap(true).then(()=>toast('Settings reloaded')).catch(error=>toast(error.message));['projectRoot','systemPrompt'].forEach(id=>$(id).addEventListener('input',()=>{$(id).dataset.dirty='1'}));$('allowProjectWrites').addEventListener('change',()=>{$('allowProjectWrites').dataset.dirty='1'});$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:'default',label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout()}});
+$('sidebarSettings').onclick=openSettings;$('contextBtn').onclick=openComposerFilePicker;$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=()=>refreshBootstrap(true).then(()=>toast('Settings reloaded')).catch(error=>toast(error.message));['projectRoot','systemPrompt'].forEach(id=>$(id).addEventListener('input',()=>{$(id).dataset.dirty='1'}));$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:'default',label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout()}});
 $('menuBtn').onclick=()=>{if(matchMedia('(max-width:700px)').matches){document.body.classList.toggle('nav-open')}else{const collapsed=document.documentElement.classList.toggle('side-collapsed');try{localStorage.setItem('kurt-side-collapsed',collapsed?'1':'0')}catch(error){}}};$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',event=>{if(event.target.closest('.chat-item,#newChat,#sidebarSettings'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const root=document.documentElement;root.classList.add('theme-fade');setTimeout(()=>root.classList.remove('theme-fade'),420);const theme=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=theme;try{localStorage.setItem('kurt-theme',theme)}catch(error){}};enhanceAllSelects();
 (()=>{const sync=()=>document.body.classList.toggle('modal-open',!!document.querySelector('.modal-backdrop.show,.dialog-backdrop.show'));const observer=new MutationObserver(sync);document.querySelectorAll('.modal-backdrop,.dialog-backdrop').forEach(node=>observer.observe(node,{attributes:true,attributeFilter:['class']}));sync()})();
 document.body.classList.add('compact-scroll');
@@ -1727,9 +1863,8 @@ resetFailoverForm();
 </script></body></html>'''
 
 
-# Raw thinking/reasoning channels can contain private chain-of-thought. They are
-# deliberately ignored; only provider-designated summary channels are displayed.
-THINKING_KINDS = ("thinking", "reasoning", "thought")
+# Raw thinking/reasoning channels can contain private chain-of-thought and are never displayed.
+# Only provider-designated, user-facing summary channels may be surfaced as rationale.
 MODEL_RATIONALE_KINDS = ("reasoning_summary", "summary", "summary_text", "analysis_summary")
 THINK_OPEN_RE = re.compile(r"<think(?:ing)?>", re.I)
 THINK_CLOSE_RE = re.compile(r"</think(?:ing)?>", re.I)
@@ -1737,7 +1872,7 @@ THINK_TAG_RE = re.compile(r"<(/)?think(?:ing)?>", re.I)
 THINK_RE = re.compile(r"<think(?:ing)?>([\s\S]*?)(?:</think(?:ing)?>|\Z)", re.I)
 ACTION_TAIL_RE = re.compile(r"@@@\s*(?:WRITE|EDIT)\b[\s\S]*\Z")
 UNSUPPORTED_ACTION_BLOCK_RE = re.compile(
-    r"@@@\s*(?:RUN|SEARCH|SYSTEM_PROMPT|READ|LIST|EXEC|BASH|SHELL)\b[\s\S]*?(?:@@@\s*END\b|\Z)", re.I
+    r"@@@\s*(?:RUN|SEARCH|SYSTEM_PROMPT|READ|LIST|READ_LOCAL|LIST_LOCAL|SUBAGENT|EXEC|BASH|SHELL)\b[\s\S]*?(?:@@@\s*END\b|\Z)", re.I
 )
 TOOL_CALL_BLOCK_RE = re.compile(
     r"<\|tool_call_start\|>[\s\S]*?(?:<\|tool_call_end\|>|\Z)", re.I
@@ -2032,11 +2167,13 @@ class KurtWebApp:
         self.settings.setdefault("project_root", str(Path.cwd().resolve()))
         self.settings.setdefault("model", K.MODEL)
         self.settings.setdefault("allow_project_writes", False)
-        self.settings.setdefault("default_effort", "thinking")
-        if self.settings.get("default_effort") == "flash":
+        if self.settings.get("default_effort") != "thinking":
             self.settings["default_effort"] = "thinking"
             self.save_settings()
         self.settings.setdefault("default_mode", "normal")
+        if self.settings.get("default_mode") not in ("normal", "code", "agent"):
+            self.settings["default_mode"] = "normal"
+            self.save_settings()
         self.settings.setdefault("api_groups", [])
         self.model_lock = threading.RLock()
         self._installed_lock = threading.Lock()
@@ -2273,7 +2410,7 @@ class KurtWebApp:
         ]
         try:
             chunks = []
-            stream = K.stream_chat(prompt, model=model, think=False, temperature=0.2, max_tokens=32)
+            stream = K.stream_chat(prompt, model=model)
             for kind, chunk in stream:
                 kind_name = str(kind or "").lower().replace("-", "_")
                 if kind_name == "content" and chunk:
@@ -2323,6 +2460,225 @@ class KurtWebApp:
         if root == Path(root.anchor) or root == home or root in home.parents:
             raise ValueError("Code mode requires a specific project folder. Choose a project directory, not the computer's system root or your entire home folder.")
         return root
+
+    def agent_root(self):
+        """Return the Agent starting directory; this is a working directory, not a sandbox."""
+        candidate = Path(self.settings.get("project_root") or Path.cwd()).expanduser()
+        try:
+            root = candidate.resolve()
+        except OSError:
+            root = Path.home().resolve()
+        return root if root.is_dir() else Path.home().resolve()
+
+    @staticmethod
+    def _agent_virtual_path(path):
+        parts = {part.lower() for part in Path(path).parts}
+        return bool(parts.intersection({"proc", "sys", "dev", "run", ".volfs"}))
+
+    def resolve_agent_path(self, value, allow_root=False):
+        raw = str(value or "").strip()
+        if not raw:
+            if allow_root:
+                return self.agent_root()
+            raise ValueError("Provide an absolute path or a path relative to the Agent starting directory.")
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = self.agent_root() / candidate
+        try:
+            lexical = candidate
+            current = Path(lexical.anchor)
+            protected_dirs = {
+                ".ssh", ".aws", ".azure", ".gnupg", ".kube", ".git", ".venv",
+                "venv", "node_modules", "__pycache__", ".kurt", ".kurt_inputs",
+                ".kurt_imports", "credentials", "secrets",
+            }
+            for part in lexical.parts[1:]:
+                if part in ("", "."):
+                    continue
+                if part == "..":
+                    current = current.parent
+                    continue
+                if part.lower() in protected_dirs:
+                    raise ValueError("Protected credential, system, or dependency directories are not available to Agent file actions.")
+                current = current / part
+                if current.is_symlink():
+                    raise ValueError("Symbolic-link paths are not accepted for Agent file actions.")
+            resolved = candidate.resolve(strict=False)
+        except ValueError:
+            raise
+        except (OSError, RuntimeError) as exc:
+            raise ValueError("The requested local path could not be resolved: " + str(exc)) from exc
+        if self._agent_virtual_path(resolved):
+            raise ValueError("Virtual operating-system filesystems are not available to Agent file actions.")
+        if resolved.exists() and not os.access(resolved, os.R_OK):
+            raise ValueError("The current Kurt process does not have permission to read that path.")
+        return resolved
+
+    def read_agent_file(self, value):
+        path = self.resolve_agent_path(value)
+        if not path.is_file() or self._skip_context_name(path.name):
+            raise ValueError("That local file is unavailable or is a protected credential/secret file.")
+        size = path.stat().st_size
+        if size > 2_000_000:
+            raise ValueError("Agent text reads are limited to 2 MB per file.")
+        raw = path.read_bytes()
+        if b"\x00" in raw[:4096]:
+            raise ValueError("That file appears to be binary; upload it as an attachment if it is an image or document.")
+        try:
+            return raw.decode("utf-8")
+        except UnicodeError as exc:
+            raise ValueError("That file is not valid UTF-8 text.") from exc
+
+    def read_agent_image(self, value):
+        """Read one supported local image as multimodal input for the active model."""
+        path = self.resolve_agent_path(value)
+        if not path.is_file() or self._skip_context_name(path.name):
+            raise ValueError("That local image is unavailable or is a protected file.")
+        mime = mimetypes.guess_type(path.name)[0] or ""
+        if mime not in ("image/png", "image/jpeg", "image/webp", "image/gif"):
+            raise ValueError("Only PNG, JPEG, WebP, and GIF images can be passed as local visual input.")
+        size = path.stat().st_size
+        if size > 8 * 1024 * 1024:
+            raise ValueError("Local image input is limited to 8 MB per image.")
+        raw = path.read_bytes()
+        signatures = {
+            "image/png": raw.startswith(b"\x89PNG\r\n\x1a\n"),
+            "image/jpeg": raw.startswith(b"\xff\xd8\xff"),
+            "image/webp": len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP",
+            "image/gif": raw.startswith((b"GIF87a", b"GIF89a")),
+        }
+        if not signatures.get(mime):
+            raise ValueError("The file extension does not match a supported image format.")
+        return {"path": str(path), "mime": mime, "data": base64.b64encode(raw).decode("ascii")}
+
+    def list_agent_directory(self, value=""):
+        path = self.resolve_agent_path(value, allow_root=True)
+        if not path.is_dir():
+            raise ValueError("The requested local path is not a directory.")
+        items = []
+        try:
+            entries = sorted(path.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.lower()))
+        except OSError as exc:
+            raise ValueError("Could not list that directory: " + str(exc)) from exc
+        for item in entries:
+            if self._skip_context_name(item.name):
+                continue
+            if item.is_dir() and (self._skip_context_dir(item.name) or self._agent_virtual_path(item)):
+                continue
+            if item.is_symlink():
+                continue
+            try:
+                if not os.access(item, os.R_OK):
+                    continue
+                size = item.stat().st_size if item.is_file() else 0
+            except OSError:
+                continue
+            if not (item.is_dir() or item.is_file()):
+                continue
+            items.append({"name": item.name, "path": str(item), "directory": item.is_dir(), "size": size})
+            if len(items) >= 500:
+                items.append({"name": "… listing truncated at 500 entries …", "path": "", "directory": False, "size": 0})
+                break
+        return items
+
+    def read_chat_file(self, chat_id, relative):
+        root = self.chat_workspace(chat_id)
+        path = self.resolve_chat_path(root, relative)
+        if not path.is_file() or path.is_symlink() or self._skip_context_name(path.name):
+            raise ValueError("That file is unavailable in this isolated chat workspace.")
+        if path.stat().st_size > 2_000_000:
+            raise ValueError("Workspace text reads are limited to 2 MB per file.")
+        raw = path.read_bytes()
+        if b"\x00" in raw[:4096]:
+            raise ValueError("That file appears to be binary.")
+        try:
+            return raw.decode("utf-8")
+        except UnicodeError as exc:
+            raise ValueError("That file is not valid UTF-8 text.") from exc
+
+    def write_chat_file(self, chat_id, relative, content):
+        """Atomically write validated code to this chat's isolated workspace only."""
+        root = self.chat_workspace(chat_id)
+        rel = self._safe_context_relative(relative)
+        path = self.resolve_chat_path(root, rel)
+        current = root
+        for part in rel.split('/'):
+            current = current / part
+            if current.is_symlink():
+                raise ValueError("Symbolic links cannot be modified in the isolated workspace.")
+        if path.exists() and not path.is_file():
+            raise ValueError("The isolated workspace target is not a regular file.")
+        parent = path.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        path = self.resolve_chat_path(root, rel)
+        if path.exists() and path.is_symlink():
+            raise ValueError("Symbolic-link targets cannot be modified in the isolated workspace.")
+        fd, tmp_name = tempfile.mkstemp(prefix=".kurt-workspace-", suffix=".tmp", dir=str(parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                handle.write(content)
+            if path.exists():
+                shutil.copymode(path, tmp_name)
+            os.replace(tmp_name, path)
+        finally:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+        return path
+
+    def list_chat_directory(self, chat_id, relative=""):
+        root = self.chat_workspace(chat_id)
+        rel = self._safe_context_relative(relative, allow_root=True)
+        path = root if not rel else self.resolve_chat_path(root, rel)
+        if not path.is_dir():
+            raise ValueError("That path is not a directory in this chat workspace.")
+        items = []
+        for item in sorted(path.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.lower())):
+            if item.is_symlink() or self._skip_context_name(item.name):
+                continue
+            if item.is_dir() and self._skip_context_dir(item.name):
+                continue
+            if not (item.is_dir() or item.is_file()):
+                continue
+            size = item.stat().st_size if item.is_file() else 0
+            items.append({"name": item.name, "path": item.relative_to(root).as_posix(), "directory": item.is_dir(), "size": size})
+            if len(items) >= 500:
+                items.append({"name": "… listing truncated at 500 entries …", "path": "", "directory": False, "size": 0})
+                break
+        return items
+
+    def vision_images(self, chat_id, max_images=8, max_total_bytes=16 * 1024 * 1024):
+        """Load supported uploaded images from the isolated workspace for actual model input."""
+        root = self.chat_workspace(chat_id)
+        supported = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+        results = []
+        total = 0
+        for item in self.context_file_list(chat_id):
+            mime_type = item.get("type") or ""
+            if not item.get("image") or mime_type not in supported:
+                continue
+            path = self.resolve_chat_path(root, item["path"])
+            size = path.stat().st_size
+            if size > 8 * 1024 * 1024 or total + size > max_total_bytes:
+                continue
+            payload = path.read_bytes()
+            total += len(payload)
+            results.append({"path": item["path"], "mime": mime_type, "data": base64.b64encode(payload).decode("ascii")})
+            if len(results) >= max_images:
+                break
+        return results
+
+    def run_agent_command(self, command):
+        """Execute one explicitly approved host command with the Kurt process permissions."""
+        result = subprocess.run(
+            command, shell=True, cwd=str(self.agent_root()), text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120,
+            check=False, close_fds=True,
+        )
+        output = (result.stdout or "")[-24000:]
+        return {"ok": result.returncode == 0, "returncode": result.returncode, "output": output,
+                "cwd": str(self.agent_root()), "scope": "host"}
 
     def resolve_project_access_path(self, relative, allow_root=False):
         rel = self._safe_context_relative(relative, allow_root=allow_root)
@@ -2446,9 +2802,8 @@ class KurtWebApp:
         } for item in K.PROVIDER_KEYS]
 
     def editable_system_prompt(self):
-        root = self.workspace()
         custom = str(self.settings.get("system_prompt") or "").strip()
-        return custom or (K.SYSTEM.replace("{cwd}", str(root)) + WEB_INSTRUCTIONS)
+        return custom or (K.SYSTEM.replace("{cwd}", str(self.agent_root())) + WEB_INSTRUCTIONS)
 
     def chat_workspace(self, chat_id, create=True):
         chat_id = str(chat_id or '')
@@ -2585,55 +2940,13 @@ class KurtWebApp:
 
     def import_context(self, chat_id, selected_files=None, selected_folders=None, uploads=None):
         workspace = self.chat_workspace(chat_id)
-        source_root = self.workspace()
         imported = 0
         total_bytes = 0
         archives = 0
         selected_folders = selected_folders if isinstance(selected_folders, list) else []
         selected_files = selected_files if isinstance(selected_files, list) else []
-        folders = []
-        for value in selected_folders:
-            rel = self._safe_context_relative(value, allow_root=True)
-            folder = self.resolve_project_access_path(rel, allow_root=True)
-            if not folder.is_dir():
-                raise ValueError('A selected project folder no longer exists: ' + (rel or source_root.name))
-            folders.append((rel, folder))
-        folders.sort(key=lambda pair: len(pair[0].split('/')) if pair[0] else 0)
-        filtered_folders = []
-        for rel, folder in folders:
-            if any(not rel or rel == parent or rel.startswith(parent + '/') for parent, _ in filtered_folders):
-                continue
-            filtered_folders.append((rel, folder))
-        for rel, folder in filtered_folders:
-            prefix = rel or source_root.name
-            count, size, _archive = self._zip_directory_into_workspace(folder, prefix, workspace)
-            imported += count
-            total_bytes += size
-            if total_bytes > MAX_IMPORT_BYTES:
-                raise ValueError('The total context import exceeds 20 MB.')
-            archives += 1
-        for value in selected_files:
-            rel = self._safe_context_relative(value)
-            if any(not parent or rel == parent or rel.startswith(parent + '/') for parent, _ in filtered_folders):
-                continue
-            source = self.resolve_project_access_path(rel)
-            if not source.is_file() or source.is_symlink() or self._skip_context_name(source.name):
-                continue
-            size = source.stat().st_size
-            if size > 10 * 1024 * 1024:
-                raise ValueError('A selected file exceeds the 10 MB per-file import limit: ' + rel)
-            total_bytes += size
-            if total_bytes > MAX_IMPORT_BYTES:
-                raise ValueError('The total context import exceeds 20 MB.')
-            target = self.resolve_chat_path(workspace, rel)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-            imported += 1
-            if target.suffix.lower() == '.zip':
-                self._extract_zip_bytes(target.read_bytes(), workspace)
-                archives += 1
-        if total_bytes > MAX_IMPORT_BYTES:
-            raise ValueError('The total context import exceeds 20 MB.')
+        if selected_files or selected_folders:
+            raise ValueError("Only files explicitly selected through the browser upload control are accepted. Use Agent mode for approved host-file reads.")
         uploads = uploads if isinstance(uploads, list) else []
         upload_groups = {}
         direct_uploads = []
@@ -2730,7 +3043,7 @@ class KurtWebApp:
             block = header + content + '\n'
             chunks.append(block)
             used += len(block)
-        intro = 'Text file contents from this conversation’s isolated temporary workspace. Uploaded ZIP files and folders are extracted automatically; use the extracted paths shown in the workspace tree.'
+        intro = 'Text file contents from this conversation’s isolated temporary workspace. Only user-selected uploads and files created in this chat are included. Uploaded ZIP files and folders are extracted automatically.'
         if truncated:
             intro += f'\n{truncated} text file(s) are partially included because the inline text context is limited to 1.4 MB; the full files remain in the workspace.'
         if skipped:
@@ -2740,34 +3053,38 @@ class KurtWebApp:
             intro += '\nImage attachments available in the workspace: ' + ', '.join(image_paths[:80])
             if len(image_paths) > 80:
                 intro += f' (and {len(image_paths) - 80} more)'
-            intro += '\nOnly make visual claims when the active model/provider has actual vision input or an available image-reading tool.'
+            intro += '\nSupported uploaded image files are also passed as actual multimodal image inputs when the selected model/provider supports vision. If the provider rejects image input, explain the limitation rather than pretending to have seen them.'
         return intro + ('\n' + ''.join(chunks) if chunks else '\n(No readable text files attached yet.)')
 
     def chat_system_prompt(self, chat_id, mode="normal", effort="thinking"):
+        root = self.chat_workspace(chat_id)
         custom = str(self.settings.get("system_prompt") or "").strip()
         if mode == "code":
-            root = self.chat_workspace(chat_id)
-            base = custom or K.SYSTEM.replace("{cwd}", str(root))
-            if "{cwd}" in base:
-                base = base.replace("{cwd}", str(root))
+            working_dir = str(root)
+            fallback_dir = str(root)
+        elif mode == "agent":
+            working_dir = str(self.agent_root())
+            fallback_dir = str(self.agent_root())
         else:
-            base = custom or K.SYSTEM.replace("{cwd}", "(local file access disabled in Normal mode)")
-            if "{cwd}" in base:
-                base = base.replace("{cwd}", "(local file access disabled in Normal mode)")
-        if "WEB INTERFACE FILE OUTPUT RULES:" not in base and "KURT WEB WORKSPACE RULES:" not in base:
-            base += WEB_INSTRUCTIONS
-        if "KURT WEB WORKSPACE RULES:" not in base:
+            working_dir = "(no laptop access; user uploads only)"
+            fallback_dir = working_dir
+        base = custom or K.SYSTEM.replace("{cwd}", fallback_dir)
+        if "{cwd}" in base:
+            base = base.replace("{cwd}", working_dir)
+        if "KURT WEB INTERFACE RULES:" not in base:
             base += "\n" + WEB_INSTRUCTIONS
-        mode_rules = CODE_MODE_INSTRUCTIONS if mode == "code" else NORMAL_MODE_INSTRUCTIONS
-        effort_rules = EFFORT_INSTRUCTIONS.get(effort, EFFORT_INSTRUCTIONS["thinking"])
+        mode_rules = {
+            "normal": NORMAL_MODE_INSTRUCTIONS,
+            "code": CODE_MODE_INSTRUCTIONS,
+            "agent": AGENT_MODE_INSTRUCTIONS,
+        }.get(mode, NORMAL_MODE_INSTRUCTIONS)
+        effort_rules = EFFORT_INSTRUCTIONS.get("thinking")
         prompt = base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules + "\n" + RESPONSE_FORMAT_INSTRUCTIONS
-        if mode == "code":
-            project = self.workspace()
-            prompt += (
-                "\nIsolated temporary workspace directory: " + str(root)
-                + "\nConfigured Code mode project access root: " + str(project)
-                + "\nFiles attached in the isolated workspace:\n" + self.tree(root)
-            )
+        if mode in ("normal", "code"):
+            prompt += ("\nIsolated temporary workspace directory: " + str(root)
+                       + "\nFiles attached in the isolated workspace:\n" + self.tree(root))
+        elif mode == "agent":
+            prompt += "\nAgent starting directory: " + working_dir
         return prompt
 
     def run_command(self, chat_id, command):
@@ -2793,7 +3110,7 @@ class KurtWebApp:
                     return '\n'.join(rows)
         return '\n'.join(rows) or '(empty workspace)'
 
-    def artifacts_from_answer(self, answer, chat_id):
+    def artifacts_from_answer(self, answer, chat_id, mode="code"):
         artifacts = []
         errors = []
         root = self.chat_workspace(chat_id)
@@ -2802,21 +3119,24 @@ class KurtWebApp:
                 continue
             filename = arg.strip()
             try:
-                path = self.resolve_chat_path(root, filename)
-                if path.is_dir():
+                if mode == "agent":
+                    path = self.resolve_agent_path(filename)
+                elif mode == "code":
+                    path = self.resolve_chat_path(root, filename)
+                else:
+                    errors.append("{}: file changes are unavailable in Normal mode; switch to Code or Agent mode.".format(filename))
+                    continue
+                if path.exists() and path.is_dir():
                     errors.append("{}: target is a directory.".format(filename))
                     continue
                 existed_in_temp = path.is_file()
                 content = body
                 if kind == "EDIT":
                     if existed_in_temp:
-                        old, _crlf = K.read_file(path)
+                        old = self.read_agent_file(filename) if mode == "agent" else self.read_chat_file(chat_id, filename)
                     else:
-                        project_path = self.resolve_project_access_path(filename)
-                        if not project_path.is_file():
-                            errors.append("{}: EDIT target is not available in the configured Code mode project directory; read or import it first.".format(filename))
-                            continue
-                        old = self.read_project_file(filename)
+                        errors.append("{}: EDIT target must already exist and be readable in the current mode.".format(filename))
+                        continue
                     pairs = K.PAIR_RE.findall(body)
                     if not pairs:
                         errors.append("{}: EDIT block contains no valid SEARCH/REPLACE pair.".format(filename))
@@ -2839,13 +3159,20 @@ class KurtWebApp:
                 if not validation.get("ok", False):
                     errors.append("{}: {}".format(filename, validation.get("message") or "syntax validation failed"))
                     continue
-                project_path = self.resolve_project_access_path(filename)
-                artifacts.append({
-                    "path": filename.replace("\\", "/"), "content": content,
-                    "validation": validation, "exists": project_path.exists(),
-                    "temp_exists": existed_in_temp, "source": kind,
-                    "approval_required": True,
-                })
+                artifact = {
+                    "path": str(path) if mode == "agent" else filename.replace("\\", "/"),
+                    "content": content, "validation": validation, "exists": path.exists(),
+                    "temp_exists": existed_in_temp, "source": kind, "target_mode": mode,
+                    "approval_required": mode == "agent",
+                }
+                if mode == "code":
+                    saved_path = self.write_chat_file(chat_id, filename, content)
+                    artifact.update({
+                        "kind": "code", "applied": True,
+                        "path": saved_path.relative_to(root).as_posix(),
+                        "validation": {**validation, "message": "Saved to this chat's isolated workspace · no laptop files changed"},
+                    })
+                artifacts.append(artifact)
             except Exception as exc:
                 errors.append("{}: {}".format(filename or "(unnamed file)", exc))
 
@@ -2932,8 +3259,8 @@ class KurtWebApp:
         now = time.time()
         chat = {
             "id": uuid.uuid4().hex, "title": "New conversation", "model": K.MODEL,
-            "effort": "thinking" if self.settings.get("default_effort") == "flash" else self.settings.get("default_effort", "thinking"),
-            "mode": self.settings.get("default_mode", "normal"),
+            "effort": "thinking",
+            "mode": self.settings.get("default_mode", "normal") if self.settings.get("default_mode", "normal") in ("normal", "code", "agent") else "normal",
             "route": self.settings.get("default_route", ""),
             "pinned": False, "created": now, "updated": now, "messages": [],
         }
@@ -2942,8 +3269,8 @@ class KurtWebApp:
             message_id = str(initial_message.get("id") or "").strip()
             if content and message_id:
                 chat["messages"].append({"role": "user", "content": content, "message_id": message_id})
-                chat["effort"] = initial_message.get("effort") if initial_message.get("effort") in EFFORT_INSTRUCTIONS else chat["effort"]
-                chat["mode"] = initial_message.get("mode") if initial_message.get("mode") in ("normal", "code") else chat["mode"]
+                chat["effort"] = "thinking"
+                chat["mode"] = initial_message.get("mode") if initial_message.get("mode") in ("normal", "code", "agent") else chat["mode"]
                 if initial_message.get("route"):
                     chat["route"] = str(initial_message.get("route"))
                 chat["updated"] = now
@@ -3091,8 +3418,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({
                     "models": self.app.list_models(), "routes": self.app.list_chat_routes(), "providers": providers,
                     "keys": self.app.sanitized_keys(), "api_groups": self.app.api_groups_view(),
-                    "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""), "system_prompt": self.app.editable_system_prompt(), "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False))},
-                    "project_root": str(self.app.workspace()),
+                    "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""), "system_prompt": self.app.editable_system_prompt()},
+                    "project_root": str(self.app.agent_root()),
                 })
             elif parsed.path == "/api/chats":
                 with self.app.lock:
@@ -3109,7 +3436,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._json({
                         "id": chat["id"], "title": chat.get("title"), "model": chat.get("model"), "route": chat.get("route", ""),
-                        "effort": "thinking" if chat.get("effort") == "flash" else chat.get("effort", "thinking"), "mode": chat.get("mode", "normal"),
+                        "effort": "thinking", "mode": chat.get("mode") if chat.get("mode") in ("normal", "code", "agent") else "normal",
                         "pinned": bool(chat.get("pinned", False)), "messages": chat.get("messages", []),
                     })
             elif parsed.path == "/api/download/status":
@@ -3122,8 +3449,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not chat:
                     self._json({"error": "Conversation not found."}, 404)
                     return
-                if chat.get("mode") != "code":
-                    raise ValueError("Attachments are available only in Code mode. Switch this conversation to Code mode.")
+                if chat.get("mode") not in ("normal", "code", "agent"):
+                    raise ValueError("This conversation mode cannot access its isolated uploads.")
                 items = self.app.context_file_list(chat_id)
                 self._json({"files": len(items), "items": items})
             elif parsed.path == "/api/context/preview":
@@ -3133,8 +3460,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not chat:
                     self._json({"error": "Conversation not found."}, 404)
                     return
-                if chat.get("mode") != "code":
-                    raise ValueError("Attachment previews are available only in Code mode.")
+                if chat.get("mode") not in ("normal", "code", "agent"):
+                    raise ValueError("Attachment previews are unavailable in this mode.")
                 relative = self.app._safe_context_relative(args.get("path", [""])[0])
                 image_path = self.app.resolve_chat_path(self.app.chat_workspace(chat_id), relative)
                 if not image_path.is_file() or image_path.is_symlink():
@@ -3159,8 +3486,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not chat:
                     self._json({"error": "Conversation not found."}, 404)
                     return
-                if chat.get("mode") != "code":
-                    raise ValueError("Normal mode cannot inspect or export local attachments. Switch this conversation to Code mode.")
+                if chat.get("mode") not in ("normal", "code", "agent"):
+                    raise ValueError("Workspace export is unavailable in this mode.")
                 payload = self.app.workspace_archive(chat_id)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/zip")
@@ -3171,14 +3498,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(payload)
             elif parsed.path == "/api/files":
                 args = parse_qs(parsed.query)
-                chat = self.app.get_chat(str(args.get("chat_id", [""])[0]))
+                chat_id = str(args.get("chat_id", [""])[0])
+                chat = self.app.get_chat(chat_id)
                 if not chat or chat.get("mode") != "code":
-                    raise ValueError("Normal mode cannot browse local directories. Switch this conversation to Code mode.")
+                    raise ValueError("The isolated workspace browser is available in Code mode only.")
                 relative = self.app._safe_context_relative(args.get("path", [""])[0], allow_root=True)
-                folder = self.app.resolve_project_access_path(relative, allow_root=True)
-                if not folder.is_dir():
-                    raise ValueError("Folder not found in the configured Code mode project directory.")
-                items = self.app.list_project_directory(relative)
+                items = self.app.list_chat_directory(chat_id, relative)
                 parent_path = "" if not relative else str(Path(relative).parent).replace("\\", "/")
                 parent = None if not relative else ("" if parent_path == "." else parent_path)
                 self._json({"path": relative, "parent": parent, "items": [{"name": item["name"], "path": item["path"], "directory": item["directory"], "size": K.fmt_bytes(item["size"]) if item["size"] else ""} for item in items]})
@@ -3205,7 +3530,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not message_id or len(message_id) > 100 or not content or len(content) > 100000:
                         raise ValueError("Enter a valid user message before sending.")
                 chat = self.app.create_chat(initial_message=initial if isinstance(initial, dict) else None)
-                if data.get("mode") in ("normal", "code"):
+                if data.get("mode") in ("normal", "code", "agent"):
                     chat["mode"] = data["mode"]
                 if data.get("effort") in EFFORT_INSTRUCTIONS:
                     chat["effort"] = data["effort"]
@@ -3256,9 +3581,20 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("Enter a valid user message before sending.")
                     with self.app.lock:
                         if not any(item.get("message_id") == message_id for item in chat.get("messages", [])):
-                            chat.setdefault("messages", []).append({"role": "user", "content": content, "message_id": message_id})
-                            chat["effort"] = incoming.get("effort") if incoming.get("effort") in EFFORT_INSTRUCTIONS else chat.get("effort", "thinking")
-                            chat["mode"] = incoming.get("mode") if incoming.get("mode") in ("normal", "code") else chat.get("mode", "normal")
+                            uploaded = {item["path"]: item for item in self.app.context_file_list(chat_id)}
+                            requested_attachments = incoming.get("attachments") if isinstance(incoming.get("attachments"), list) else []
+                            attached = []
+                            for item_path in requested_attachments[:32]:
+                                safe_path = self.app._safe_context_relative(item_path)
+                                if safe_path in uploaded and safe_path not in {item["path"] for item in attached}:
+                                    item = uploaded[safe_path]
+                                    attached.append({"path": item["path"], "name": item["name"], "size": item["size"], "type": item["type"], "image": item["image"]})
+                            user_record = {"role": "user", "content": content, "message_id": message_id}
+                            if attached:
+                                user_record["attachments"] = attached
+                            chat.setdefault("messages", []).append(user_record)
+                            chat["effort"] = "thinking"
+                            chat["mode"] = incoming.get("mode") if incoming.get("mode") in ("normal", "code", "agent") else chat.get("mode", "normal")
                             if incoming.get("route"):
                                 chat["route"] = str(incoming.get("route"))
                             chat["updated"] = time.time()
@@ -3266,11 +3602,10 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok": True, "message_id": message_id})
                 elif "mode" in data:
                     value = str(data.get("mode") or "")
-                    if value not in ("normal", "code"):
-                        raise ValueError("Choose Normal or Code mode.")
+                    if value not in ("normal", "code", "agent"):
+                        raise ValueError("Choose Normal, Code, or Agent mode.")
                     chat["mode"] = value
-                    if data.get("effort") in EFFORT_INSTRUCTIONS:
-                        chat["effort"] = data["effort"]
+                    chat["effort"] = "thinking"
                     chat["updated"] = time.time()
                     self.app.save_chats()
                     self._json({"ok": True, "mode": value})
@@ -3290,16 +3625,16 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": "Unsupported operation."}, 400)
             elif parsed.path == "/api/context/import":
                 chat = self.app.get_chat(str(data.get("chat_id") or ""))
-                if not chat or chat.get("mode") != "code":
-                    raise ValueError("Normal mode cannot import or inspect local files. Switch this conversation to Code mode.")
+                if not chat or chat.get("mode") not in ("normal", "code", "agent"):
+                    raise ValueError("This conversation cannot accept uploads.")
                 result = self.app.import_context(data.get("chat_id"), data.get("selected_files"), data.get("selected_folders"), data.get("uploads"))
                 self._json(result)
             elif parsed.path == "/api/file/read":
                 chat = self.app.get_chat(str(data.get("chat_id") or ""))
                 if not chat or chat.get("mode") != "code":
-                    raise ValueError("Normal mode cannot read local files. Switch this conversation to Code mode.")
+                    raise ValueError("Only Code mode can read files from its isolated workspace.")
                 relative = str(data.get("path") or "")
-                content = self.app.read_project_file(relative)
+                content = self.app.read_chat_file(chat["id"], relative)
                 self._json({"path": relative.replace("\\", "/"), "content": content})
             elif parsed.path == "/api/file/write":
                 self._write_file(data)
@@ -3307,13 +3642,19 @@ class Handler(BaseHTTPRequestHandler):
                 chat_id = str(data.get("chat_id") or "")
                 chat = self.app.get_chat(chat_id)
                 command = str(data.get("command") or "").strip()
-                if not chat or chat.get("mode") != "code":
-                    raise ValueError("Switch this conversation to Code mode before running a command.")
+                expected_mode = str(data.get("expected_mode") or "")
+                if not chat or expected_mode not in ("code", "agent") or chat.get("mode") != expected_mode:
+                    raise ValueError("Switch back to the mode that created this command card before running it.")
                 if data.get("approved") is not True:
                     raise ValueError("The command has not been approved.")
                 if not command or len(command) > 2000:
                     raise ValueError("Enter a valid command (maximum 2,000 characters).")
-                result = self.app.run_command(chat_id, command)
+                if expected_mode == "agent" and re.search(r"(?i)(?:^|[;&|\s])(sudo|doas|pkexec|runas)(?:\s|$)|(?:^|[;&|\s])su\s+-", command):
+                    raise ValueError("Privilege-escalation commands are blocked. Kurt runs with the permissions it already has.")
+                if chat.get("mode") == "agent":
+                    result = self.app.run_agent_command(command)
+                else:
+                    result = self.app.run_command(chat_id, command)
                 self._json(result)
             elif parsed.path == "/api/download":
                 job = self.app.start_download(data.get("model"), data.get("source"))
@@ -3409,16 +3750,13 @@ class Handler(BaseHTTPRequestHandler):
         if "project_root" in data:
             root = Path(str(data.get("project_root") or "")).expanduser().resolve()
             if not root.exists() or not root.is_dir():
-                raise ValueError("Choose an existing directory for the workspace.")
-            home = Path.home().expanduser().resolve()
-            if root == Path(root.anchor) or root == home or root in home.parents:
-                raise ValueError("Choose a specific project folder, not your home folder or the computer's system root.")
+                raise ValueError("Choose an existing directory for the Agent starting directory.")
             self.app.settings["project_root"] = str(root)
         if "system_prompt" in data:
             if data.get("prompt_proposal"):
                 chat = self.app.get_chat(str(data.get("chat_id") or ""))
-                if not chat or chat.get("mode") != "code" or data.get("approved") is not True:
-                    raise ValueError("Applying a system prompt proposal requires Code mode and your explicit confirmation.")
+                if not chat or chat.get("mode") not in ("code", "agent") or data.get("approved") is not True:
+                    raise ValueError("Applying a system prompt proposal requires Code or Agent mode and your explicit confirmation.")
             prompt = str(data.get("system_prompt") or "")
             if len(prompt) > 40000:
                 raise ValueError("System prompt must be 40,000 characters or fewer.")
@@ -3428,12 +3766,12 @@ class Handler(BaseHTTPRequestHandler):
         if "default_effort" in data:
             value = str(data.get("default_effort") or "thinking")
             if value not in EFFORT_INSTRUCTIONS:
-                raise ValueError("Choose Thinking or Expert effort.")
+                raise ValueError("Only the standard response effort is supported.")
             self.app.settings["default_effort"] = value
         if "default_mode" in data:
             value = str(data.get("default_mode") or "normal")
-            if value not in ("normal", "code"):
-                raise ValueError("Choose Normal or Code mode.")
+            if value not in ("normal", "code", "agent"):
+                raise ValueError("Choose Normal, Code, or Agent mode.")
             self.app.settings["default_mode"] = value
 
         key_action = data.get("key_action")
@@ -3617,7 +3955,7 @@ class Handler(BaseHTTPRequestHandler):
             K.save_config()
         self.app.settings["model"] = K.MODEL
         self.app.save_settings()
-        self._json({"ok": True, "model": K.MODEL, "project_root": str(self.app.workspace()),
+        self._json({"ok": True, "model": K.MODEL, "project_root": str(self.app.agent_root()),
                     "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""),
                                  "system_prompt": self.app.editable_system_prompt(),
                                  "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False))}})
@@ -3625,29 +3963,44 @@ class Handler(BaseHTTPRequestHandler):
     def _write_file(self, data):
         chat_id = str(data.get("chat_id") or "")
         chat = self.app.get_chat(chat_id)
-        if not chat or chat.get("mode") != "code":
-            raise ValueError("Switch this conversation to Code mode before applying a file.")
-        if not self.app.settings.get('allow_project_writes') or data.get('authorized') is not True or data.get('approved') is not True:
-            raise ValueError('Project writes are disabled or not approved. Enable project writes in Settings and confirm the individual Apply to project action.')
+        mode = chat.get("mode") if chat else None
+        expected_mode = str(data.get("target_mode") or "")
+        if mode not in ("code", "agent") or expected_mode != mode:
+            raise ValueError("Switch back to the mode that created this file proposal before applying it.")
+        if data.get("approved") is not True:
+            raise ValueError("This file change has not been approved.")
         relative = str(data.get("path") or "")
         content = str(data.get("content") or "")
-        path = self.app.resolve_project_access_path(relative)
-        if self.app._skip_context_name(path.name):
-            raise ValueError("That file type or name is protected from Code mode writes.")
-        if path.exists() and path.is_symlink():
-            raise ValueError("Symbolic-link targets cannot be modified in Code mode.")
-        if path.exists() and not data.get("overwrite"):
-            raise ValueError("The file already exists. Confirm overwrite in the browser first.")
-        if not validate_content(relative, content).get("ok", False):
+        if not relative or len(content) > 2_000_000:
+            raise ValueError("A valid file path and content up to 2 MB are required.")
+        if mode == "agent":
+            path = self.app.resolve_agent_path(relative)
+            if self.app._skip_context_name(path.name):
+                raise ValueError("Protected credential/secret files cannot be modified by Agent mode.")
+            if path.exists() and (path.is_symlink() or not path.is_file()):
+                raise ValueError("Agent writes cannot replace symbolic links or non-file targets.")
+        else:
+            path = self.app.resolve_chat_path(self.app.chat_workspace(chat_id), relative)
+            if self.app._skip_context_name(path.name):
+                raise ValueError("Protected credential/secret files cannot be modified in the workspace.")
+            if path.exists() and (path.is_symlink() or not path.is_file()):
+                raise ValueError("Workspace writes cannot replace symbolic links or non-file targets.")
+        if path.exists() and data.get("overwrite") is not True:
+            raise ValueError("The file already exists. Review and confirm the overwrite first.")
+        validation = validate_content(relative, content)
+        if not validation.get("ok", False):
             raise ValueError("The file did not pass Kurt's validation checks.")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Re-resolve after creating parent directories to prevent symlink escapes.
-        path = self.app.resolve_project_access_path(relative)
-        if self.app._skip_context_name(path.name):
-            raise ValueError("That file type or name is protected from Code mode writes.")
-        if path.exists() and not data.get("overwrite"):
-            raise ValueError("The file appeared after the review card was created. Review the overwrite confirmation again before applying it.")
-        fd, tmp_name = tempfile.mkstemp(prefix=".kurt-", suffix=".tmp", dir=str(path.parent))
+        if mode == "agent":
+            parent = path.parent
+            if not parent.exists() or not parent.is_dir():
+                raise ValueError("The Agent target directory must already exist; Kurt will not create folders without a separate approved action.")
+        else:
+            parent = path.parent
+            parent.mkdir(parents=True, exist_ok=True)
+            path = self.app.resolve_chat_path(self.app.chat_workspace(chat_id), relative)
+        if path.exists() and path.is_symlink():
+            raise ValueError("Symbolic-link targets cannot be modified.")
+        fd, tmp_name = tempfile.mkstemp(prefix=".kurt-approval-", suffix=".tmp", dir=str(parent))
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
                 handle.write(content)
@@ -3659,16 +4012,14 @@ class Handler(BaseHTTPRequestHandler):
                 os.unlink(tmp_name)
             except OSError:
                 pass
-        self._json({"ok": True, "message": "Wrote " + relative})
+        self._json({"ok": True, "message": ("Wrote to computer: " if mode == "agent" else "Wrote to isolated workspace: ") + str(path)})
 
     def _chat(self, data):
         chat_id = str(data.get("chat_id") or "")
         user_text = str(data.get("text") or "").strip()
         requested_route = str(data.get("route") or "")
         legacy_model = str(data.get("model") or "")
-        effort = str(data.get("effort") or "thinking").lower()
-        if effort == "flash":
-            effort = "thinking"
+        effort = "thinking"
         mode = str(data.get("mode") or "normal").lower()
         if not user_text:
             self._json({"error": "Message is empty."}, 400)
@@ -3676,11 +4027,8 @@ class Handler(BaseHTTPRequestHandler):
         if len(user_text) > 100000:
             self._json({"error": "Message is too long."}, 400)
             return
-        if effort not in EFFORT_INSTRUCTIONS:
-            self._json({"error": "Choose Thinking or Expert effort."}, 400)
-            return
-        if mode not in ("normal", "code"):
-            self._json({"error": "Choose Normal or Code mode."}, 400)
+        if mode not in ("normal", "code", "agent"):
+            self._json({"error": "Choose Normal, Code, or Agent mode."}, 400)
             return
         chat = self.app.get_chat(chat_id)
         if not chat:
@@ -3701,15 +4049,25 @@ class Handler(BaseHTTPRequestHandler):
         self.app.chat_workspace(chat_id)
         message_number = len(chat.get("messages", [])) if already_saved else len(chat.get("messages", [])) + 1
         self.app.store_chat_input(chat_id, user_text, message_number)
+        attachment_context = self.app.context_contents(chat_id)
         messages = [
             {"role": "system", "content": self.app.chat_system_prompt(chat_id, mode=mode, effort=effort)},
-            {"role": "system", "content": self.app.context_contents(chat_id) if mode == "code" else "Normal mode has no access to files, attachments, directories, or local computer contents."},
+            {"role": "system", "content": attachment_context if self.app.context_file_count(chat_id) else "No user-uploaded files are attached to this conversation."},
         ]
         messages.extend(
             {"role": item["role"], "content": item["content"]}
             for item in previous if item.get("role") in ("user", "assistant")
         )
-        messages.append({"role": "user", "content": user_text})
+        vision_images = self.app.vision_images(chat_id)
+        local_model = not bool(K.get_remote_model(model)) if hasattr(K, "get_remote_model") else False
+        if vision_images and local_model:
+            messages.append({"role": "user", "content": user_text, "images": [item["data"] for item in vision_images]})
+        elif vision_images:
+            parts = [{"type": "text", "text": user_text}]
+            parts.extend({"type": "image_url", "image_url": {"url": "data:{};base64,{}".format(item["mime"], item["data"])}} for item in vision_images)
+            messages.append({"role": "user", "content": parts})
+        else:
+            messages.append({"role": "user", "content": user_text})
 
         if not already_saved:
             user_record = {"role": "user", "content": user_text}
@@ -3778,13 +4136,14 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         worklog = []
+        active_agent_names = set()
         artifacts_by_path = {}
         finished = False
         disconnected = False
-        temperature = {"thinking": 0.2, "expert": 0.15}[effort]
-        max_tokens = {"thinking": 8192, "expert": 16384}[effort]
+        temperature = 0.2
+        max_tokens = 8192
         use_thinking = True
-        reasoning_effort = {"thinking": "medium", "expert": "high"}[effort]
+        reasoning_effort = "medium"
         generation_seconds = 0.0
         thinking_seconds = 0.0
         generation_calls = 0
@@ -3793,16 +4152,23 @@ class Handler(BaseHTTPRequestHandler):
         output_chars = 0
         model_rationale_chunks = []
 
-        def log_step(text, ok=None, status="Working…", detail=None):
+        def log_step(text, ok=None, status="Working…", detail=None, agent=None):
             item = {"text": str(text), "ok": ok, "detail": str(detail or "")[:12000]}
+            if agent:
+                item["agent"] = dict(agent)
             worklog.append(item)
             if len(worklog) > 120:
                 del worklog[:-120]
-            emit({"type": "phase", "text": item["text"], "ok": ok, "detail": item["detail"], "status": status})
+            emit({"type": "phase", "text": item["text"], "ok": ok, "detail": item["detail"],
+                  "status": status, "agent": item.get("agent"), "agents_running": len(active_agent_names)})
 
         def code_mode_allowed():
             current_chat = self.app.get_chat(chat_id)
             return mode == "code" and bool(current_chat) and current_chat.get("mode") == "code"
+
+        def agent_mode_allowed():
+            current_chat = self.app.get_chat(chat_id)
+            return mode == "agent" and bool(current_chat) and current_chat.get("mode") == "agent"
 
         def generate_response():
             nonlocal generation_seconds, generation_calls, usage_calls, thinking_seconds
@@ -3826,14 +4192,7 @@ class Handler(BaseHTTPRequestHandler):
                 stream = None
                 try:
                     apply_route_candidate(candidate)
-                    stream = K.stream_chat(
-                        messages,
-                        model=model,
-                        think=use_thinking,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        reasoning_effort=reasoning_effort,
-                    )
+                    stream = K.stream_chat(messages, model=model)
                     in_think = False
                     pend = ""
 
@@ -3862,15 +4221,11 @@ class Handler(BaseHTTPRequestHandler):
                             if tag:
                                 before = pend[:tag.start()]
                                 closing = bool(tag.group(1))
-                                if closing and not in_think:
-                                    # Closing tag with no opener: everything so far was reasoning.
-                                    earlier = "".join(chunks) + before
-                                    chunks.clear()
-                                    emit({"type": "draft_reset"})
-                                    push_reasoning(earlier)
-                                elif in_think:
-                                    push_reasoning(before)
+                                if in_think:
+                                    # Content inside inline think tags is private and discarded.
+                                    pass
                                 else:
+                                    # A stray closing tag is removed, but surrounding answer text remains visible.
                                     push_answer(before)
                                 in_think = not closing
                                 pend = pend[tag.end():]
@@ -3881,7 +4236,8 @@ class Handler(BaseHTTPRequestHandler):
                                 if cut != -1 and ">" not in pend[cut:] and len(pend) - cut < 12:
                                     hold = pend[cut:]
                                     pend = pend[:cut]
-                            (push_reasoning if in_think else push_answer)(pend)
+                            if not in_think:
+                                push_answer(pend)
                             pend = hold
                             break
 
@@ -3889,7 +4245,7 @@ class Handler(BaseHTTPRequestHandler):
                         if not chunk:
                             continue
                         kind_name = str(kind or "").strip().lower().replace("-", "_")
-                        if kind_name in MODEL_RATIONALE_KINDS or kind_name in THINKING_KINDS:
+                        if kind_name in MODEL_RATIONALE_KINDS:
                             if isinstance(chunk, str):
                                 push_reasoning(chunk)
                             continue
@@ -3948,6 +4304,110 @@ class Handler(BaseHTTPRequestHandler):
                             pass
             raise RuntimeError("No working model/key entry was found." + (" " + str(last_error) if last_error else ""))
 
+        def run_subagent(name, task):
+            """Run a bounded delegated task with read-only host/file and web tools."""
+            candidate = route_candidates[active_candidate_index]
+            apply_route_candidate(candidate)
+            sub_messages = [
+                {"role": "system", "content": (
+                    AGENT_MODE_INSTRUCTIONS + "\nYou are a delegated Kurt sub-agent named " + name + ". "
+                    "Complete only the lead agent's scoped task. You may use READ_LOCAL, LIST_LOCAL, and SEARCH. "
+                    "Do not use RUN, WRITE, EDIT, SYSTEM_PROMPT, or further SUBAGENT actions. "
+                    "Return concise findings, exact evidence paths, and a brief handoff. Never expose chain-of-thought."
+                )},
+                {"role": "system", "content": attachment_context[:60000]},
+            ]
+            sub_images = self.app.vision_images(chat_id)
+            if sub_images:
+                if K.get_remote_model(model):
+                    parts = [{"type": "text", "text": str(task).strip()[:12000]}]
+                    parts.extend({"type": "image_url", "image_url": {"url": "data:{};base64,{}".format(item["mime"], item["data"])}} for item in sub_images)
+                    sub_messages.append({"role": "user", "content": parts})
+                else:
+                    sub_messages.append({"role": "user", "content": str(task).strip()[:12000], "images": [item["data"] for item in sub_images]})
+            else:
+                sub_messages.append({"role": "user", "content": str(task).strip()[:12000]})
+
+            for sub_round in range(3):
+                chunks = []
+                stream = K.stream_chat(sub_messages, model=model)
+                try:
+                    for kind, chunk in stream:
+                        if str(kind or "").strip().lower().replace("-", "_") == "content" and chunk:
+                            chunks.append(chunk if isinstance(chunk, str) else str(chunk))
+                finally:
+                    close = getattr(stream, "close", None)
+                    if callable(close):
+                        try:
+                            close()
+                        except Exception:
+                            pass
+                raw = "".join(chunks).strip()
+                if not raw:
+                    raise RuntimeError("The delegated model returned no text.")
+
+                delegated = []
+                for regex, kind in ((READ_LOCAL_ACTION_RE, "READ_LOCAL"), (LIST_LOCAL_ACTION_RE, "LIST_LOCAL"), (SEARCH_ACTION_RE, "SEARCH")):
+                    for match in regex.finditer(raw):
+                        value = match.group(1).strip() or match.group(2).strip()
+                        delegated.append((match.start(), kind, value))
+                forbidden = re.search(r"@@@\s*(?:RUN|WRITE|EDIT|SYSTEM_PROMPT|SUBAGENT)\b", raw, re.I)
+                if forbidden:
+                    log_step("Blocked an unapproved action proposed by sub-agent " + name + ".", False,
+                             status="Sub-agent action blocked…",
+                             detail="Sub-agents are read-only. Only the lead agent may prepare a file or command proposal.",
+                             agent={"name": name, "state": "blocked"})
+                if not delegated:
+                    return WEB_ACTION_RE.sub("", raw).strip()
+                if sub_round >= 2:
+                    return "The sub-agent reached its three-turn read-only tool limit. Last response:\n" + WEB_ACTION_RE.sub("", raw).strip()
+
+                results = []
+                result_images = []
+                for _position, action, argument in sorted(delegated, key=lambda item: item[0]):
+                    if action == "READ_LOCAL":
+                        try:
+                            content = self.app.read_agent_file(argument)
+                            log_step("Sub-agent " + name + " read " + argument, True,
+                                     status=name + " reading…", detail="Read-only host file access.",
+                                     agent={"name": name, "state": "running"})
+                            results.append("[Local file read]\nPath: {}\n\n{}".format(argument, content))
+                        except Exception as text_error:
+                            try:
+                                image_item = self.app.read_agent_image(argument)
+                                result_images.append(image_item)
+                                log_step("Sub-agent " + name + " inspected image " + argument, True,
+                                         status=name + " inspecting image…", detail="The local image was passed as multimodal input; it was not modified.",
+                                         agent={"name": name, "state": "running"})
+                                results.append("[Local image attached for visual inspection]\nPath: {}".format(image_item["path"]))
+                            except Exception:
+                                results.append("[Local file read failed]\nPath: {}\nReason: {}".format(argument, text_error))
+                    elif action == "LIST_LOCAL":
+                        try:
+                            items = self.app.list_agent_directory(argument)
+                            lines = ["[Local directory listing]\nPath: " + (argument or "/")]
+                            lines.extend(("[DIR] " if item["directory"] else "[FILE] ") + item["path"] + (" ({})".format(item["size"]) if item["size"] else "") for item in items)
+                            log_step("Sub-agent " + name + " listed " + (argument or "/"), True,
+                                     status=name + " listing…", detail="Read-only host directory listing.",
+                                     agent={"name": name, "state": "running"})
+                            results.append("\n".join(lines))
+                        except Exception as exc:
+                            results.append("[Local directory listing failed]\nPath: {}\nReason: {}".format(argument or "/", exc))
+                    else:
+                        search_result = self.app.search_web(argument)
+                        results.append("[Web search result]\n" + search_result_text(argument, search_result))
+                sub_messages.append({"role": "assistant", "content": raw})
+                result_text = "\n\n".join(results) + "\n\nUse these results and continue the assigned task. Do not repeat completed reads."
+                if result_images and K.get_remote_model(model):
+                    result_parts = [{"type": "text", "text": result_text}]
+                    result_parts.extend({"type": "image_url", "image_url": {"url": "data:{};base64,{}".format(item["mime"], item["data"])}} for item in result_images)
+                    sub_messages.append({"role": "user", "content": result_parts})
+                elif result_images:
+                    sub_messages.append({"role": "user", "content": result_text, "images": [item["data"] for item in result_images]})
+                else:
+                    sub_messages.append({"role": "user", "content": result_text})
+            return "The delegated task could not be completed within its read-only tool limit."
+
         def response_stats():
             seconds = max(generation_seconds, 0.0)
             has_exact_usage = generation_calls > 0 and usage_calls == generation_calls
@@ -3979,36 +4439,34 @@ class Handler(BaseHTTPRequestHandler):
             final_raw = ""
             validation_errors = []
             max_rounds = 4
+            subagents_started = 0
             for round_index in range(max_rounds):
                 if round_index == 0 and DESKTOP_VISUAL_REQUEST_RE.search(user_text):
-                    if mode == "normal":
-                        final_raw = (
-                            "Normal mode cannot access your Mac's local files or folders. Switch this conversation to Code mode "
-                            "to let me read and list files inside the configured project directory (and inspect files you attach). "
-                            "Code mode still cannot capture or view your live desktop, screen, or GUI. To show me what is on screen, "
-                            "attach a screenshot. File changes and developer commands remain subject to separate approval."
-                        )
-                    else:
-                        final_raw = (
-                            "I can't capture or view your live desktop, screen, or GUI in either mode. Code mode can read and list files "
-                            "inside the configured project directory and inspect files you attach, but it does not provide live screen access. "
-                            "Attach a screenshot to show me what is on screen. File changes and developer commands still require your approval."
-                        )
-                    log_step("Explained the desktop and Code mode access boundary.", True, status="Mode guidance ready…", detail="No live screen capture or unauthorized local access was attempted.")
+                    final_raw = (
+                        "Kurt cannot capture a live desktop or control the GUI. In Agent mode I can read/list files accessible to the Kurt process, "
+                        "but screen capture is not available. Attach a screenshot for visual inspection."
+                    )
+                    log_step("Clarified the live-screen boundary.", True, status="Mode guidance ready…", detail="No screen capture or GUI interaction was attempted.")
                     break
                 if round_index == 0 and mode == "normal" and NORMAL_MODE_LOCAL_ACCESS_RE.search(user_text):
                     final_raw = (
-                        "Normal mode cannot access local files, folders, or terminal commands. Switch this conversation to Code mode "
-                        "to let me read and list files inside the configured project directory and inspect files you attach. "
-                        "Any proposed file changes or developer commands will be shown for your approval before they can run or be applied."
+                        "Normal mode cannot access unuploaded files or run commands on your laptop. Switch to Code for an isolated coding workspace, "
+                        "or Agent for requested reads/listings on your computer. Agent writes and host commands require explicit approval."
                     )
-                    log_step("Explained the Code mode access boundary.", True, status="Mode guidance ready…", detail="No local file, directory, or terminal action was attempted in Normal mode.")
+                    log_step("Explained the Normal mode access boundary.", True, status="Mode guidance ready…", detail="No local file, directory, or terminal action was attempted in Normal mode.")
+                    break
+                if round_index == 0 and mode == "normal" and NORMAL_MODE_CODING_RE.search(user_text):
+                    final_raw = (
+                        "This looks like a coding workflow. Would you like to switch this conversation to **Code** mode? "
+                        "Code works in an isolated temporary workspace and cannot access your laptop. Use **Agent** only when the task needs host-file access; each write and host command will require your approval."
+                    )
+                    log_step("Detected a complex coding workflow and requested a mode change.", True, status="Mode choice needed…", detail="No project files were read and no code or command was run. The user can select Code or Agent in the mode control.")
                     break
                 if round_index == 0 and mode == "normal" and SYSTEM_PROMPT_REQUEST_RE.fullmatch(user_text):
-                    final_raw = "Normal mode cannot inspect local application configuration. Switch this conversation to Code mode to view Kurt's editable system prompt."
+                    final_raw = "Normal mode cannot inspect local application configuration. Switch to Code or Agent mode to view Kurt's editable system prompt."
                     log_step("Blocked a local configuration read in Normal mode.", False, status="Action blocked…", detail="No local configuration or file was read.")
                     break
-                if round_index == 0 and SYSTEM_PROMPT_REQUEST_RE.fullmatch(user_text):
+                if round_index == 0 and mode != "normal" and SYSTEM_PROMPT_REQUEST_RE.fullmatch(user_text):
                     active_prompt = self.app.chat_system_prompt(chat_id, mode=mode, effort=effort)
                     for key_entry in K.PROVIDER_KEYS:
                         secret = str(key_entry.get("value") or "")
@@ -4037,9 +4495,9 @@ class Handler(BaseHTTPRequestHandler):
                     final_raw = "Kurt did not return any response text. Check the selected model and provider configuration."
                     break
 
-                if not code_mode_allowed() and re.search(r"@@@\s*(?:RUN|READ|LIST|WRITE|EDIT|SYSTEM_PROMPT)\b", raw, re.I):
-                    final_raw = "Normal mode cannot access, read, create, edit, or run anything on your computer. Switch this conversation to Code mode and send the request again."
-                    log_step("Blocked a local computer action in Normal mode.", False, status="Action blocked…", detail="No file, directory, attachment, project, or terminal action was performed. Switch to Code mode to continue.")
+                if mode == "normal" and re.search(r"@@@\s*(?:RUN|READ|LIST|READ_LOCAL|LIST_LOCAL|SUBAGENT|WRITE|EDIT|SYSTEM_PROMPT)\b", raw, re.I):
+                    final_raw = "Normal mode cannot perform local computer actions. Switch to Code for isolated coding work, or Agent for host access that requires approval for writes and commands."
+                    log_step("Blocked a local computer action in Normal mode.", False, status="Action blocked…", detail="No laptop file, directory, or terminal action was performed.")
                     break
 
                 tool_actions = []
@@ -4051,6 +4509,12 @@ class Handler(BaseHTTPRequestHandler):
                     tool_actions.append((match.start(), "READ", match.group(1).strip() or match.group(2).strip()))
                 for match in LIST_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "LIST", match.group(1).strip() or match.group(2).strip()))
+                for match in READ_LOCAL_ACTION_RE.finditer(raw):
+                    tool_actions.append((match.start(), "READ_LOCAL", match.group(1).strip() or match.group(2).strip()))
+                for match in LIST_LOCAL_ACTION_RE.finditer(raw):
+                    tool_actions.append((match.start(), "LIST_LOCAL", match.group(1).strip() or match.group(2).strip()))
+                for match in SUBAGENT_ACTION_RE.finditer(raw):
+                    tool_actions.append((match.start(), "SUBAGENT", match.group(1).strip() + "\n" + match.group(2).strip()))
                 tool_actions.sort(key=lambda item: item[0])
 
                 if tool_actions:
@@ -4058,51 +4522,136 @@ class Handler(BaseHTTPRequestHandler):
                         validation_errors.append("Kurt reached the maximum of {} tool rounds.".format(max_rounds))
                     else:
                         results = []
+                        result_images = []
                         for _position, action, argument in tool_actions:
                             if action == "RUN":
-                                if not code_mode_allowed():
-                                    results.append("[Command blocked] Local commands are unavailable because this conversation is not currently in Code mode. Tell the user to switch to Code mode.")
+                                if not (code_mode_allowed() or agent_mode_allowed()):
+                                    results.append("[Command blocked] Commands are available only in Code or Agent mode.")
                                 elif not argument:
                                     results.append("[Command rejected] RUN action did not include a command.")
+                                elif code_mode_allowed():
+                                    log_step("Running command in the isolated workspace: " + argument, None,
+                                             status="Running isolated command…",
+                                             detail="No laptop paths or host shell are available to this runner.")
+                                    try:
+                                        result = self.app.run_command(chat_id, argument)
+                                        output = str(result.get("output") or "(No output.)")[-12000:]
+                                        detail = "Exit code: {}\n{}".format(result.get("returncode", "unknown"), output)
+                                        log_step("Isolated command {}.".format("succeeded" if result.get("ok") else "failed"),
+                                                 bool(result.get("ok")), status="Isolated command finished…", detail=detail)
+                                        results.append("[Isolated command result]\nWorking directory: {}\nExit code: {}\nStatus: {}\n\n{}".format(
+                                            result.get("cwd") or self.app.chat_workspace(chat_id),
+                                            result.get("returncode", "unknown"),
+                                            "Succeeded" if result.get("ok") else "Failed", output))
+                                    except Exception as exc:
+                                        log_step("Isolated command failed.", False, status="Command failed…", detail=str(exc))
+                                        results.append("[Isolated command failed]\n{}".format(exc))
                                 else:
                                     pending_number = 1 + sum(1 for item in artifacts_by_path.values() if item.get("kind") == "command")
                                     command_path = "Command approval {}".format(pending_number)
                                     artifacts_by_path[command_path] = {
                                         "kind": "command", "path": command_path, "content": argument,
-                                        "approval_required": True,
+                                        "approval_required": True, "host_command": True,
                                         "validation": {"ok": True, "checked": True, "message": "Awaiting your approval · not executed"},
                                     }
-                                    log_step("Prepared a command for approval: " + argument, None, status="Awaiting approval…", detail="The command has not run. Review the command card and explicitly approve it before execution. Approved commands are restricted to the isolated chat workspace.")
-                                    results.append("[Command approval pending]\nThis command has been presented to the user for approval and has NOT been executed: {}\nDo not claim it ran or repeat the action. Continue by explaining what approval is needed.".format(argument))
+                                    log_step("Prepared a host command for approval: " + argument, None,
+                                             status="Awaiting approval…",
+                                             detail="The command has not run. It will run on the host only after you approve its command card.")
+                                    results.append("[Command approval pending]\nThis host command has been presented to the user for approval and has NOT been executed: {}\nDo not claim it ran or repeat the action. Continue by explaining what approval is needed.".format(argument))
                             elif action == "READ":
                                 if not code_mode_allowed():
-                                    results.append("[Read blocked] Local file access is unavailable because this conversation is not currently in Code mode. Tell the user to switch to Code mode.")
+                                    results.append("[Read blocked] READ is available only for the isolated Code workspace.")
                                 elif not argument:
                                     results.append("[Read rejected] READ action needs a project-relative file path.")
                                 else:
                                     try:
-                                        content = self.app.read_project_file(argument)
-                                        details = "[Project file read]\nPath: {}\n\n{}".format(argument, content)
-                                        log_step("Read project file: " + argument, True, status="Reading project…", detail="Read-only access under the configured Code mode project root. No file was changed.")
+                                        content = self.app.read_chat_file(chat_id, argument)
+                                        details = "[Isolated workspace file read]\nPath: {}\n\n{}".format(argument, content)
+                                        log_step("Read isolated workspace file: " + argument, True, status="Reading workspace…", detail="Read-only access inside this conversation’s temporary workspace. No laptop file was accessed or changed.")
                                         results.append(details)
                                     except Exception as exc:
                                         log_step("Project file read failed: " + argument, False, status="Could not read file…", detail=str(exc))
                                         results.append("[Project file read failed]\nPath: {}\nReason: {}".format(argument, exc))
                             elif action == "LIST":
                                 if not code_mode_allowed():
-                                    results.append("[Directory listing blocked] Local file access is unavailable because this conversation is not currently in Code mode. Tell the user to switch to Code mode.")
+                                    results.append("[Directory listing blocked] LIST is available only for the isolated Code workspace.")
                                 else:
                                     display_path = argument or "."
                                     try:
-                                        items = self.app.list_project_directory(argument)
-                                        lines = ["[Project directory listing]\nPath: " + display_path]
+                                        items = self.app.list_chat_directory(chat_id, argument)
+                                        lines = ["[Isolated workspace directory listing]\nPath: " + display_path]
                                         lines.extend(("[DIR] " if item["directory"] else "[FILE] ") + item["path"] + (" ({})".format(item["size"]) if item["size"] else "") for item in items)
                                         details = "\n".join(lines)
-                                        log_step("Listed project directory: " + display_path, True, status="Reading project…", detail="Read-only directory listing under the configured Code mode project root.")
+                                        log_step("Listed isolated workspace directory: " + display_path, True, status="Reading workspace…", detail="Read-only directory listing inside this conversation’s temporary workspace.")
                                         results.append(details)
                                     except Exception as exc:
                                         log_step("Project directory listing failed: " + display_path, False, status="Could not list directory…", detail=str(exc))
                                         results.append("[Project directory listing failed]\nPath: {}\nReason: {}".format(display_path, exc))
+                            elif action == "READ_LOCAL":
+                                if not agent_mode_allowed():
+                                    results.append("[Host read blocked] READ_LOCAL is available only in Agent mode.")
+                                elif not argument:
+                                    results.append("[Host read rejected] READ_LOCAL needs an absolute or Agent-root-relative path.")
+                                else:
+                                    try:
+                                        content = self.app.read_agent_file(argument)
+                                        log_step("Read local file: " + argument, True, status="Reading computer…", detail="Read-only host access. The file was not modified.")
+                                        results.append("[Local file read]\nPath: {}\n\n{}".format(argument, content))
+                                    except Exception as text_error:
+                                        try:
+                                            image_item = self.app.read_agent_image(argument)
+                                            result_images.append(image_item)
+                                            log_step("Inspected local image: " + argument, True, status="Inspecting image…", detail="The image was passed to the selected vision-capable model as actual image input. The file was not modified.")
+                                            results.append("[Local image attached for visual inspection]\nPath: {}".format(image_item["path"]))
+                                        except Exception:
+                                            log_step("Local file read failed: " + argument, False, status="Could not read local file…", detail=str(text_error))
+                                            results.append("[Local file read failed]\nPath: {}\nReason: {}".format(argument, text_error))
+                            elif action == "LIST_LOCAL":
+                                if not agent_mode_allowed():
+                                    results.append("[Host listing blocked] LIST_LOCAL is available only in Agent mode.")
+                                else:
+                                    display_path = argument or "."
+                                    try:
+                                        items = self.app.list_agent_directory(argument)
+                                        lines = ["[Local directory listing]\nPath: " + display_path]
+                                        lines.extend(("[DIR] " if item["directory"] else "[FILE] ") + item["path"] + (" ({})".format(item["size"]) if item["size"] else "") for item in items)
+                                        log_step("Listed local directory: " + display_path, True, status="Reading computer…", detail="Read-only host directory listing. Protected credentials and virtual filesystems are excluded.")
+                                        results.append("\n".join(lines))
+                                    except Exception as exc:
+                                        log_step("Local directory listing failed: " + display_path, False, status="Could not list local directory…", detail=str(exc))
+                                        results.append("[Local directory listing failed]\nPath: {}\nReason: {}".format(display_path, exc))
+                            elif action == "SUBAGENT":
+                                if not agent_mode_allowed():
+                                    results.append("[Subagent blocked] Delegation is available only in Agent mode.")
+                                elif subagents_started >= 3:
+                                    results.append("[Subagent limit] The lead agent may delegate at most three tasks per turn.")
+                                else:
+                                    name, _, task = argument.partition("\n")
+                                    name = re.sub(r"[^A-Za-z0-9 _.-]", "", name).strip()[:48] or "Sub-agent {}".format(subagents_started + 1)
+                                    task = task.strip()
+                                    if not task:
+                                        results.append("[Subagent rejected] Provide a scoped task below the SUBAGENT name.")
+                                    else:
+                                        subagents_started += 1
+                                        active_agent_names.add(name)
+                                        log_step("Lead agent decision: delegate this task to {}.".format(name), None,
+                                                 status="{} agent(s) running…".format(len(active_agent_names)),
+                                                 detail="Task: " + task[:8000],
+                                                 agent={"name": name, "state": "running", "task": task[:8000]})
+                                        try:
+                                            sub_result = run_subagent(name, task)
+                                            log_step("{} completed.".format(name), True,
+                                                     status="{} agent(s) running…".format(max(0, len(active_agent_names) - 1)),
+                                                     detail=(sub_result or "No text result.")[:10000],
+                                                     agent={"name": name, "state": "completed"})
+                                            results.append("[Subagent result: {}]\nTask: {}\n\n{}".format(name, task, sub_result or "No text result."))
+                                        except Exception as exc:
+                                            log_step("{} failed.".format(name), False,
+                                                     status="{} agent(s) running…".format(max(0, len(active_agent_names) - 1)),
+                                                     detail=str(exc)[:3000], agent={"name": name, "state": "failed"})
+                                            results.append("[Subagent failed: {}]\n{}".format(name, exc))
+                                        finally:
+                                            active_agent_names.discard(name)
                             else:
                                 log_step("Searching the web: " + argument, status="Searching the web…", detail="Search query: " + argument)
                                 result = self.app.search_web(argument)
@@ -4110,10 +4659,15 @@ class Handler(BaseHTTPRequestHandler):
                                 log_step(result.get("message", "Web search completed."), result.get("ok"), status="Reviewing sources…", detail=search_details[:10000])
                                 results.append("[Web search result]\n" + search_details)
                         messages.append({"role": "assistant", "content": raw})
-                        messages.append({
-                            "role": "user",
-                            "content": "\n\n".join(results) + "\n\nUse these actual results. Continue the task; do not repeat completed actions.",
-                        })
+                        result_text = "\n\n".join(results) + "\n\nUse these actual results. Continue the task; do not repeat completed actions."
+                        if result_images and K.get_remote_model(model):
+                            result_parts = [{"type": "text", "text": result_text}]
+                            result_parts.extend({"type": "image_url", "image_url": {"url": "data:{};base64,{}".format(item["mime"], item["data"])}} for item in result_images)
+                            messages.append({"role": "user", "content": result_parts})
+                        elif result_images:
+                            messages.append({"role": "user", "content": result_text, "images": [item["data"] for item in result_images]})
+                        else:
+                            messages.append({"role": "user", "content": result_text})
                         continue
 
                 first_edit = re.search(r"@@@\s*(?:WRITE|EDIT|SYSTEM_PROMPT)\b", raw, re.I)
@@ -4135,7 +4689,7 @@ class Handler(BaseHTTPRequestHandler):
                         final_raw = "Kurt proposed file changes but did not provide the required file-by-file Change summary. No files from that response were accepted."
                         break
 
-                new_artifacts, validation_errors = self.app.artifacts_from_answer(raw, chat_id)
+                new_artifacts, validation_errors = self.app.artifacts_from_answer(raw, chat_id, mode=mode)
                 for artifact in new_artifacts:
                     artifacts_by_path[artifact["path"]] = artifact
                     validation = artifact.get("validation") or {}
