@@ -1,259 +1,117 @@
 # Kurt
 
-A terminal coding assistant powered by **Qwythos** (running locally through [Ollama](https://ollama.com)).
-Type `kurt` in any terminal, in any project folder, chat in plain English, and Kurt can read your
-code and propose edits, new files and shell commands. **Nothing changes until you confirm it.**
+Kurt is a coding assistant that runs on local models (through [Ollama](https://ollama.com)) or hosted models (Claude, OpenAI, Grok, Gemini, OpenRouter and any OpenAI-compatible endpoint). It has two front ends over the same state:
 
-- 100% local — your code never leaves your computer
-- Works on macOS (Intel and Apple Silicon) and Windows
-- Detects your hardware and tunes itself for speed (see [Speed](#speed))
-- Shows a colored diff before every edit, with `/undo` to revert
+| Command | What it does |
+| --- | --- |
+| `kurt` | Opens the **browser interface** on `http://127.0.0.1:1277` |
+| `kurt --cli` | Runs the same assistant **in your terminal** |
 
----
+Nothing runs and nothing is written without your approval, in either interface.
 
-## Requirements
+## Setup
 
-| Thing | Where to get it |
-|---|---|
-| **Ollama** | https://ollama.com/download |
-| **Python 3.9 or newer** | https://www.python.org/downloads/ (Windows: tick **"Add python.exe to PATH"**) |
-| Several GB of free disk space and RAM for the model | — |
+1. Keep `kurt.py`, `kurt_web.py`, `kurt_sandbox.py` and `providers.py` together in one folder.
+2. Install the one dependency into the Python you use to run Kurt: `pip install rich`
+3. Make `kurt` a command, for example:
+   ```sh
+   chmod +x /path/to/kurt.py
+   ln -s /path/to/kurt.py /usr/local/bin/kurt
+   ```
+   or add `alias kurt='python3 /path/to/kurt.py'` to your shell profile.
+4. For local models, install Ollama. Kurt starts it for you and offers to download the default model on first use. Hosted models only need an API key (`/keys` in the terminal, or Settings in the browser).
 
----
+## Using the browser interface
 
-## Setup (one time)
-
-### 1. Install Ollama and download the model
-
-Install Ollama, then run this once in a terminal (you've probably already done it):
-
-```
-ollama run hf.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M
+```sh
+kurt                  # opens http://127.0.0.1:1277
+kurt --port 8080      # use another port
 ```
 
-When you see the `>>>` prompt, type `/bye` to exit. The model is now downloaded.
-(If you skip this step, Kurt will offer to download it the first time you run it.)
+Press `Ctrl+C` in the terminal to stop it. If the port is taken, Kurt falls back to `KURT_WEB_FALLBACK_PORT` (default `10220`). `kurt --localhost` still works as an alias.
 
-### 2. Download Kurt from GitHub
+## Using the terminal interface
 
-1. Open the repository page on GitHub.
-2. Click the green **Code** button, then **Download ZIP**.
-3. Unzip it. You'll get a folder such as `kurt-main`. Remember where it is.
-
-### 3. Install
-
-**macOS** — open Terminal and run:
-
-```bash
-cd ~/Downloads/kurt-main      # use the folder you unzipped
-bash install.sh
+```sh
+cd my-project
+kurt --cli                    # new conversation
+kurt --cli --resume           # continue the latest conversation
+kurt --cli --resume 3         # continue conversation 3 from /chats (or an id prefix)
+kurt --cli --mode agent       # start in Agent mode
 ```
 
-**Windows** — open the unzipped folder and **double-click `install.bat`**
-(or run it from PowerShell: `.\install.bat`).
+On a new conversation Kurt offers to **link** the current folder. Linking lets Kurt read and edit that folder; every change still needs your approval. Say no and Kurt works only in the conversation's private workspace.
 
-The installer creates a private Python environment in `~/.kurt` (Windows: `%USERPROFILE%\.kurt`)
-and adds the `kurt` command to your PATH. It doesn't touch your system Python.
+### Modes
 
-### 4. Open a NEW terminal window
+- **Normal** is for everyday questions and straightforward file work.
+- **Agent** is for multi-step jobs. Kurt may delegate analysis to up to three read-only subagents, and uses higher reasoning effort.
 
-The PATH change only applies to terminals opened after installing. Check it worked:
+Both modes read and list files your OS account can read. Both pause for approval before every command and every file change. Switch with `/mode normal` or `/mode agent`.
 
-```
-kurt --version
-```
+### Approvals
 
----
-
-## Using Kurt
-
-Go to any project folder and start it:
-
-```bash
-cd ~/projects/my-app
-kurt
-```
-
-On start, Kurt will:
-
-1. Start Ollama if it isn't running
-2. Load Qwythos into memory (the first load can take a little while)
-3. Show a green K mascot and a bottom-pinned `kurt` input box
-
-Now just talk to it. The green K mascot appears at startup. The input box stays pinned to the bottom of the terminal, with `/help`, `/models`, and `@file` hints inside the box. While Kurt works, thinking text and responses appear above it; press Esc (or Ctrl+C) to stop generation.
-
-Examples:
-
-```
-kurt ❯ add input validation to the signup function in @auth.py
-kurt ❯ write a unit test for utils/dates.py
-kurt ❯ why does main.js throw "undefined is not a function"?
-```
-
-### How edits are confirmed
-
-When Kurt wants to change something you'll see a diff and a question:
-
-```
-╭──────────────╮
-│ Edit auth.py │
-╰──────────────╯
-- def signup(email):
-+ def signup(email: str):
-+     if "@" not in email:
-+         raise ValueError("invalid email")
-Apply this edit? (y=yes, n=no, a=yes to all) [y/n/a] (y):
-```
-
-- `y` — apply this change
-- `n` — reject it (Kurt is told, and you can explain what you want instead)
-- `a` — apply this and all further **file edits** this session
-- Shell commands (`RUN`) **always** ask, defaulting to *no*, even in auto mode
-
-Kurt can only read and write inside the folder you launched it from.
+When Kurt wants to run a command or save a file you see the exact command or a diff, then `Approve? [y/n]`. The default is `n`. A declined action is reported back to the model, which will not assume it happened.
 
 ### Commands
 
-| Command | What it does |
-|---|---|
-| `/help` | Show help |
-| `/speed` | Show the detected hardware and the speed settings in use (`/speed refresh` re-detects) |
-| `/think [on\|off\|auto]` | Turn thinking on or off. Off is much faster on computers without a GPU |
-| `/fast [model]` | Switch to a small, much faster model (default `qwen2.5-coder:3b`, about 2 GB) |
-| `/files` | List the project's files |
-| `/add <path>` | Load a file into the conversation (or write `@path` inside any message) |
-| `/auto` | Toggle auto-accept for file edits |
-| `/undo` | Revert the last applied change (can be repeated) |
-| `/clear` | Forget the conversation and start fresh |
-| `/exit` | Quit (Ctrl+D also works) |
+| Command | Purpose |
+| --- | --- |
+| `/new`, `/chats`, `/resume [n\|id]`, `/rename`, `/delete` | Manage conversations (shared with the browser) |
+| `/mode [normal\|agent]` | Switch mode |
+| `/link [path]`, `/unlink` | Let Kurt edit a folder, or go back to the private workspace |
+| `/workspace` | Show the working folder, private workspace, environment and sandbox |
+| `/env [pip\|reset]` | Show, prepare with pip, or delete the conversation's Python environment |
+| `/files`, `/add <path>`, `@path` | Show files, copy a file into the workspace, or attach a file to one message |
+| `/undo` | Restore the last file Kurt saved in this session |
+| `/models`, `/route`, `/keys` | Models, routes (API key, failover group, local model), provider keys |
+| `/system-prompt [file <path>\|reset]` | Show, replace or reset Kurt's system prompt |
+| `/speed`, `/think`, `/fast`, `/context` | Local-model speed and context tools |
+| `/help`, `/exit` | Help and quit. `Esc` stops a response |
 
-Press **Ctrl+C** while Kurt is typing to stop its answer.
+Put standing instructions for a project in a `KURT.md` file in its root folder; the terminal interface includes it automatically.
 
-### Tips for good results with a 9B model
+## How everything fits together
 
-- Be specific, and point at files: `fix the bug in @src/api.py line ~40`.
-- Ask for **one change at a time**. Small models do much better on focused tasks.
-- If an edit fails to match, Kurt automatically re-reads the file and retries. If it keeps
-  failing, say "rewrite the whole file" and it'll use a full-file write instead.
-- Use `/clear` when switching to a different task so the context doesn't fill up.
-- Commit to git before big changes so you have a second safety net next to `/undo`.
+Both interfaces use the same files under `~/.kurt`, so a conversation started in the terminal can be continued in the browser and the other way round.
 
----
+| What | Where | Shared by |
+| --- | --- | --- |
+| Models, API keys, hardware tuning | `~/.kurt/config.json`, `hardware.json` | CLI and browser |
+| System prompt, API groups, defaults | `~/.kurt/web_settings.json` | CLI and browser |
+| Conversations | `~/.kurt/chats.json` | CLI and browser |
+| Private workspace (uploads, scratch, temp, home) | `~/.kurt/web_workspaces/<chat id>/` | one conversation |
+| Python virtual environment | `~/.kurt/web_envs/<chat id>/` | one conversation |
+| Linked project folder (optional) | your folder | one conversation |
 
-## Speed
+### Virtual environments
 
-Kurt looks at your computer the first time it runs (result cached in `~/.kurt/hardware.json`)
-and picks the fastest safe settings for it. It prints one line at startup, for example
-`⚡ Intel Mac · CPU only, 6 cores, 16 GB RAM → ctx 8192 · 6 threads · thinking off`.
+There are exactly two kinds, and they never mix:
 
-| Your computer | What Kurt does |
-|---|---|
-| **Intel Mac** (no GPU support in Ollama) | CPU inference with one thread per physical core, a shorter context (4096-8192 depending on RAM), thinking off |
-| **Apple Silicon Mac** | Metal GPU, context sized to your unified memory, larger prompt batches on 16 GB or more, thinking on, Flash Attention |
-| **Windows with an NVIDIA GPU** | Context sized to your VRAM so the model never spills onto the CPU, larger batches on 8 GB or more, thinking on, Flash Attention |
-| **Windows without a supported GPU** | Same as an Intel Mac: CPU threads, short context, thinking off |
+1. **Kurt's own environment** is whichever Python runs `kurt.py` (it needs `rich`). It is never used to run your code.
+2. **One private venv per conversation** at `~/.kurt/web_envs/<chat id>`. It is created the first time a command needs it, and `pip` is added only when a command uses it. Commands run inside it and inside the sandbox, so `pip install` in one conversation never affects another conversation or your system Python. Nothing is created inside your project, so no `.venv` clutters a linked folder.
 
-Other things that make it faster on every computer: the model loads in the background while you
-type, replies are drawn in batches instead of once per token, Kurt stops generating as soon as it
-has asked to read a file or run a command, old messages are trimmed in one go so Ollama can reuse
-its cached prompt, and large files are cut down to fit smaller contexts.
+Deleting a conversation with `/delete` removes its workspace and venv. `/env reset` removes only the venv; it is rebuilt on demand.
 
-Type `/speed` to see what was detected and applied. If the Ollama app was already running when you
-started Kurt, `/speed` also shows two one-time settings (`OLLAMA_FLASH_ATTENTION`,
-`OLLAMA_NUM_PARALLEL`) to give it; Kurt sets them itself whenever it starts Ollama.
+### Command sandbox
 
----
+Commands run under the macOS Seatbelt sandbox. They can read what your OS account can read, but can write only to the conversation's private workspace and venv, plus the linked folder if you linked one. Network access is granted only for package and repository commands such as `pip install`, `npm install`, `git clone` and `curl`. `sudo`, `su` and similar are refused. On Linux and Windows there is no unrestricted fallback: commands are refused, while reading, searching and approved file edits still work.
 
-## Configuration (optional)
+## Configuration
 
-Set these environment variables before running `kurt`:
+| Variable | Meaning |
+| --- | --- |
+| `KURT_MODEL` | Model to use instead of the saved one |
+| `KURT_WEB_PORT`, `KURT_WEB_FALLBACK_PORT` | Browser interface ports (default `1277`, `10220`) |
+| `KURT_CTX`, `KURT_THREADS`, `KURT_BATCH` | Override auto-tuned context size, CPU threads, batch size |
+| `KURT_THINK` | Force thinking on or off for local models |
+| `KURT_TUNE=off` | Turn hardware auto-tuning off |
+| `OLLAMA_HOST` | Ollama server address |
+| `HF_TOKEN` | Hugging Face token for gated models |
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `KURT_MODEL` | the Qwythos model above | Any other Ollama model name |
-| `KURT_CTX` | auto (4096-16384) | Context window in tokens (bigger = more memory use) |
-| `KURT_THREADS` | auto | CPU threads used for inference |
-| `KURT_BATCH` | auto | Prompt batch size |
-| `KURT_THINK` | auto | `on` or `off`: whether the model thinks before answering |
-| `KURT_TUNE` | on | `off` disables all hardware auto-tuning |
-| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Use a remote or custom Ollama server |
+## Notes
 
-Examples:
-
-```bash
-# macOS
-KURT_CTX=32768 kurt
-```
-
-```powershell
-# Windows PowerShell
-$env:KURT_CTX = "32768"; kurt
-```
-
----
-
-## Troubleshooting
-
-**`kurt: command not found` / `'kurt' is not recognized`**
-Open a brand-new terminal window. On macOS, you can also run `source ~/.zshrc`. If it still fails, re-run the installer.
-
-**`Ollama isn't installed or isn't on PATH`**
-Install Ollama from https://ollama.com/download, then open a new terminal.
-
-**Windows: "Python not found"**
-Install Python from python.org and tick **Add python.exe to PATH**. If Windows opens the Microsoft Store
-instead, turn off the "python.exe" app-execution alias in *Settings → Apps → Advanced app settings → App execution aliases*.
-
-**It's slow or the Mac gets hot**
-A 9B model is heavy. Close other big apps and run `/speed` to see the settings Kurt picked for your
-computer. You can lower `KURT_CTX` further (for example `4096`) or pick a smaller model with `/models`.
-Intel Macs have no GPU acceleration for Ollama, so expect slower responses than on Apple Silicon.
-
-**Kurt's edits don't apply ("SEARCH not found")**
-The model sometimes misquotes your code. It retries automatically; keep requests small and mention the file with `@file`.
-
----
-
-## Updating
-
-Download the new ZIP from GitHub, unzip it, and run the installer again (`bash install.sh` or double-click `install.bat`).
-
-## Uninstalling
-
-- macOS: `bash uninstall.sh`
-- Windows: double-click `uninstall.bat`
-
-This removes Kurt only. Remove the model with `ollama rm hf.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M`.
-
----
-
-## What's in this repo
-
-| File | Purpose |
-|---|---|
-| `kurt.py` | The CLI, green K mascot, pinned prompt, and coding-agent logic |
-| `pyproject.toml` | Package definition (creates the `kurt` command) |
-| `install.sh` / `install.bat` | One-step installers for macOS / Windows |
-| `uninstall.sh` / `uninstall.bat` | Removal scripts |
-| `LICENSE` | MIT |
-
-## Safety notes
-
-Kurt is a small local model and can be wrong. Read every diff before pressing `y`, and read every
-shell command before running it. Don't use `a` (accept all) on code you can't easily restore.
-
----
-
-## Adding models (any format)
-
-`/models` then `+` accepts a Hugging Face repo, a link, an Ollama name (`llama3.2:3b`), or search words.
-Ollama only runs GGUF, so for other formats Kurt works through these steps automatically:
-
-1. **GGUF repo** - pulled directly (`user/name:Q4_K_M` picks a quantization).
-2. **Not GGUF (safetensors, FP8, ...)** - Kurt looks for a ready-made GGUF conversion and offers it.
-3. **No conversion available** - Kurt downloads the original weights (resumable) and imports them with
-   `ollama create`, quantizing to Q4_K_M by default.
-   - Pre-quantized repos (FP8 / AWQ / GPTQ) can't be imported by Ollama directly. Kurt offers the
-     full-precision original instead, or converts them if llama.cpp is available
-     (`export KURT_LLAMA_CPP=~/llama.cpp`, needs `pip install torch transformers gguf`).
-   - Gated repos: accept the terms on huggingface.co and set `HF_TOKEN`.
+- Do not use the same conversation in the terminal and the browser at the same moment. Both write `chats.json`, and the last writer wins.
+- Empty conversations (no message sent) are discarded when you leave the terminal interface.
+- The old parallel "helper agents" setting was removed. Agent mode subagents replace it.
+- The `/compact` command was removed because conversation history is now shared and persistent. For local models Kurt leaves out the oldest messages when the context window fills up, and tells you when it does.
