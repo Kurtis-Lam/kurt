@@ -738,7 +738,7 @@ html,body{height:100%;min-height:100%;overflow:hidden}
 .failover-member-row>.remove-member{width:36px;min-width:36px;padding:0;justify-self:end}
 .failover-member-row select{width:100%;min-width:0;max-width:100%}
 
-/* Uploaded files remain visible in the composer, with image previews where available. */
+/* Only unsent attachments remain visible in the composer; sent files stay with their message. */
 .composer-attachments{display:flex;flex-wrap:wrap;gap:8px;max-width:100%;padding:0 0 8px}
 .composer-attachments[hidden]{display:none}
 .attachment-chip{display:flex;align-items:center;gap:9px;min-width:0;max-width:min(100%,300px);padding:6px 9px;border:1px solid var(--line);border-radius:11px;background:var(--bg)}
@@ -1283,7 +1283,7 @@ function scrollEnd(force){if(!force&&!follow)return;const m=$('messages');m.scro
 function setEmpty(on){$('main').classList.toggle('empty',on);if(on)$('toBottom').classList.remove('show')}
 function setTitle(title,meta){$('chatTitle').textContent=title||'New chat';$('chatMeta').textContent=meta||''}
 function autosize(){const t=$('prompt');t.style.height='auto';t.style.height=Math.min(t.scrollHeight,220)+'px'}
-function updateSend(){$('sendBtn').disabled=!state.busy&&!$('prompt').value.trim()}
+function updateSend(){const hasAttachments=!!((state.pendingUploads||[]).length||(state.newAttachmentPaths||[]).length);$('sendBtn').disabled=!state.busy&&!$('prompt').value.trim()&&!hasAttachments}
 function hint(){const base=state.contextCount?state.contextCount+' item(s) in this chat’s isolated workspace':HINT;const text=state.mode==='normal'?'Normal · daily tasks and uploaded files only. Complex coding workflows should switch to Code.':state.mode==='code'?'Code · isolated workspace only. Files are written here; commands run in the isolated runner.':'Agent · host files can be read on request. Every file write and host command requires explicit approval.';$('composeHint').textContent=(state.contextCount?base+' · ':'')+text}
 function setBusy(b){state.busy=b;const btn=$('sendBtn');btn.querySelector('use').setAttribute('href',b?'#i-stop':'#i-up');btn.title=b?'Stop response':'Send message';btn.setAttribute('aria-label',btn.title);updateSend()}
 function cancelRun(){if(state.abort)state.abort.abort();state.abort=null;state.run++;setBusy(false)}
@@ -1769,7 +1769,7 @@ async function send(){
   state.newAttachmentPaths=(state.newAttachmentPaths||[]).filter(path=>!selectedAttachmentPaths.includes(path));
  }catch(error){if(run===state.run)setBusy(false);toast(error.message);return}
  if(run!==state.run)return;
- $('prompt').value='';autosize();hint();
+ $('prompt').value='';autosize();renderComposerAttachments();hint();updateSend();
  if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
  follow=true;renderMessage('user',text,[],{attachments:messageAttachments,mode:state.mode});const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
  $('chatMeta').textContent=state.mode+' · Generating…';
@@ -1779,7 +1779,7 @@ async function send(){
  const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseRationale(safeLiveDraft(raw),true);if(parsed.rationale){if(!thinkStart)thinkStart=performance.now();blockRationale=parsed.rationale;showReasoning(true)}const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
  try{
-  const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,route,mode:state.mode,message_id:messageId}),signal:controller.signal});
+  const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,route,mode:state.mode,message_id:messageId,attachments:messageAttachments.map(item=>item.path)}),signal:controller.signal});
   if(!response.ok){const result=await response.json().catch(()=>({}));throw new Error(result.error||response.statusText)}
   node.querySelector('.assistant-status').textContent='Thinking…';const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
   while(true){const packet=await reader.read();if(packet.done)break;if(run!==state.run)return;buffer+=decoder.decode(packet.value,{stream:true});let separator;
@@ -1829,7 +1829,7 @@ function makeUploadCard(item,{uploaded=false,removable=false,compact=false,index
  if(removable){const remove=document.createElement('button');remove.type='button';remove.className='attachment-remove';remove.textContent='×';remove.title='Remove attachment';remove.setAttribute('aria-label','Remove '+name.textContent);remove.onclick=()=>{const removed=state.pendingUploads.splice(index,1)[0];if(removed?.previewUrl)URL.revokeObjectURL(removed.previewUrl);renderPendingUploads()};row.appendChild(remove)}
  return row
 }
-function renderComposerAttachments(){const root=$('composerAttachments');if(!root)return;root.replaceChildren();const pending=state.pendingUploads||[],uploaded=state.uploadedFiles||[];pending.forEach((item,index)=>root.appendChild(makeUploadCard(item,{removable:true,index,compact:true})));uploaded.forEach(item=>root.appendChild(makeUploadCard(item,{uploaded:true,compact:true})));root.hidden=!pending.length&&!uploaded.length}
+function renderComposerAttachments(){const root=$('composerAttachments');if(!root)return;root.replaceChildren();const pending=state.pendingUploads||[],pendingPaths=new Set(state.newAttachmentPaths||[]),uploaded=(state.uploadedFiles||[]).filter(item=>pendingPaths.has(item.path));pending.forEach((item,index)=>root.appendChild(makeUploadCard(item,{removable:true,index,compact:true})));uploaded.forEach(item=>root.appendChild(makeUploadCard(item,{uploaded:true,compact:true})));root.hidden=!pending.length&&!uploaded.length;updateSend()}
 function renderPendingUploads(){const root=$('uploadList');if(!root)return;root.replaceChildren();
  const pending=state.pendingUploads||[],uploaded=state.uploadedFiles||[];const projectCount=0;
  if(!pending.length&&!projectCount&&!uploaded.length){const empty=document.createElement('div');empty.className='upload-empty';empty.textContent='No files selected.';root.appendChild(empty)}
@@ -2648,13 +2648,18 @@ class KurtWebApp:
                 break
         return items
 
-    def vision_images(self, chat_id, max_images=8, max_total_bytes=16 * 1024 * 1024):
-        """Load supported uploaded images from the isolated workspace for actual model input."""
+    def vision_images(self, chat_id, max_images=8, max_total_bytes=16 * 1024 * 1024, selected_paths=None):
+        """Load explicitly selected uploaded images as actual multimodal model input."""
         root = self.chat_workspace(chat_id)
         supported = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+        requested = None if selected_paths is None else {
+            self._safe_context_relative(value) for value in selected_paths if isinstance(value, str)
+        }
         results = []
         total = 0
         for item in self.context_file_list(chat_id):
+            if requested is not None and item["path"] not in requested:
+                continue
             mime_type = item.get("type") or ""
             if not item.get("image") or mime_type not in supported:
                 continue
@@ -4058,7 +4063,21 @@ class Handler(BaseHTTPRequestHandler):
             {"role": item["role"], "content": item["content"]}
             for item in previous if item.get("role") in ("user", "assistant")
         )
-        vision_images = self.app.vision_images(chat_id)
+        requested_attachments = data.get("attachments")
+        selected_image_paths = None
+        if isinstance(requested_attachments, list):
+            uploaded_paths = {item["path"] for item in self.app.context_file_list(chat_id)}
+            selected_image_paths = []
+            for raw_path in requested_attachments[:32]:
+                if not isinstance(raw_path, str):
+                    continue
+                try:
+                    safe_path = self.app._safe_context_relative(raw_path)
+                except ValueError:
+                    continue
+                if safe_path in uploaded_paths and safe_path not in selected_image_paths:
+                    selected_image_paths.append(safe_path)
+        vision_images = self.app.vision_images(chat_id, selected_paths=selected_image_paths)
         local_model = not bool(K.get_remote_model(model)) if hasattr(K, "get_remote_model") else False
         if vision_images and local_model:
             messages.append({"role": "user", "content": user_text, "images": [item["data"] for item in vision_images]})
