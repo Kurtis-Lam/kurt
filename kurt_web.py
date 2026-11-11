@@ -1122,6 +1122,23 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
  .ap-btn span{display:none}
 }
 
+
+/* Thinking toggle beside Kurt, inline timeline, prompt copy */
+.assistant-heading .think-head{margin-left:6px}
+.work-log{margin:0 0 14px 8px;border:0;border-left:2px solid var(--line2);border-radius:0;background:transparent}
+.work-log:not(.open){margin-bottom:0;border-left-color:transparent}
+.work-log-body{padding-left:14px;padding-right:0}
+.work-log.open .work-log-body,.work-log.open .work-log-body:has(.approval-pause.waiting){max-height:none;overflow:visible;opacity:1;padding-top:4px;padding-bottom:4px}
+.think-text{color:var(--muted);font:13.5px/1.65 var(--sans);white-space:pre-wrap;overflow-wrap:anywhere;padding:4px 0}
+.approval-output{margin:0 0 12px}
+.approval-output .codebox{margin:0}
+.approval-output .codebox pre{max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.6}
+.approval-output.bad .codehead{color:var(--danger)}
+.message.user .user-copy{align-self:center;flex:none;width:30px;height:30px;margin-left:auto;margin-right:4px;opacity:0;transition:opacity .18s var(--ease-soft),background-color .18s,color .18s}
+.message.user .user-copy .ic{width:16px;height:16px}
+.message.user .user-copy+.bubble{margin-left:0}
+.message.user:hover .user-copy,.message.user .user-copy:focus-visible{opacity:1}
+@media(hover:none){.message.user .user-copy{opacity:1}}
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -1407,37 +1424,46 @@ function renderMarkdown(src){src=String(src||'');return src.split(/((?:```|~~~)[
 function splitThink(raw,streaming){return{think:'',answer:stripUnsupportedActions(raw),open:false}}
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
 function bindCopy(root){root.querySelectorAll('[data-copy-code]').forEach(b=>b.onclick=()=>{const code=b.closest('.codebox').querySelector('code');navigator.clipboard.writeText(code?code.textContent:'').then(()=>toast('Code copied'))})}
-function formatThought(seconds){const s=Number(seconds);if(!Number.isFinite(s)||s<=0)return '';if(s<60)return Math.max(1,Math.round(s))+'s';const m=Math.floor(s/60),r=Math.round(s%60);return r?m+'m '+r+'s':m+'m'}
+function formatThought(seconds){const s=Number(seconds);if(!Number.isFinite(s)||s<=0)return '';if(s<60){const n=Math.max(1,Math.round(s));return n+(n===1?' second':' seconds')}const m=Math.floor(s/60),r=Math.round(s%60);return r?m+'m '+r+'s':m+'m'}
 function setReasoningOpen(panel,open){panel.classList.toggle('open',open);if(panel._head){panel._head.classList.toggle('open',open);panel._head.setAttribute('aria-expanded',String(open))}}
 function reasoningBlock(){return null}
-function thinkBlock(){const d=document.createElement('div');d.className='think work-log open';d.innerHTML='<div class="work-log-head">Activity</div><div class="work-log-body"></div>';return d}
-function setReasoning(node,text,live=false,seconds=0){
+function thinkBlock(){const d=document.createElement('div');d.className='think work-log';d.innerHTML='<div class="work-log-body"></div>';return d}
+function setThinkOpen(node,open){const panel=node.querySelector('.work-log'),head=node.querySelector('.think-head');if(!panel||!head)return;panel.classList.toggle('open',open);head.classList.toggle('open',open);head.setAttribute('aria-expanded',String(open))}
+function setThinkLabel(node,live,seconds){const head=node.querySelector('.think-head');const label=head&&head.querySelector('.think-label');if(!label)return;head.classList.toggle('live',!!live);if(live){label.textContent='Thinking…';return}const t=formatThought(seconds);label.textContent=t?'Thought for '+t:'Thought'}
+function setReasoning(node,text,live=false){
  const value=String(text||'').trim();if(!value)return;
  const entries=node.__worklog||(node.__worklog=[]);
- let item=entries.find(entry=>entry&&entry.kind==='thinking');
- if(!item){item={kind:'thinking',text:'Thinking',ok:null,detail:value};entries.push(item);node.__thinkingEntry=item}
+ let item=node.__thinkingEntry;
+ if(!item||!entries.includes(item)){item={kind:'thinking',text:'Thinking',ok:null,detail:value};entries.push(item);node.__thinkingEntry=item}
  else item.detail=value;
  setThink(node,entries);
 }
 function setThink(node,entries){
- const panel=node.querySelector('.work-log');if(!panel)return;
- const items=Array.isArray(entries)?entries.slice(-200):[];panel.hidden=!items.length;
+ const panel=node.querySelector('.work-log'),head=node.querySelector('.think-head');if(!panel)return;
+ const items=Array.isArray(entries)?entries.slice(-200):[];
+ panel.hidden=!items.length;if(head)head.hidden=!items.length;
  const body=panel.querySelector('.work-log-body');if(!body)return;
- const scrollBottom=body.scrollHeight-body.scrollTop-body.clientHeight<40;
+ const nearBottom=body.scrollHeight-body.scrollTop-body.clientHeight<40;
  body.replaceChildren();
  items.forEach(item=>{
   const data=typeof item==='string'?{text:item}:item||{};
   if(data.kind==='approval'&&data.approval){body.appendChild(createApprovalRow(node,data));return}
+  if(data.kind==='thinking'){const block=document.createElement('div');block.className='think-text';block.textContent=String(data.detail||'');body.appendChild(block);return}
   const PAUSE='Paused for your approval: ';
   if(typeof data.text==='string'&&data.text.startsWith(PAUSE)&&items.some(x=>x&&x.kind==='approval'&&x.approval&&String(x.text||x.approval.title||'')===data.text.slice(PAUSE.length)))return;
-  const label=String(data.text||'Activity'),detail=String(data.detail||'');
+  const label=String(data.text||'Step'),detail=String(data.detail||'');
   const row=document.createElement(detail&&detail!==label?'details':'div');
   row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');
   if(row.tagName==='DETAILS'){row.open=true;const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;
   body.appendChild(row);
  });
- if(scrollBottom)body.scrollTop=body.scrollHeight;
- const head=panel.querySelector('.work-log-head');if(head)head.textContent='Activity · '+items.length+' event(s)';
+ if(nearBottom)body.scrollTop=body.scrollHeight;
+ if(node.classList.contains('live')){
+  setThinkLabel(node,true,0);
+  const waiting=items.some(x=>x&&x.kind==='approval'&&(x.approved===null||x.approved===undefined));
+  if(waiting||!node.__userToggled)setThinkOpen(node,true);
+  scrollEnd();
+ }
 }
 function fenceBlock(lang,text){
  const value=String(text||'');
@@ -1483,7 +1509,14 @@ function createApprovalRow(node,item){
   if(approval.artifactPath){const open=document.createElement('button');open.type='button';open.className='ghost';open.textContent='Open file preview';open.onclick=()=>{const t=Array.from(document.querySelectorAll('.artifact-trigger')).find(b=>b.dataset.path===approval.artifactPath);if(t)t.click()};actions.appendChild(open)}
   actions.appendChild(result);box.appendChild(actions);
  }
- return box;
+ const group=document.createDocumentFragment();group.appendChild(box);if(item.output)group.appendChild(outputBlock(item.output));
+ return group;
+}
+function outputBlock(output){
+ const text=String((output&&output.text)||'');const bad=!!output&&output.ok===false;
+ const wrap=document.createElement('div');wrap.className='approval-output'+(bad?' bad':'');
+ wrap.appendChild(fenceBlock(bad?'output · exit code '+output.returncode:'output',text||'(No terminal output.)'));
+ return wrap;
 }
 function appendApprovalPause(node,event){
  const approval=event.approval||{};const entries=node.__worklog||(node.__worklog=[]);
@@ -1497,7 +1530,8 @@ function resolveApprovalPause(node,event){
 
 
 
-function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent=''}
+function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const seconds=node.__thinkSeconds||(node.__t0?(performance.now()-node.__t0)/1000:0);setThinkLabel(node,false,seconds);if(!node.__userToggled)setThinkOpen(node,false)}
+function setApprovalOutput(node,event){const entries=node.__worklog||[];const item=entries.find(value=>value&&value.kind==='approval'&&value.approval&&value.approval.id===event.approval_id);if(item){item.output=event.output;setThink(node,entries)}}
 
 
 function pushWorkStep(node,text,ok,detail){const entries=node.__worklog||(node.__worklog=[]);const last=entries[entries.length-1];if(last&&last.text===text&&last.ok===ok&&last.detail===detail)return;entries.push({text,ok,detail:detail||''});if(entries.length>120)entries.shift();setThink(node,entries)}
@@ -1557,16 +1591,18 @@ function renderMessage(role,content,artifacts,extra){
   if(hasMathMarkup(safeContent)){const userContent=document.createElement('div');userContent.className='content user-content';userContent.innerHTML=renderMarkdown(safeContent);bubble.appendChild(userContent);typesetMath(userContent)}else bubble.textContent=content;
   if(extra?.attachments?.length){const files=document.createElement('div');files.className='user-attachment-list';files.textContent='📎 '+extra.attachments.map(path=>String(path).split('/').pop()).join(' · ');bubble.appendChild(files)}
  }else{
-  bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><span class="assistant-status"></span></div>');
-  bubble.appendChild(thinkBlock());
+  bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><button type="button" class="think-head" hidden aria-expanded="false"><svg class="ic chev" aria-hidden="true"><use href="#i-chev"/></svg><span class="think-label">Thinking</span></button><span class="assistant-status"></span></div>');
+  bubble.appendChild(thinkBlock());bubble.querySelector('.think-head').onclick=()=>{wrap.__userToggled=true;setThinkOpen(wrap,!bubble.querySelector('.work-log').classList.contains('open'))};
   bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');
   const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindCopy(wrap);
   wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];
-  setThink(wrap,wrap.__worklog);setReasoning(wrap,extra?.reasoning||'',false,extra?.thinkingSeconds||0);
+  if(extra?.reasoning&&!wrap.__worklog.some(entry=>entry&&entry.kind==='thinking'))wrap.__worklog.unshift({kind:'thinking',text:'Thinking',ok:null,detail:extra.reasoning});
+  setThink(wrap,wrap.__worklog);setThinkLabel(wrap,false,extra?.thinkingSeconds||(extra?.stats&&extra.stats.thought_seconds)||0);
   setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);
   wrap.__artifacts=Array.isArray(artifacts)?artifacts.slice():[];
   bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'));
  }
+ if(role==='user'){const copyPrompt=document.createElement('button');copyPrompt.type='button';copyPrompt.className='icon-btn user-copy';copyPrompt.title='Copy prompt';copyPrompt.setAttribute('aria-label','Copy prompt');copyPrompt.innerHTML='<svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg>';copyPrompt.onclick=()=>navigator.clipboard.writeText(String(content||'')).then(()=>toast('Prompt copied')).catch(()=>toast('Could not copy'));wrap.insertBefore(copyPrompt,bubble)}
  $('messages').appendChild(wrap);return wrap
 }
 function clearArtifactPane(){state.activeArtifactContent='';const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';const main=$('main');if(main)main.classList.remove('has-artifacts');document.querySelectorAll('.artifact-trigger').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
@@ -2100,7 +2136,7 @@ async function send(){
  if(run!==state.run)return;
  $('prompt').value='';autosize();hint();
  if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
- follow=true;if(!retryExisting)renderMessage('user',text,null,{attachments:(state.uploadedFiles||[]).map(item=>item.path)});const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
+ follow=true;if(!retryExisting)renderMessage('user',text,null,{attachments:(state.uploadedFiles||[]).map(item=>item.path)});const node=renderMessage('assistant','');node.classList.add('live');node.__t0=performance.now();node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
  $('chatMeta').textContent=state.mode+' · Generating…';
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
  const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',blockRationale='',pending=false,thinkStart=0,retryMode=null;node.__artifacts=[];const showReasoning=live=>{reasoning=[modelRationale,blockRationale].filter(Boolean).join('\n\n');setReasoning(node,reasoning,live)};
@@ -2117,14 +2153,15 @@ async function send(){
     else if(event.type==='approval_required'){appendApprovalPause(node,event);node.querySelector('.assistant-status').textContent='Waiting for your approval…'}
     else if(event.type==='artifact'){node.__artifacts=node.__artifacts||[];node.__artifacts.push(event.artifact);renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);const trigger=Array.from(node.querySelectorAll('.artifact-trigger')).at(-1);if(trigger&&event.artifact?.content!==undefined)trigger.click()}
     else if(event.type==='artifact_update'){const selectedPath=node.querySelector('.artifact-trigger.selected')?.dataset.path;node.__artifacts=(node.__artifacts||[]).map(item=>item.path===event.artifact.path?event.artifact:item);renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);const trigger=Array.from(node.querySelectorAll('.artifact-trigger')).find(b=>b.dataset.path===(selectedPath||event.artifact.target_path||event.artifact.path));if(trigger)trigger.click()}
-    else if(event.type==='approval_resolved'){resolveApprovalPause(node,event)}
+    else if(event.type==='approval_resolved'){resolveApprovalPause(node,event);node.querySelector('.assistant-status').textContent=event.approved?'Running…':'Continuing…'}
+    else if(event.type==='approval_output'){setApprovalOutput(node,event)}
     else if(event.type==='agents'){node.__agents=event.agents||[];node.querySelector('.assistant-status').textContent=(event.running||0)+' subagent(s) running';renderAgentBoard(node)}
     else if(event.type==='agent_event'){const agent=(node.__agents||[]).find(item=>item.id===event.id);if(agent){agent.status=event.status;agent.detail=event.detail||''}node.querySelector('.assistant-status').textContent=(event.running||0)+' subagent(s) running';renderAgentBoard(node)}
-    else if(event.type==='draft_reset'){raw='';blockRationale='';node.__thinkingEntry=null;contentEl.replaceChildren();node.dataset.raw='';showReasoning(!!modelRationale);queue()}
+    else if(event.type==='draft_reset'){raw='';blockRationale='';modelRationale='';node.__thinkingEntry=null;contentEl.replaceChildren();node.dataset.raw='';queue()}
     else if(event.type==='draft'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}
     else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();modelRationale+=event.text||'';node.querySelector('.assistant-status').textContent='Thinking…';showReasoning(true)}
-    else if(event.type==='reasoning_reset'){modelRationale=event.text||'';showReasoning(!!modelRationale)}
-    else if(event.type==='done'){pending=false;retryMode=event.mode_switch_required||null;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;setThink(node,event.worklog||node.__worklog||[]);node.__worklog=Array.isArray(event.worklog)?event.worklog.slice():(node.__worklog||[]);setReasoning(node,reasoning,false,event.thinking_seconds||(thinkStart?(performance.now()-thinkStart)/1000:0));setResponseMeta(node,event.stats,event.model);node.__artifacts=event.artifacts||node.__artifacts||[];renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);setTitle(event.title||'Conversation',[event.model||'',event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='reasoning_reset'){const entries=node.__worklog||[];const entry=node.__thinkingEntry;if(entry){const at=entries.indexOf(entry);if(at>=0)entries.splice(at,1);node.__thinkingEntry=null;setThink(node,entries)}modelRationale='';blockRationale=''}
+    else if(event.type==='done'){pending=false;retryMode=event.mode_switch_required||null;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;node.__worklog=Array.isArray(event.worklog)?event.worklog.slice():(node.__worklog||[]);node.__thinkingEntry=null;setThink(node,node.__worklog);node.__thinkSeconds=Number(event.thinking_seconds)||Number(event.stats&&event.stats.thought_seconds)||0;setResponseMeta(node,event.stats,event.model);node.__artifacts=event.artifacts||node.__artifacts||[];renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);setTitle(event.title||'Conversation',[event.model||'',event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
     else if(event.type==='error')throw new Error(event.message||'The model request failed');
    }
   }
@@ -4674,8 +4711,6 @@ class Handler(BaseHTTPRequestHandler):
                              "approval": payload, "approved": None}
             worklog.append(approval_item)
             emit({"type": "approval_required", "approval": payload})
-            log_step("Paused for your approval: " + title, None, status="Waiting for approval…",
-                     detail=detail or command or path or "No action will occur until you approve.")
             decided = gate.wait(timeout=1800)
             with self.app.lock:
                 self.app.pending_approvals.pop(approval_id, None)
@@ -4683,9 +4718,7 @@ class Handler(BaseHTTPRequestHandler):
             approval_item["approved"] = approved
             approval_item["ok"] = approved
             emit({"type": "approval_resolved", "approval_id": approval_id, "approved": approved})
-            log_step(("Approved: " if approved else "Declined or timed out: ") + title, approved,
-                     status="Continuing…", detail="The approved action may now run." if approved else "No action was performed.")
-            return approved
+            return approved, approval_item
 
         worklog = []
         artifacts_by_path = {}
@@ -4703,6 +4736,7 @@ class Handler(BaseHTTPRequestHandler):
         provider_output_tokens = 0
         output_chars = 0
         model_rationale_chunks = []
+        last_round_reasoning = {"text": ""}
 
         def log_step(text, ok=None, status="Working…", detail=None):
             item = {"text": str(text), "ok": ok, "detail": str(detail or "")[:12000]}
@@ -4725,7 +4759,7 @@ class Handler(BaseHTTPRequestHandler):
                 emit({"type": "draft_reset"})
                 chunks = []
                 rationale_chunks = []
-                lead = "\n\n" if model_rationale_chunks else ""
+                lead = ""
                 thinking_ended_at = None
                 think_tail = ""
                 usage_tokens_this_call = None
@@ -4817,6 +4851,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not raw_response:
                         raise RuntimeError("The model returned no response text.")
                     active_candidate_index = candidate_index
+                    last_round_reasoning["text"] = "".join(rationale_chunks).strip()
                     if rationale_chunks:
                         thinking_seconds += max(0.0, (thinking_ended_at or time.monotonic()) - started_at)
                         model_rationale_chunks.extend(rationale_chunks)
@@ -4937,16 +4972,9 @@ class Handler(BaseHTTPRequestHandler):
                     break
 
                 # Keep rationale in the same Activity list at the time it was produced.
-                round_rationale = "\n\n".join(part for part in (
-                    "".join(model_rationale_chunks).strip(), split_thinking(raw)[0].strip()
-                ) if part).strip()
+                round_rationale = "\n\n".join(part for part in (last_round_reasoning["text"], split_thinking(raw)[0].strip()) if part).strip()
                 if round_rationale:
-                    thinking_entry = next((item for item in worklog if isinstance(item, dict) and item.get("kind") == "thinking"), None)
-                    if thinking_entry is None:
-                        thinking_entry = {"kind": "thinking", "text": "Thinking", "ok": None, "detail": round_rationale[:12000]}
-                        worklog.append(thinking_entry)
-                    else:
-                        thinking_entry["detail"] = round_rationale[:12000]
+                    worklog.append({"kind": "thinking", "text": "Thinking", "ok": None, "detail": round_rationale[:12000]})
 
                 tool_actions = []
                 for match in RUN_ACTION_RE.finditer(raw):
@@ -5037,7 +5065,7 @@ class Handler(BaseHTTPRequestHandler):
                                 else:
                                     try: self.app.prewarm_chat_environment(chat_id, with_pip=self.app._command_needs_pip(argument))
                                     except Exception: pass
-                                    approved = wait_for_user_approval("command", "Run terminal command", command=argument,
+                                    approved, approval_item = wait_for_user_approval("command", "Run terminal command", command=argument,
                                         detail="This exact command will run in the session's isolated workspace" + (" / linked folder" if chat.get("linked_folder") else "") + ".")
                                     if not approved:
                                         results.append("[Command declined] The user declined this command. It was not executed: " + argument)
@@ -5051,17 +5079,7 @@ class Handler(BaseHTTPRequestHandler):
                                         command_ok = bool(command_result.get("ok"))
                                         output_text = str(command_result.get("output") or "(No terminal output.)")
                                         duration = command_result.get("elapsed")
-                                        command_number = 1 + sum(1 for item in artifacts_by_path.values() if item.get("kind") == "terminal_output")
-                                        command_path = "Terminal output {}".format(command_number)
-                                        terminal_content = "$ {}\n\n{}\n\nExit code: {} · {}{}".format(argument, output_text, exit_code,
-                                            "Succeeded" if command_ok else "Failed", (" · {}s".format(duration) if duration is not None else ""))
-                                        terminal_artifact = {"kind":"terminal_output","path":command_path,"content":terminal_content,
-                                            "validation":{"ok":command_ok,"checked":True,"message":"{} · exit code {}".format("Command succeeded" if command_ok else "Command failed",exit_code)},
-                                            "returncode":exit_code,"elapsed":duration}
-                                        artifacts_by_path[command_path] = terminal_artifact
-                                        emit({"type":"artifact","artifact":terminal_artifact})
-                                        log_step("Terminal command {}: {}".format("succeeded" if command_ok else "failed", argument), command_ok,
-                                            status="Terminal command finished…", detail="Exit code: {}\n{}".format(exit_code, output_text[:10000]))
+                                        approval_item["output"] = {"text": output_text, "returncode": exit_code, "ok": command_ok, "elapsed": duration}; emit({"type": "approval_output", "approval_id": approval_item["approval"]["id"], "output": approval_item["output"]})
                                         results.append("[Actual terminal result]\nCommand: {}\nExit code: {}\nStatus: {}\nDuration: {}\nOutput:\n{}\nUse this actual result; do not claim success when the exit code is non-zero.".format(
                                             argument, exit_code, "succeeded" if command_ok else "failed", (str(duration)+"s" if duration is not None else "not reported"), output_text))
                             elif action in ("WRITE", "EDIT", "AGENT_WRITE"):
@@ -5080,7 +5098,7 @@ class Handler(BaseHTTPRequestHandler):
                                     else:
                                         artifacts_by_path[artifact["path"]] = artifact
                                         emit({"type":"artifact","artifact":artifact})
-                                        approved = wait_for_user_approval("file", "Save file change", path=artifact["target_path"],
+                                        approved, _approval_item = wait_for_user_approval("file", "Save file change", path=artifact["target_path"],
                                             artifact_path=artifact.get("target_path") or artifact["path"], detail=("Create " if not artifact.get("exists") else "Replace ") + artifact["target_path"] + "? Review the full file in the right-hand preview pane.")
                                         if approved:
                                             try:
@@ -5193,15 +5211,8 @@ class Handler(BaseHTTPRequestHandler):
                     log_step("Validation warning: " + error, False, status="Finishing with warnings…", detail="This artifact did not pass the configured check and is withheld from the accepted artifact list.")
 
             stats = response_stats()
-            response_rationale, reply = split_thinking(final_raw)
-            streamed_reasoning = "".join(model_rationale_chunks).strip()
-            response_rationale = "\n\n".join(part for part in (streamed_reasoning, response_rationale) if part).strip()
-            if response_rationale:
-                thinking_entry = next((item for item in worklog if isinstance(item, dict) and item.get("kind") == "thinking"), None)
-                if thinking_entry is None:
-                    worklog.append({"kind": "thinking", "text": "Thinking", "ok": None, "detail": response_rationale[:12000]})
-                else:
-                    thinking_entry["detail"] = response_rationale[:12000]
+            _unused, reply = split_thinking(final_raw)
+            response_rationale = "\n\n".join(str(item.get("detail") or "") for item in worklog if isinstance(item, dict) and item.get("kind") == "thinking").strip()
             reply = strip_unsupported_actions(reply)
             reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
             if validation_errors:
