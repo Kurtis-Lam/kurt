@@ -52,20 +52,21 @@ KURT WEB INTERFACE RULES:
 - You are Kurt, the local assistant in this application. Speak as Kurt.
 - There are exactly two modes: Normal and Agent. Both can read/list local files that the
   current OS account is permitted to access. The server enforces this permission boundary.
-- Every command execution and every file creation/modification is paused for explicit user
-  approval in the chat activity timeline. Never treat a proposal as executed or saved.
+- Every command execution, file creation/modification, and file deletion is paused for explicit
+  user approval in the chat activity timeline. Never treat a proposal as executed, saved, or deleted.
 - Each conversation has a private workspace and private Python environment. Work there by
   default. User uploads are copied into that chat workspace and never modify originals.
 - A session may be explicitly linked to one user-selected folder. When linked, relative file
-  changes target that folder; every file write and command still requires exact approval.
+  changes target that folder; every file write, deletion, and command still requires exact approval.
 - The current OS account's permissions are the maximum boundary. Never use sudo, su, doas,
   pkexec, root escalation, another account, or credential harvesting.
 - Use READ/LIST (or AGENT_READ/AGENT_LIST for compatibility) for read-only local access.
-  Use WRITE/EDIT (or AGENT_WRITE for compatibility) to propose a file change. Use RUN
-  (or AGENT_RUN for compatibility) to propose one terminal command.
+  Use WRITE/EDIT (or AGENT_WRITE for compatibility) to propose a file change. Use DELETE to
+  propose deleting one regular file. Use RUN (or AGENT_RUN for compatibility) to propose one
+  terminal command.
 - A pending action must stop the current response until the user approves or declines it.
-  Do not claim a command or file change succeeded before the approval result confirms it.
-- Before file changes, provide a concise Change summary naming each target and why it changes.
+  Do not claim a command, file change, or deletion succeeded before the approval result confirms it.
+- Before file changes or deletions, provide a concise Change summary naming each target and why it changes.
 - SEARCH may request external web research when needed. Do not invent search results.
 - Uploaded ZIP archives and folders are unpacked into the conversation workspace. Images are
   passed to compatible vision models when supported.
@@ -84,11 +85,13 @@ mkdir discord-bot
 @@@ END
 - To read a file: @@@ READ on one line, the absolute or relative path on the next line, then @@@ END.
 - To list a directory: @@@ LIST, the path on the next line, then @@@ END.
+- To delete one regular file: @@@ DELETE followed by its exact path on one line, then @@@ END.
+  Deletion pauses for approval. Do not use wildcards, recursive deletion, or DELETE on directories.
 - To search the web: @@@ SEARCH, the query on the next line, then @@@ END.
 - Every block must be closed with @@@ END on its own line. Put one command per RUN block.
 - Never ask the user to type "confirm" or "yes" in chat before an action. The application itself
-  shows an Approve/Decline card the moment you emit a RUN or WRITE block, so emit the block
-  immediately and wait for the result. Never describe the command in prose instead of emitting it.
+  shows an Approve/Decline card the moment you emit a RUN, WRITE, or DELETE block, so emit the
+  block immediately and wait for the result. Never describe the command in prose instead of emitting it.
 - Relative paths and commands run inside the session working root named in this prompt.
 """
 
@@ -148,8 +151,9 @@ NORMAL MODE — EVERYDAY USE:
 - Handle everyday questions, uploaded files, and straightforward local-file tasks.
 - You may read/list local paths using READ/LIST or AGENT_READ/AGENT_LIST. Paths are limited
   only by the current OS account's existing permissions and the application's safety checks.
-- You may propose file changes and terminal commands, but every WRITE/EDIT/AGENT_WRITE and
-  RUN/AGENT_RUN action must pause for individual user approval in the activity timeline.
+- You may propose file changes, file deletions, and terminal commands, but every WRITE/EDIT/
+  AGENT_WRITE, DELETE, and RUN/AGENT_RUN action must pause for individual user approval in the
+  activity timeline.
 - Work in this chat's private isolated workspace unless the user explicitly links a folder.
 - For a complex, multi-step coding or computer workflow, the interface may ask the user to
   switch to Agent mode. Never switch silently. Ordinary explanations, short snippets, and
@@ -160,12 +164,14 @@ AGENT_MODE_INSTRUCTIONS = r"""
 AGENT MODE — MULTI-STEP COMPUTER WORK:
 - You have the same local read access as Normal mode, within the current OS account's
   permissions. Use READ/LIST or AGENT_READ/AGENT_LIST to inspect relevant files and folders.
-- You may plan and carry out multi-step tasks, but each individual command and each file
-  creation/modification pauses for explicit approval. Wait for the user's decision before
-  continuing to the next step.
+- You may plan and carry out multi-step tasks, but each individual command, file
+  creation/modification, and file deletion pauses for explicit approval. Wait for the user's
+  decision before continuing to the next step.
 - Use the private per-chat workspace by default. If a folder is linked to this session, use
   that folder as the working root for relative paths. Never silently link or unlink folders.
 - Use RUN/AGENT_RUN for one command at a time. Use WRITE/EDIT/AGENT_WRITE for file changes.
+- Use DELETE for one regular file at a time; directories, wildcards, and recursive deletion are
+  not accepted by DELETE.
 - Never run shell privilege escalation or attempt to bypass OS file permissions.
 - Delegate bounded analysis only when it materially helps; child agents cannot read local
   files, run commands, write files, or approve actions.
@@ -189,13 +195,14 @@ def _tolerant_action_re(name):
 
 
 ALT_ACTION_OPENER_RE = re.compile(
-    r"<\|?/?tool_call(?:_start)?\|?>\s*(?:@\s*@\s*@\s*)?(?=(?:RUN|SEARCH|READ|LIST|AGENT_RUN|AGENT_READ|AGENT_LIST)\b)",
+    r"<\|?/?tool_call(?:_start)?\|?>\s*(?:@\s*@\s*@\s*)?(?=(?:RUN|SEARCH|READ|LIST|DELETE|AGENT_RUN|AGENT_READ|AGENT_LIST)\b)",
     re.I,
 )
 RUN_ACTION_RE = _tolerant_action_re("RUN")
 SEARCH_ACTION_RE = _tolerant_action_re("SEARCH")
 READ_ACTION_RE = _tolerant_action_re("READ")
 LIST_ACTION_RE = _tolerant_action_re("LIST")
+DELETE_ACTION_RE = _tolerant_action_re("DELETE")
 AGENT_RUN_ACTION_RE = _tolerant_action_re("AGENT_RUN")
 AGENT_READ_ACTION_RE = _tolerant_action_re("AGENT_READ")
 AGENT_LIST_ACTION_RE = _tolerant_action_re("AGENT_LIST")
@@ -205,7 +212,7 @@ RATIONALE_ACTION_RE = re.compile(r"@{2,3}\s*RATIONALE\s*\n(.*?)\n?@{2,3}\s*END",
 SUMMARY_ACTION_RE = re.compile(r"@{2,3}\s*SUMMARY\s*\n(.*?)\n?@{2,3}\s*END", re.I | re.S)  # Legacy compatibility
 SYSTEM_PROMPT_ACTION_RE = re.compile(ACTION_MARKER_RE + r"\s*SYSTEM_PROMPT\s*\r?\n(.*?)\r?\n?" + ACTION_MARKER_RE + r"\s*END", re.I | re.S)
 WEB_ACTION_RE = re.compile(
-    ACTION_MARKER_RE + r"\s*(?:RUN|SEARCH|READ|LIST|SYSTEM_PROMPT|AGENT_RUN|AGENT_READ|AGENT_LIST|AGENT_WRITE|SUBAGENT)\b[^\n]*\r?\n[\s\S]*?" + ACTION_MARKER_RE + r"\s*END", re.I
+    ACTION_MARKER_RE + r"\s*(?:RUN|SEARCH|READ|LIST|DELETE|SYSTEM_PROMPT|AGENT_RUN|AGENT_READ|AGENT_LIST|AGENT_WRITE|SUBAGENT)\b[^\n]*\r?\n[\s\S]*?" + ACTION_MARKER_RE + r"\s*END", re.I
 )
 SYSTEM_PROMPT_REQUEST_RE = re.compile(
     r"^\s*(?:/system-prompt|(?:what\s+is|what's)\s+(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt|(?:show|share|reveal|print|display|quote|give)\s+(?:me\s+)?(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt)\s*[?!.\s]*$",
@@ -236,8 +243,8 @@ HTML_PAGE = r'''<!doctype html>
 <script>try{if(localStorage.getItem('kurt-side-collapsed')==='1')document.documentElement.classList.add('side-collapsed')}catch(e){}</script>
 <script>try{document.documentElement.dataset.theme=localStorage.getItem('kurt-theme')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark')}catch(e){document.documentElement.dataset.theme='dark'}</script>
 <style>
-:root{color-scheme:dark;--bg:#0e1511;--side:#0a100d;--panel:#141e19;--raise:#1c2922;--line:#22302a;--line2:#33463c;--text:#e6efe9;--muted:#8d9e94;--green:#3dd66e;--green-ink:#05200e;--green-soft:rgba(61,214,110,.12);--danger:#ff8d8d;--code:#0a110d;--shadow:0 18px 50px rgba(0,0,0,.4);--sans:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--serif:"Iowan Old Style","Palatino Linotype",Palatino,Charter,Georgia,"Times New Roman",serif;--mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace}
-:root[data-theme=light]{color-scheme:light;--bg:#f6f9f6;--side:#ebf1ec;--panel:#fff;--raise:#e4ece5;--line:#d8e2da;--line2:#bfcec3;--text:#16231b;--muted:#5b6c61;--green:#157f3c;--green-ink:#fff;--green-soft:rgba(21,127,60,.1);--danger:#b3261e;--code:#eff4ef;--shadow:0 16px 40px rgba(22,35,27,.14)}
+:root{color-scheme:dark;--bg:#0e1511;--side:#0a100d;--panel:#141e19;--raise:#1c2922;--line:#22302a;--line2:#33463c;--text:#e6efe9;--muted:#8d9e94;--green:#3dd66e;--green-ink:#05200e;--green-soft:rgba(61,214,110,.12);--danger:#dc2626;--code:#0a110d;--shadow:0 18px 50px rgba(0,0,0,.4);--sans:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--serif:"Iowan Old Style","Palatino Linotype",Palatino,Charter,Georgia,"Times New Roman",serif;--mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace}
+:root[data-theme=light]{color-scheme:light;--bg:#f6f9f6;--side:#ebf1ec;--panel:#fff;--raise:#e4ece5;--line:#d8e2da;--line2:#bfcec3;--text:#16231b;--muted:#5b6c61;--green:#157f3c;--green-ink:#fff;--green-soft:rgba(21,127,60,.1);--danger:#dc2626;--code:#eff4ef;--shadow:0 16px 40px rgba(22,35,27,.14)}
 *{box-sizing:border-box;scrollbar-color:var(--line2) transparent}
 html{min-height:100%}
 body{margin:0;background:var(--bg);color:var(--text);font:14.5px/1.55 var(--sans);overflow-x:hidden;overflow-y:auto;-webkit-font-smoothing:antialiased}
@@ -638,7 +645,7 @@ body.compact-scroll .artifact-pane{top:54px;bottom:0;height:auto;min-height:0;ov
 .dialog-field input,.dialog-field textarea{width:100%;padding:9px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);color:var(--text);outline:none}
 .dialog-field input:focus,.dialog-field textarea:focus{border-color:var(--green)}
 .dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
-.dialog-actions .danger{background:var(--danger);border-color:var(--danger);color:#fff}
+.dialog-actions .danger{background:var(--danger);border-color:var(--danger);color:#fff}.dialog-actions .danger:hover{background:var(--danger);border-color:var(--danger);filter:brightness(1.06)}.dialog-actions .danger:active{background:var(--danger);border-color:var(--danger);filter:none;transform:none}
 @media(max-width:700px){.custom-select.model-pill{max-width:42vw}.custom-select.mode-pill{max-width:22vw;min-width:0}.custom-select-trigger{font-size:12px}.chat-more{opacity:1}}
 @media(prefers-reduced-motion:reduce){.custom-select-menu,.app-dialog,.modal,.modal-backdrop,.artifact-body,.think-body,.settings-panel{transition:none!important;animation:none!important}}
 
@@ -1280,7 +1287,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="chat-context-menu" id="chatContextMenu" role="menu"></div>
 <div class="dialog-backdrop" id="appDialogBackdrop"><form class="app-dialog" id="appDialogForm"><h2 id="appDialogTitle"></h2><p class="dialog-message" id="appDialogMessage"></p><div class="dialog-fields" id="appDialogFields"></div><div class="dialog-actions"><button type="button" id="appDialogCancel">Cancel</button><button type="submit" class="primary" id="appDialogConfirm">Save</button></div></form></div>
 <script>
-const TOKEN='__TOKEN__';const HINT='Normal and Agent can read files available to your OS account. Every command and file change pauses for approval. Link a folder to work directly in it.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],uploadPromise:null,contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[],linkedFolder:'',activeArtifactContent:''};
+const TOKEN='__TOKEN__';const HINT='Normal and Agent can read files available to your OS account. Every command, file change, and deletion pauses for approval. Link a folder to work directly in it.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],uploadPromise:null,contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[],linkedFolder:'',activeArtifactContent:''};
 function effortForMode(mode){return mode==='normal'?'thinking':'expert'}
 function validMode(mode){const value=String(mode||'normal');return value==='agent'||value==='code'?'agent':'normal'}
 const $=id=>document.getElementById(id);const api=async(path,body)=>{const res=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:body?JSON.stringify(body):undefined});const data=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(data.error||res.statusText);return data};
@@ -1516,11 +1523,11 @@ function createApprovalRow(node,item){
  head.append(dot,title);box.appendChild(head);
  const kind=approval.kind;
  const question=document.createElement('div');question.className='approval-question';
- question.textContent=kind==='command'?'Run this command?':kind==='file'?'Save this file change?':kind==='link_folder'?'Link this folder to the current session?':String(approval.detail||'Review this action.');
+ question.textContent=kind==='command'?'Run this command?':kind==='file'?'Save this file change?':kind==='delete_file'?'Delete this file?':kind==='link_folder'?'Link this folder to the current session?':String(approval.detail||'Review this action.');
  box.appendChild(question);
  let note='';
  if(kind==='command'){box.appendChild(fenceBlock('bash',approval.command||''));note=String(approval.detail||'')}
- else if(kind==='file'){box.appendChild(fenceBlock('path',approval.path||''));note=String(approval.detail||'')}
+ else if(kind==='file'||kind==='delete_file'){box.appendChild(fenceBlock('path',approval.path||''));note=String(approval.detail||'')}
  else if(kind==='link_folder'){box.appendChild(fenceBlock('path',approval.path||''))}
  if(note){const noteEl=document.createElement('div');noteEl.className='approval-note';noteEl.textContent=note;box.appendChild(noteEl)}
  if(pending){
@@ -2295,9 +2302,9 @@ THINK_OPEN_RE = re.compile(r"<think(?:ing)?>", re.I)
 THINK_CLOSE_RE = re.compile(r"</think(?:ing)?>", re.I)
 THINK_TAG_RE = re.compile(r"<(/)?think(?:ing)?>", re.I)
 THINK_RE = re.compile(r"<think(?:ing)?>([\s\S]*?)(?:</think(?:ing)?>|\Z)", re.I)
-ACTION_TAIL_RE = re.compile(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT)\b[\s\S]*\Z", re.I)
+ACTION_TAIL_RE = re.compile(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT|DELETE)\b[\s\S]*\Z", re.I)
 UNSUPPORTED_ACTION_BLOCK_RE = re.compile(
-    r"@\s*@\s*@\s*(?:RUN|SEARCH|SYSTEM_PROMPT|READ|LIST|AGENT_RUN|AGENT_READ|AGENT_LIST|AGENT_WRITE|SUBAGENT|EXEC|BASH|SHELL)\b[\s\S]*?(?:@\s*@\s*@\s*END\b|\Z)", re.I
+    r"@\s*@\s*@\s*(?:RUN|SEARCH|SYSTEM_PROMPT|READ|LIST|DELETE|AGENT_RUN|AGENT_READ|AGENT_LIST|AGENT_WRITE|SUBAGENT|EXEC|BASH|SHELL)\b[\s\S]*?(?:@\s*@\s*@\s*END\b|\Z)", re.I
 )
 TOOL_CALL_BLOCK_RE = re.compile(
     r"<\|tool_call_start\|>[\s\S]*?(?:<\|tool_call_end\|>|\Z)", re.I
@@ -3218,6 +3225,44 @@ class KurtWebApp:
             except OSError: pass
         return {"ok": True, "path": str(path), "message": "Saved " + str(path)}
 
+    def prepare_file_deletion(self, chat_id, target_path):
+        chat = self.get_chat(chat_id)
+        if not chat:
+            raise ValueError("Conversation not found.")
+        path = self.resolve_working_path(chat_id, target_path, allow_missing=False)
+        root = self.chat_work_root(chat_id, create=False).resolve()
+        relative = path.relative_to(root)
+        if not relative.parts:
+            raise ValueError("The session working folder cannot be deleted.")
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("DELETE only supports one existing regular file; directories and symbolic links are not allowed.")
+        if self._skip_context_name(path.name) or any(self._skip_context_dir(part) for part in relative.parts[:-1]):
+            raise ValueError("That protected file or system directory cannot be deleted through the file action.")
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return {
+            "path": str(path),
+            "sha256": digest.hexdigest(),
+            "size": path.stat().st_size,
+            "linked_root": str(chat.get("linked_folder") or ""),
+        }
+
+    def delete_approved_file(self, chat_id, target_path, expected_sha256=None, linked_root=""):
+        chat = self.get_chat(chat_id)
+        if not chat:
+            raise ValueError("Conversation not found.")
+        active_link = str(chat.get("linked_folder") or "")
+        if linked_root and (not active_link or Path(active_link).resolve() != Path(linked_root).resolve()):
+            raise ValueError("The linked session folder changed after the deletion was reviewed. Review the file again before deleting it.")
+        reviewed = self.prepare_file_deletion(chat_id, target_path)
+        if expected_sha256 and not hmac.compare_digest(reviewed["sha256"], str(expected_sha256)):
+            raise ValueError("The file changed after the deletion was reviewed. Review it again before deleting it.")
+        path = Path(reviewed["path"])
+        path.unlink()
+        return {"ok": True, "path": str(path), "message": "Deleted " + str(path)}
+
     @staticmethod
     def _safe_context_relative(value, allow_root=False):
         raw = str(value or '').replace('\\', '/').strip()
@@ -4117,6 +4162,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"path": relative, "parent": parent, "items": [{"name": item["name"], "path": item["path"], "directory": item["directory"], "size": K.fmt_bytes(item["size"]) if item["size"] else ""} for item in items]})
             else:
                 self._json({"error": "Not found."}, 404)
+        except Exception as exc:
+            self._json({"error": str(exc)}, 400)
+
+    def do_DELETE(self):
+        if not self._need_auth():
+            return
+        parsed = urlparse(self.path)
+        if parsed.path not in ("/api/files", "/api/agent/files", "/api/agent/file", "/api/agent/file/delete"):
+            self._json({"error": "Not found."}, 404)
+            return
+        try:
+            data = self._body()
+            args = parse_qs(parsed.query)
+            chat_id = str(data.get("chat_id") or args.get("chat_id", [""])[0])
+            target_path = str(data.get("path") or args.get("path", [""])[0])
+            if data.get("approved") is not True:
+                raise ValueError("File deletion requires explicit user approval.")
+            reviewed = self.app.prepare_file_deletion(chat_id, target_path)
+            expected_hash = str(data.get("expected_sha256") or reviewed["sha256"])
+            linked_root = str(data.get("linked_root") or reviewed["linked_root"])
+            result = self.app.delete_approved_file(chat_id, reviewed["path"], expected_hash, linked_root)
+            self._record_agent_audit(chat_id, "Deleted approved file: " + result["path"], result["message"], True)
+            self._json(result)
         except Exception as exc:
             self._json({"error": str(exc)}, 400)
 
@@ -5113,6 +5181,8 @@ class Handler(BaseHTTPRequestHandler):
                     tool_actions.append((match.start(), "READ", action_argument(match)))
                 for match in LIST_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "LIST", action_argument(match)))
+                for match in DELETE_ACTION_RE.finditer(raw):
+                    tool_actions.append((match.start(), "DELETE", action_argument(match)))
                 for match in AGENT_RUN_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "AGENT_RUN", action_argument(match)))
                 for match in AGENT_READ_ACTION_RE.finditer(raw):
@@ -5210,6 +5280,42 @@ class Handler(BaseHTTPRequestHandler):
                                         approval_item["output"] = {"text": output_text, "returncode": exit_code, "ok": command_ok, "elapsed": duration}; emit({"type": "approval_output", "approval_id": approval_item["approval"]["id"], "output": approval_item["output"]})
                                         results.append("[Actual terminal result]\nCommand: {}\nExit code: {}\nStatus: {}\nDuration: {}\nOutput:\n{}\nUse this actual result; do not claim success when the exit code is non-zero.".format(
                                             argument, exit_code, "succeeded" if command_ok else "failed", (str(duration)+"s" if duration is not None else "not reported"), output_text))
+                            elif action == "DELETE":
+                                target_path = str(argument or "").strip()
+                                if len(target_path) >= 2 and target_path[0] in "\"'" and target_path[-1] == target_path[0]:
+                                    target_path = target_path[1:-1].strip()
+                                if not target_path:
+                                    results.append("[File deletion rejected] The DELETE action did not include a file path.")
+                                else:
+                                    try:
+                                        reviewed = self.app.prepare_file_deletion(chat_id, target_path)
+                                    except Exception as exc:
+                                        log_step("File deletion proposal rejected: " + target_path, False,
+                                                 status="Could not prepare deletion…", detail=str(exc))
+                                        results.append("[File deletion rejected] {}: {}".format(target_path, exc))
+                                    else:
+                                        approved, approval_item = wait_for_user_approval(
+                                            "delete_file", "Delete local file", path=reviewed["path"],
+                                            artifact_path=reviewed["path"],
+                                            detail=("Permanently delete this one regular file?\n\n{}\n\nSize: {}\nNo directories or other files will be removed.".format(
+                                                reviewed["path"], K.fmt_bytes(reviewed["size"]))))
+                                        if not approved:
+                                            results.append("[File deletion declined] The file was not deleted: " + reviewed["path"])
+                                        else:
+                                            try:
+                                                deleted = self.app.delete_approved_file(
+                                                    chat_id, reviewed["path"], reviewed["sha256"], reviewed["linked_root"])
+                                                approval_item["output"] = {"text": deleted["message"], "returncode": 0, "ok": True, "elapsed": 0}
+                                                emit({"type": "approval_output", "approval_id": approval_item["approval"]["id"], "output": approval_item["output"]})
+                                                log_step("Deleted approved file: " + deleted["path"], True,
+                                                         status="File deleted…", detail=deleted["message"])
+                                                results.append("[File deletion succeeded] " + deleted["path"])
+                                            except Exception as exc:
+                                                approval_item["output"] = {"text": str(exc), "returncode": 1, "ok": False, "elapsed": 0}
+                                                emit({"type": "approval_output", "approval_id": approval_item["approval"]["id"], "output": approval_item["output"]})
+                                                log_step("Approved file deletion failed: " + reviewed["path"], False,
+                                                         status="File deletion failed…", detail=str(exc))
+                                                results.append("[File deletion failed] {}: {}".format(reviewed["path"], exc))
                             elif action in ("WRITE", "EDIT", "AGENT_WRITE"):
                                 target, body = argument
                                 one_action_answer = "@@@ {} {}\n{}\n@@@ END".format(action, target, body)
@@ -5287,7 +5393,7 @@ class Handler(BaseHTTPRequestHandler):
                         })
                         continue
 
-                if not tool_actions and not re.search(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT|SYSTEM_PROMPT|AGENT_WRITE)\b", raw, re.I):
+                if not tool_actions and not re.search(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT|DELETE|SYSTEM_PROMPT|AGENT_WRITE)\b", raw, re.I):
                     _rationale_probe, reply_probe = split_thinking(raw)
                     reply_probe = K.BLOCK_RE.sub("", strip_unsupported_actions(reply_probe)).strip()
                     if not re.search(r"\w", reply_probe) and round_index < max_rounds - 1:
@@ -5304,7 +5410,7 @@ class Handler(BaseHTTPRequestHandler):
                         })
                         continue
 
-                first_edit = re.search(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT|SYSTEM_PROMPT|AGENT_WRITE)\b", raw, re.I)
+                first_edit = re.search(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT|DELETE|SYSTEM_PROMPT|AGENT_WRITE)\b", raw, re.I)
                 if first_edit:
                     preamble = raw[:first_edit.start()]
                     if preamble.strip():
