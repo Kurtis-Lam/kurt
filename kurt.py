@@ -1565,10 +1565,12 @@ def speed_report(refresh=False):
 
 
 # ----------------------------------------------------------------- Ollama ---
-def http_json(path, payload=None, timeout=5):
+def http_json(path, payload=None, timeout=5, method=None):
     data = json.dumps(payload).encode() if payload is not None else None
+    request_method = str(method or ("POST" if data is not None else "GET")).upper()
     req = urllib.request.Request(
-        HOST + path, data=data, headers={"Content-Type": "application/json"}
+        HOST + path, data=data, headers={"Content-Type": "application/json"},
+        method=request_method,
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode() or "{}")
