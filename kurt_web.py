@@ -62,8 +62,9 @@ KURT WEB INTERFACE RULES:
   pkexec, root escalation, another account, or credential harvesting.
 - Use READ/LIST (or AGENT_READ/AGENT_LIST for compatibility) for read-only local access.
   Use WRITE/EDIT (or AGENT_WRITE for compatibility) to propose a file change. Use DELETE to
-  propose deleting one regular file. Use RUN (or AGENT_RUN for compatibility) to propose one
-  terminal command.
+  propose deleting one regular local file, including an absolute path outside the chat workspace,
+  when the current OS account has permission. Use RUN (or AGENT_RUN for compatibility) to propose
+  one terminal command.
 - A pending action must stop the current response until the user approves or declines it.
   Do not claim a command, file change, or deletion succeeded before the approval result confirms it.
 - Before file changes or deletions, provide a concise Change summary naming each target and why it changes.
@@ -85,8 +86,9 @@ mkdir discord-bot
 @@@ END
 - To read a file: @@@ READ on one line, the absolute or relative path on the next line, then @@@ END.
 - To list a directory: @@@ LIST, the path on the next line, then @@@ END.
-- To delete one regular file: @@@ DELETE followed by its exact path on one line, then @@@ END.
-  Deletion pauses for approval. Do not use wildcards, recursive deletion, or DELETE on directories.
+- To delete one regular local file: @@@ DELETE followed by its exact absolute or working-root-relative
+  path on one line, then @@@ END. Deletion pauses for approval. Do not use wildcards, recursive
+  deletion, protected system/credential paths, or DELETE on directories.
 - To search the web: @@@ SEARCH, the query on the next line, then @@@ END.
 - Every block must be closed with @@@ END on its own line. Put one command per RUN block.
 - Never ask the user to type "confirm" or "yes" in chat before an action. The application itself
@@ -498,6 +500,9 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .file-row.folder:hover{background:var(--raise)}
 .file-row:last-child{border:0}
 .file-row label{flex:1;overflow-wrap:anywhere}
+.file-row .file-remove{flex:none;padding:5px 9px;color:var(--danger);border:1px solid color-mix(in srgb,var(--danger) 35%,var(--line));background:transparent}
+.file-row .file-remove:hover{color:#fff;background:var(--danger);border-color:var(--danger);filter:none}
+.file-row .file-remove:active{color:#fff;background:var(--danger);border-color:var(--danger);filter:none;transform:none}
 .toast{position:fixed;bottom:24px;left:50%;transform:translate(-50%,16px);background:var(--panel);border:1px solid var(--line2);padding:9px 15px;border-radius:10px;box-shadow:var(--shadow);opacity:0;transition:.2s;pointer-events:none;z-index:40}
 .toast.show{opacity:1;transform:translate(-50%,0)}
 .modal-body .empty{color:var(--muted);font-size:13px;padding:12px}
@@ -1281,7 +1286,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="section"><h3>Saved groups</h3><div class="inline-note">Drag a saved entry to change its priority, or press Edit to rearrange and add models.</div><div id="apiGroupsList"></div></div>
 </section>
 </div></div></div></div>
-<div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files</h2><button class="ghost" data-close="filesModal">Close</button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Choose individual files or an entire folder from Finder or File Explorer. Images are retained as image files in this chat. Only a folder selection is packaged internally as a ZIP, then unpacked automatically. Large pasted text is attached as a .txt file. Your original files are never changed.</p><div class="file-source"><h3>From this computer</h3><div class="file-actions"><button id="chooseLocalFiles" class="primary">Choose files</button><button id="chooseLocalFolder">Choose folder</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList" aria-live="polite">No files selected.</div></div><div class="file-source"><h3>From the configured project</h3><div class="row"><input id="fileFolder" value="" placeholder="Project folder path"><button id="refreshFiles">Open</button><button id="selectCurrentFolder">Add this folder</button></div><div class="file-picker" id="filePicker"></div></div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
+<div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files</h2><button class="ghost" data-close="filesModal">Close</button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Choose individual files or an entire folder from Finder or File Explorer. Attachments are copied into this chat and do not change their originals. In the local file browser below, use Delete to permanently remove one regular file after a separate confirmation. Only a folder selection is packaged internally as a ZIP, then unpacked automatically. Large pasted text is attached as a .txt file.</p><div class="file-source"><h3>From this computer</h3><div class="file-actions"><button id="chooseLocalFiles" class="primary">Choose files</button><button id="chooseLocalFolder">Choose folder</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList" aria-live="polite">No files selected.</div></div><div class="file-source"><h3>From the configured project</h3><div class="row"><input id="fileFolder" value="" placeholder="Project folder path"><button id="refreshFiles">Open</button><button id="selectCurrentFolder">Add this folder</button></div><div class="file-picker" id="filePicker"></div></div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
 <div class="toast" id="toast"></div>
 <div class="route-flyout" id="routeFlyout" hidden><div class="route-flyout-column route-flyout-categories"></div><div class="route-flyout-column route-flyout-options"></div></div>
 <div class="chat-context-menu" id="chatContextMenu" role="menu"></div>
@@ -2230,7 +2235,8 @@ function activateSettingsTab(tab){document.querySelectorAll('[data-settings-tab]
 document.querySelectorAll('[data-settings-tab]').forEach(b=>b.onclick=()=>activateSettingsTab(b.dataset.settingsTab));
 async function openSettings(){activateSettingsTab('general');$('settingsModal').classList.add('show');try{await refreshBootstrap()}catch(error){toast('Settings could not be refreshed: '+error.message)}}
 async function saveSettings(){const payload={system_prompt:$('systemPrompt').value,default_route:$('settingsModel').value};const data=await api('/api/settings',payload);state.settings=data.settings||{};await refreshBootstrap(true);toast('Settings saved')}
-async function browseFiles(){if(state.mode!=='normal'&&state.mode!=='agent'){toast('Choose Normal or Agent mode.');return}await ensureChat();const path=$('fileFolder').value.trim();const d=await api('/api/files?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()}}el.appendChild(row)})}
+async function browseFiles(){if(state.mode!=='normal'&&state.mode!=='agent'){toast('Choose Normal or Agent mode.');return}await ensureChat();const path=$('fileFolder').value.trim();const d=await api('/api/files?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()};const remove=document.createElement('button');remove.type='button';remove.className='file-remove danger';remove.textContent='Delete';remove.title='Permanently delete this local file';remove.setAttribute('aria-label','Delete '+item.name);remove.onclick=()=>deleteLocalFile(item);row.appendChild(remove)}el.appendChild(row)})}
+async function deleteLocalFile(item){if(!item||item.directory||!item.path)return;try{const review=await api('/api/files/delete/prepare',{chat_id:state.chatId,path:item.path});const approved=await confirmInApp('Delete local file?',`Permanently delete this one file from your computer?\n\n${review.path}\n\nSize: ${formatFileSize(review.size)}\nThis cannot be undone. No other files or folders will be removed.`,'Delete file',true);if(!approved)return;const result=await api('/api/files/delete',{chat_id:state.chatId,path:review.path,approved:true,expected_sha256:review.sha256,linked_root:review.linked_root,device:review.device,inode:review.inode});state.selectedFiles=state.selectedFiles.filter(path=>path!==item.path);await browseFiles();renderPendingUploads();toast(result.message||'File deleted')}catch(error){toast(error.message)}}
 function formatFileSize(value){const bytes=Math.max(0,Number(value)||0);if(bytes<1024)return bytes+' B';if(bytes<1024*1024)return (bytes/1024).toFixed(1)+' KB';return (bytes/1024/1024).toFixed(1)+' MB'}
 function fileIconNode(item){if(item.previewUrl&&String(item.type||item.mime||'').startsWith('image/')){const image=document.createElement('img');image.className='attachment-thumb';image.src=item.previewUrl;image.alt=item.name||'Uploaded image';return image}const icon=document.createElement('span');icon.className='attachment-file-icon';icon.innerHTML='<svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>';return icon}
 function makeUploadCard(item,{uploaded=false,removable=false,compact=false,index=-1}={}){
@@ -3229,37 +3235,84 @@ class KurtWebApp:
         chat = self.get_chat(chat_id)
         if not chat:
             raise ValueError("Conversation not found.")
-        path = self.resolve_working_path(chat_id, target_path, allow_missing=False)
-        root = self.chat_work_root(chat_id, create=False).resolve()
-        relative = path.relative_to(root)
-        if not relative.parts:
-            raise ValueError("The session working folder cannot be deleted.")
+        raw = str(target_path or "").strip()
+        if not raw:
+            raise ValueError("A file path is required.")
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            if ".." in candidate.parts:
+                raise ValueError("Relative deletion paths cannot move above the working folder.")
+            working_root = self.chat_work_root(chat_id, create=False).resolve()
+            working_candidate = working_root / candidate
+            candidate = working_candidate if working_candidate.exists() else Path.home() / candidate
+        if candidate.is_symlink():
+            raise ValueError("Symbolic links cannot be deleted through the file action.")
+        try:
+            path = self.resolve_agent_path(str(candidate), allow_missing=False)
+        except Exception as exc:
+            raise ValueError("Could not resolve the local file: " + str(exc)) from exc
         if path.is_symlink() or not path.is_file():
-            raise ValueError("DELETE only supports one existing regular file; directories and symbolic links are not allowed.")
-        if self._skip_context_name(path.name) or any(self._skip_context_dir(part) for part in relative.parts[:-1]):
-            raise ValueError("That protected file or system directory cannot be deleted through the file action.")
+            raise ValueError("Delete supports one existing regular file only; directories and symbolic links are not allowed.")
+        if self._skip_context_name(path.name):
+            raise ValueError("Credential, secret, and private-key files are protected from deletion.")
+        protected_dirs = {
+            ".git", ".ssh", ".aws", ".azure", ".gnupg", ".kube", ".kurt",
+        }
+        if any(part.lower() in protected_dirs for part in path.parts):
+            raise ValueError("Files inside protected system or credential directories cannot be deleted through this action.")
+        protected_roots = []
+        if os.name == "nt":
+            for key in ("WINDIR", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"):
+                value = os.environ.get(key)
+                if value:
+                    protected_roots.append(Path(value).expanduser().resolve())
+        else:
+            protected_roots.extend(Path(value) for value in (
+                "/System", "/Applications", "/Library", "/bin", "/sbin", "/etc",
+                "/private/etc", "/usr", "/var", "/dev", "/proc", "/sys",
+            ))
+        for protected_root in protected_roots:
+            try:
+                path.relative_to(protected_root.resolve())
+            except ValueError:
+                continue
+            raise ValueError("Files inside protected operating-system directories cannot be deleted through this action.")
+        if not os.access(path.parent, os.W_OK | os.X_OK):
+            raise ValueError("The current OS account does not have permission to remove this file from its folder.")
         digest = hashlib.sha256()
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
+        stat_result = path.stat()
         return {
             "path": str(path),
             "sha256": digest.hexdigest(),
-            "size": path.stat().st_size,
+            "size": stat_result.st_size,
+            "device": stat_result.st_dev,
+            "inode": stat_result.st_ino,
             "linked_root": str(chat.get("linked_folder") or ""),
         }
 
-    def delete_approved_file(self, chat_id, target_path, expected_sha256=None, linked_root=""):
+    def delete_approved_file(self, chat_id, target_path, expected_sha256=None, linked_root=None,
+                             expected_device=None, expected_inode=None):
         chat = self.get_chat(chat_id)
         if not chat:
             raise ValueError("Conversation not found.")
-        active_link = str(chat.get("linked_folder") or "")
-        if linked_root and (not active_link or Path(active_link).resolve() != Path(linked_root).resolve()):
-            raise ValueError("The linked session folder changed after the deletion was reviewed. Review the file again before deleting it.")
+        if linked_root is not None:
+            active_link = str(chat.get("linked_folder") or "")
+            active_resolved = str(Path(active_link).expanduser().resolve()) if active_link else ""
+            expected_link = str(Path(linked_root).expanduser().resolve()) if linked_root else ""
+            if active_resolved != expected_link:
+                raise ValueError("The session's linked folder changed after the deletion was reviewed. Review the file again before deleting it.")
         reviewed = self.prepare_file_deletion(chat_id, target_path)
         if expected_sha256 and not hmac.compare_digest(reviewed["sha256"], str(expected_sha256)):
             raise ValueError("The file changed after the deletion was reviewed. Review it again before deleting it.")
         path = Path(reviewed["path"])
+        current = path.stat()
+        if expected_device is not None and current.st_dev != int(expected_device):
+            raise ValueError("The file was replaced after the deletion was reviewed. Review it again before deleting it.")
+        if expected_inode is not None and current.st_ino != int(expected_inode):
+            raise ValueError("The file was replaced after the deletion was reviewed. Review it again before deleting it.")
         path.unlink()
         return {"ok": True, "path": str(path), "message": "Deleted " + str(path)}
 
@@ -4021,6 +4074,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        origin = self.headers.get("Origin", "")
+        if origin:
+            try:
+                origin_host = urlparse(origin).hostname
+            except Exception:
+                origin_host = None
+            if origin_host in ("127.0.0.1", "localhost", "::1"):
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
         self.end_headers()
         self.wfile.write(data)
 
@@ -4042,6 +4104,29 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "Local session authorization failed. Reload the Kurt page."}, 403)
             return False
         return True
+
+    def do_OPTIONS(self):
+        if not self._host_ok():
+            self.send_error(403)
+            return
+        origin = self.headers.get("Origin", "")
+        if origin:
+            try:
+                origin_host = urlparse(origin).hostname
+            except Exception:
+                origin_host = None
+            if origin_host not in ("127.0.0.1", "localhost", "::1"):
+                self.send_error(403)
+                return
+        self.send_response(204)
+        self.send_header("Allow", "GET, POST, DELETE, OPTIONS")
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Kurt-Token")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -4169,7 +4254,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._need_auth():
             return
         parsed = urlparse(self.path)
-        if parsed.path not in ("/api/files", "/api/agent/files", "/api/agent/file", "/api/agent/file/delete"):
+        if parsed.path not in ("/api/files", "/api/files/delete", "/api/agent/files", "/api/agent/file", "/api/agent/file/delete"):
             self._json({"error": "Not found."}, 404)
             return
         try:
@@ -4181,9 +4266,11 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("File deletion requires explicit user approval.")
             reviewed = self.app.prepare_file_deletion(chat_id, target_path)
             expected_hash = str(data.get("expected_sha256") or reviewed["sha256"])
-            linked_root = str(data.get("linked_root") or reviewed["linked_root"])
-            result = self.app.delete_approved_file(chat_id, reviewed["path"], expected_hash, linked_root)
-            self._record_agent_audit(chat_id, "Deleted approved file: " + result["path"], result["message"], True)
+            linked_root = data.get("linked_root") if "linked_root" in data else reviewed["linked_root"]
+            result = self.app.delete_approved_file(
+                chat_id, reviewed["path"], expected_hash, linked_root,
+                data.get("device", reviewed["device"]), data.get("inode", reviewed["inode"]))
+            self._record_agent_audit(chat_id, "Deleted approved local file: " + result["path"], result["message"], True)
             self._json(result)
         except Exception as exc:
             self._json({"error": str(exc)}, 400)
@@ -4198,6 +4285,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._settings(data)
             elif parsed.path == "/api/models/delete":
                 self._delete_model(data)
+            elif parsed.path == "/api/files/delete/prepare":
+                chat_id = str(data.get("chat_id") or "")
+                reviewed = self.app.prepare_file_deletion(chat_id, data.get("path"))
+                self._json({key: reviewed[key] for key in ("path", "sha256", "size", "linked_root", "device", "inode")})
+            elif parsed.path in ("/api/files/delete", "/api/agent/file/delete"):
+                chat_id = str(data.get("chat_id") or "")
+                if data.get("approved") is not True:
+                    raise ValueError("File deletion requires explicit confirmation.")
+                expected_hash = str(data.get("expected_sha256") or "")
+                if not expected_hash:
+                    raise ValueError("The file must be reviewed before deletion. Reopen the confirmation and try again.")
+                linked_root = data.get("linked_root") if "linked_root" in data else None
+                result = self.app.delete_approved_file(
+                    chat_id, data.get("path"), expected_hash, linked_root,
+                    data.get("device"), data.get("inode"))
+                self._record_agent_audit(chat_id, "Deleted approved local file: " + result["path"], result["message"], True)
+                self._json(result)
             elif parsed.path == "/api/approval/respond":
                 approval_id = str(data.get("approval_id") or "")
                 with self.app.lock:
@@ -5304,7 +5408,8 @@ class Handler(BaseHTTPRequestHandler):
                                         else:
                                             try:
                                                 deleted = self.app.delete_approved_file(
-                                                    chat_id, reviewed["path"], reviewed["sha256"], reviewed["linked_root"])
+                                                    chat_id, reviewed["path"], reviewed["sha256"], reviewed["linked_root"],
+                                                    reviewed["device"], reviewed["inode"])
                                                 approval_item["output"] = {"text": deleted["message"], "returncode": 0, "ok": True, "elapsed": 0}
                                                 emit({"type": "approval_output", "approval_id": approval_item["approval"]["id"], "output": approval_item["output"]})
                                                 log_step("Deleted approved file: " + deleted["path"], True,
