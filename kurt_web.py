@@ -4497,7 +4497,7 @@ class Handler(BaseHTTPRequestHandler):
             if model.get("type") == "local":
                 if not K.ollama_up():
                     raise ValueError("Ollama is not running. Start Ollama before uninstalling a local model.")
-                K.http_json("/api/delete", {"name": model.get("name") or model_ref}, timeout=60)
+                K.http_json("/api/delete", {"model": model.get("name") or model_ref}, timeout=60, method="DELETE")
                 self.app.invalidate_installed_models()
                 api_groups = self.app.settings.get("api_groups", [])
                 kept_groups = []
