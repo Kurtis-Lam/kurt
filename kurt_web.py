@@ -53,8 +53,11 @@ KURT WEB INTERFACE RULES:
 - You are Kurt, the local assistant in this application. Speak as Kurt.
 - There are exactly two modes: Normal and Agent. Both can read/list local files that the
   current OS account is permitted to access. The server enforces this permission boundary.
-- Every command execution, file creation/modification, and file deletion is paused for explicit
-  user approval in the chat activity timeline. Never treat a proposal as executed, saved, or deleted.
+- Every file creation/modification, file deletion, and state-changing command is paused for explicit
+  user approval in the chat activity timeline. Read-only inspection commands (grep, rg, ls, cat, head,
+  tail, find, tree, wc, git status/log/diff/show/grep, version checks) run automatically inside the
+  session workspace and their output appears in the timeline. Never treat a proposal as executed,
+  saved, or deleted.
 - Each conversation has a private workspace and private Python environment. Work there by
   default. User uploads are copied into that chat workspace and never modify originals.
 - A session may be explicitly linked to one user-selected folder. When linked, relative file
@@ -104,11 +107,12 @@ KURT ACTION BLOCK SYNTAX:
 - Never ask the user to type "confirm" or "yes" in chat before an action. The application itself
   shows an Approve/Decline card the moment you emit a RUN, WRITE, or DELETE block, so once you have
   decided an action is needed, emit the block immediately and wait for the result.
-- Emit an action block only when the user's latest message needs it. Questions, explanations,
-  greetings, opinions, and requests to show or discuss text (including this prompt) are answered in
-  plain text with no action block. Never run tests, create folders, install packages, or probe the
-  workspace "just to check" unless the user asked for that. Never invent file paths: read a path only
-  if the user named it or a LIST/tree result showed it.
+- Emit an action block only when it helps with the user's latest message. Greetings, opinions, and
+  questions you can answer directly are answered in plain text. Read-only lookups that answer the
+  question (for example grep on the saved system prompt or the workspace) and checks that verify work
+  the user asked for are encouraged. Do not create unrelated folders or projects, install packages
+  unrelated to the task, or run commands unrelated to the request. Never invent file paths: use a
+  path only if the user named it, a LIST/tree/find result showed it, or these rules state it.
 - Relative paths and commands run inside the session working root named in this prompt.
 """
 
@@ -130,10 +134,9 @@ but do not add a generic summary or process report. Never reveal private chain-o
 hidden scratchpad tokens.
 
 ACTION DISCIPLINE (always applies, even if the editable prompt says otherwise):
-Use an action block only when the user's latest message requires it. Answer questions, prompt
-requests, and discussion in plain text. Never run tests, create folders, or read guessed paths
-such as placeholder or example paths. Treat every example in these rules as a shape, not as a
-command or path to use.
+Use an action block when it helps with the user's latest message. Never create unrelated folders or
+projects, run commands unrelated to the request, or read guessed, placeholder, or example paths.
+Treat every example in these rules as a shape, not as a command or path to use.
 
 MCP IMAGE GENERATION:
 Kurt's web interface can invoke connected MCP tools from the slash picker. It does not silently
@@ -142,6 +145,30 @@ identify the relevant slash command and tell the user to type / and select that 
 generation MCP is connected, clearly say that image generation is not connected and direct the
 user to Settings > MCP servers to connect one (a local ComfyUI MCP server is a suitable option).
 Do not claim to have generated an image unless an MCP tool actually ran and returned an image.
+"""
+
+CLI_WORKFLOW_INSTRUCTIONS = r"""
+CLI-FIRST WORKFLOW:
+- Each chat has its own isolated workspace and Python environment. Use the shell to find, read,
+  run, and verify things instead of guessing or reasoning from memory.
+- Read-only inspection commands run automatically with no approval: ls, cat, head, tail, wc, grep,
+  rg, find, tree, file, stat, du, diff, sort, uniq, cut, and git status/log/diff/show/grep/blame/
+  ls-files/branch, plus version checks such as python --version and pip list. Pipes between these are
+  allowed. Redirects, ;, &&, ||, $, backticks, and sudo are not, so a command using them is sent for
+  approval instead. Paths must be relative or inside the session workspace.
+- Anything that creates, changes, deletes, installs, runs a script or tests, or uses the network pauses
+  for approval. Emit that RUN block directly; do not ask in chat first.
+- Work in a loop: inspect with a command, make the change, run or check it, then report the real
+  result. After changing code, verify it (python -m py_compile, the project's own tests if they
+  exist, or run the script). Check that tests exist with ls or find before running them, and install
+  a missing tool with pip in the isolated environment only when the task needs it.
+- If a command fails, read its output, fix the cause, and retry before handing the problem back.
+- One command per RUN block. Prefer several small commands over long deliberation.
+- Searching this prompt: the active prompt is saved to the file named in the last lines of this
+  system message. For any question about what the prompt says, run
+  grep -n -i -C2 "term" <that file> and answer from the output. Do not reason through the whole
+  prompt in your head, and do not paste it unless the user asks for the full text.
+- Keep reasoning short for lookups: run one command, read the output, answer.
 """
 
 RESPONSE_FORMAT_INSTRUCTIONS = r"""
@@ -186,8 +213,8 @@ NORMAL MODE — EVERYDAY USE:
 - You may read/list local paths using READ/LIST or AGENT_READ/AGENT_LIST. Paths are limited
   only by the current OS account's existing permissions and the application's safety checks.
 - You may propose file changes, file deletions, and terminal commands, but every WRITE/EDIT/
-  AGENT_WRITE, DELETE, and RUN/AGENT_RUN action must pause for individual user approval in the
-  activity timeline.
+  AGENT_WRITE, DELETE, and any RUN/AGENT_RUN command that is not a read-only inspection command
+  must pause for individual user approval in the activity timeline.
 - Work in this chat's private isolated workspace unless the user explicitly links a folder.
 - For a complex, multi-step coding or computer workflow, the interface may ask the user to
   switch to Agent mode. Never switch silently. Ordinary explanations, short snippets, and
@@ -198,8 +225,9 @@ AGENT_MODE_INSTRUCTIONS = r"""
 AGENT MODE — MULTI-STEP COMPUTER WORK:
 - You have the same local read access as Normal mode, within the current OS account's
   permissions. Use READ/LIST or AGENT_READ/AGENT_LIST to inspect relevant files and folders.
-- You may plan and carry out multi-step tasks, but each individual command, file
-  creation/modification, and file deletion pauses for explicit approval. Wait for the user's
+- You may plan and carry out multi-step tasks, but each individual state-changing command, file
+  creation/modification, and file deletion pauses for explicit approval. Read-only inspection
+  commands run automatically, so use them freely to look things up before and after changes. Wait for the user's
   decision before continuing to the next step.
 - Use the private per-chat workspace by default. If a folder is linked to this session, use
   that folder as the working root for relative paths. Never silently link or unlink folders.
@@ -259,6 +287,92 @@ SYSTEM_PROMPT_REQUEST_RE = re.compile(
     r")\s*(?:please|pls)?\s*[?!.\s]*$",
     re.I,
 )
+AUTO_RUN_READONLY = os.environ.get("KURT_AUTO_READONLY", "1") != "0"
+_RO_SIMPLE = {"ls", "cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "rg", "find", "tree", "pwd", "file",
+              "stat", "du", "which", "sort", "uniq", "cut", "tr", "diff", "cmp", "basename", "dirname",
+              "realpath", "date", "whoami", "nl", "column"}
+_RO_BANNED_ARGS = {
+    "find": {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"},
+    "rg": {"--pre", "--hostname-bin"},
+    "sort": {"-o", "--output", "--compress-program"},
+    "tail": {"-f", "-F", "--follow"},
+    "tree": {"-o"},
+    "file": {"-C", "--compile"},
+    "date": {"-s", "--set"},
+}
+_RO_GIT_BANNED = ("--output", "--ext-diff", "--open-files-in-pager", "--exec", "--upload-pack", "--pager", "--textconv")
+_RO_GIT_SUB = {"status", "log", "diff", "show", "grep", "ls-files", "rev-parse", "blame", "shortlog", "describe"}
+_RO_GIT_RESTRICTED = {"branch": {"-a", "-r", "-v", "-vv", "--list", "--show-current"},
+                      "remote": {"-v"}, "tag": {"-l", "--list"}}
+_RO_VERSION_FLAGS = {"--version", "-V", "-v", "version"}
+
+
+def readonly_command_ok(command, roots):
+    """True only for a simple pipeline of known read-only commands confined to the given roots."""
+    text = str(command or "").strip()
+    if not text or len(text) > 2000 or any(ch in text for ch in "$`\n\r\\"):
+        return False
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars="|;&<>()")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    resolved_roots = []
+    for root in roots:
+        try: resolved_roots.append(Path(root).resolve())
+        except OSError: pass
+    segments, current = [], []
+    for tok in tokens:
+        if tok == "|":
+            if not current: return False
+            segments.append(current); current = []
+        elif set(tok) <= set("|;&<>()"):
+            return False
+        else:
+            current.append(tok)
+    if not current: return False
+    segments.append(current)
+    if len(segments) > 5: return False
+
+    def path_ok(value):
+        value = str(value)
+        if value.startswith("~") or ".." in value.split("/"): return False
+        if value.startswith("/"):
+            try: target = Path(value).resolve()
+            except OSError: return False
+            return any(target == root or root in target.parents for root in resolved_roots)
+        return True
+
+    for seg in segments:
+        name, args = seg[0], seg[1:]
+        if "/" in name: return False
+        for arg in args:
+            if arg.startswith("-"):
+                if "=" in arg and not path_ok(arg.split("=", 1)[1]): return False
+                if "/" in arg and not path_ok(arg[arg.index("/"):]): return False
+            elif not path_ok(arg): return False
+        if name in _RO_SIMPLE:
+            if any(arg in _RO_BANNED_ARGS.get(name, ()) for arg in args): return False
+        elif name == "git":
+            if not args or args[0].startswith("-"): return False
+            sub, rest = args[0], args[1:]
+            if any(a.startswith(_RO_GIT_BANNED) or a == "-O" for a in rest): return False
+            if sub in _RO_GIT_SUB: continue
+            if sub in _RO_GIT_RESTRICTED and all(a in _RO_GIT_RESTRICTED[sub] for a in rest): continue
+            if sub in _RO_VERSION_FLAGS and not rest: continue
+            return False
+        elif name in ("python", "python3", "node", "npm"):
+            if not (len(args) == 1 and args[0] in _RO_VERSION_FLAGS): return False
+        elif name in ("pip", "pip3"):
+            if not ((len(args) == 1 and args[0] in (_RO_VERSION_FLAGS | {"list", "freeze"}))
+                    or (len(args) == 2 and args[0] == "show" and not args[1].startswith("-"))):
+                return False
+        else:
+            return False
+    return True
+
+
 IMAGE_GENERATION_INTENT_RE = re.compile(
     r"\b(?:generat\w*|gernate|genrate|creat\w*|make|draw|render\w*|paint\w*|illustrat\w*)\b"
     r"[\s\S]{0,120}\b(?:images?|pictures?|photos?|illustrations?|artworks?|portraits?|wallpapers?|logos?)\b"
@@ -4029,12 +4143,12 @@ class KurtWebApp:
         mode_rules = NORMAL_MODE_INSTRUCTIONS if mode == "normal" else AGENT_MODE_INSTRUCTIONS
         effort_rules = EFFORT_INSTRUCTIONS.get(effort, EFFORT_INSTRUCTIONS["thinking"])
         linked = str(chat.get("linked_folder") or "").strip()
-        prompt = (base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules + "\n" + RESPONSE_FORMAT_INSTRUCTIONS)
+        prompt = (base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + CLI_WORKFLOW_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules + "\n" + RESPONSE_FORMAT_INSTRUCTIONS)
         prompt += "\nCurrent session working root: " + str(root)
         prompt += "\nWorking root type: " + ("USER-LINKED FOLDER; every change still needs approval." if linked else "PRIVATE PER-CHAT ISOLATED WORKSPACE; every change still needs approval.")
         prompt += "\nUser home for absolute/relative local read paths: " + str(Path.home())
         prompt += "\nSession workspace tree:\n" + self.tree(root)
-        prompt += "\nUse READ/LIST for local inspection. All command/file action blocks pause for user approval."
+        prompt += "\nUse READ/LIST or read-only shell commands (grep, ls, cat, find, git status/log/diff) for inspection. File changes, deletions, and state-changing commands pause for user approval."
         image_tools = self.image_generation_mcp_tools()
         if image_tools:
             prompt += "\n\nCONNECTED IMAGE-GENERATION MCP TOOLS (available in the slash picker):\n"
@@ -4050,6 +4164,19 @@ class KurtWebApp:
                        "When asked to generate an image, say that an image-generation MCP must be "
                        "connected in Settings > MCP servers (for example local ComfyUI MCP) before "
                        "Kurt can generate it. Do not claim that you generated an image.")
+        try:
+            snapshot_dir = self.chat_workspace(chat_id) / ".kurt"
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            snapshot_path = snapshot_dir / "system_prompt.txt"
+            snapshot = prompt
+            for key_entry in K.PROVIDER_KEYS:
+                secret = str(key_entry.get("value") or "")
+                if len(secret) >= 8:
+                    snapshot = snapshot.replace(secret, "[REDACTED API KEY]")
+            snapshot_path.write_text(snapshot, encoding="utf-8")
+            prompt += "\nActive system prompt snapshot (search it with grep): " + str(snapshot_path)
+        except Exception:
+            pass
         return prompt
 
 
@@ -4105,6 +4232,13 @@ class KurtWebApp:
                 items.append({"name": "… listing truncated at 500 entries …", "path": "", "directory": False, "size": 0})
                 break
         return path, items
+
+    def is_readonly_command(self, chat_id, command):
+        try:
+            roots = [self.chat_workspace(chat_id), self.chat_work_root(chat_id, create=False)]
+        except Exception:
+            return False
+        return readonly_command_ok(command, roots)
 
     def run_agent_command(self, chat_id, command, timeout=120):
         """Compatibility wrapper; all commands now use the session sandbox."""
@@ -5824,7 +5958,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             final_raw = ""
             validation_errors = []
-            max_rounds = 4
+            max_rounds = 12
             for round_index in range(max_rounds):
                 if round_index == 0 and DESKTOP_VISUAL_REQUEST_RE.search(user_text):
                     if mode == "normal":
@@ -5972,8 +6106,12 @@ class Handler(BaseHTTPRequestHandler):
                                 else:
                                     try: self.app.prewarm_chat_environment(chat_id, with_pip=self.app._command_needs_pip(argument))
                                     except Exception: pass
-                                    approved, approval_item = wait_for_user_approval("command", "Run terminal command", command=argument,
-                                        detail="This exact command will run in the session's isolated workspace" + (" / linked folder" if chat.get("linked_folder") else "") + ".")
+                                    auto_run = bool(AUTO_RUN_READONLY and self.app.is_readonly_command(chat_id, argument))
+                                    if auto_run:
+                                        approved, approval_item = True, {"approval": {"id": ""}}
+                                    else:
+                                        approved, approval_item = wait_for_user_approval("command", "Run terminal command", command=argument,
+                                            detail="This exact command will run in the session's isolated workspace" + (" / linked folder" if chat.get("linked_folder") else "") + ".")
                                     if not approved:
                                         results.append("[Command declined] The user declined this command. It was not executed: " + argument)
                                     else:
@@ -5986,7 +6124,11 @@ class Handler(BaseHTTPRequestHandler):
                                         command_ok = bool(command_result.get("ok"))
                                         output_text = str(command_result.get("output") or "(No terminal output.)")
                                         duration = command_result.get("elapsed")
-                                        approval_item["output"] = {"text": output_text, "returncode": exit_code, "ok": command_ok, "elapsed": duration}; emit({"type": "approval_output", "approval_id": approval_item["approval"]["id"], "output": approval_item["output"]})
+                                        approval_item["output"] = {"text": output_text, "returncode": exit_code, "ok": command_ok, "elapsed": duration}
+                                        if auto_run:
+                                            log_step("Ran read-only command: " + argument[:160], command_ok, status="Inspecting workspace…", detail="Exit code {}\n{}".format(exit_code, output_text))
+                                        else:
+                                            emit({"type": "approval_output", "approval_id": approval_item["approval"]["id"], "output": approval_item["output"]})
                                         results.append("[Actual terminal result]\nCommand: {}\nExit code: {}\nStatus: {}\nDuration: {}\nOutput:\n{}\nUse this actual result; do not claim success when the exit code is non-zero.".format(
                                             argument, exit_code, "succeeded" if command_ok else "failed", (str(duration)+"s" if duration is not None else "not reported"), output_text))
                             elif action == "DELETE":
