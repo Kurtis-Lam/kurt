@@ -36,6 +36,7 @@ from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 import kurt as K
 from kurt_sandbox import is_code_file, validate_content, run_workspace_command
+from kurt_integrations import (MCPError, call_mcp_tool, delete_skill, get_skill, list_mcp_tools, list_skills, save_skill, validate_mcp_config)
 
 CONFIG_DIR = K.CONFIG_DIR
 WEB_SETTINGS_FILE = CONFIG_DIR / "web_settings.json"
@@ -970,6 +971,36 @@ body.nav-open .scrim{opacity:1;visibility:visible;pointer-events:auto}
 .reasoning-panel.open .think-body{max-height:min(72vh,1100px);overflow:auto;overscroll-behavior:contain;white-space:pre-wrap;overflow-wrap:anywhere}
 .reasoning-panel.live .think-body{scroll-behavior:smooth}
 
+
+/* Slash-command discovery and generated media output. */
+.composer{position:relative}
+.slash-menu{position:absolute;left:12px;right:12px;bottom:calc(100% + 9px);z-index:80;max-height:min(360px,52vh);overflow:auto;padding:7px;background:var(--panel);border:1px solid var(--line2);border-radius:13px;box-shadow:var(--shadow)}
+.slash-menu[hidden]{display:none}
+.slash-menu-heading{padding:7px 9px 4px;color:var(--muted);font-size:10px;font-weight:750;letter-spacing:.1em;text-transform:uppercase}
+.slash-option{width:100%;display:flex;align-items:center;gap:10px;padding:8px 10px;border:0;border-radius:8px;background:transparent;color:var(--text);text-align:left}
+.slash-option:hover,.slash-option.active{background:var(--raise)}
+.slash-option-icon{width:28px;height:28px;flex:0 0 28px;display:grid;place-items:center;border:1px solid var(--line);border-radius:8px;color:var(--green);font-size:14px}
+.slash-option-copy{min-width:0;display:grid;gap:2px}
+.slash-option-copy b{font-size:12.5px;font-weight:650}
+.slash-option-copy small{color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slash-option-command{margin-left:auto;color:var(--muted);font:10.5px var(--mono);white-space:nowrap}
+.mcp-media{display:grid;gap:10px;margin:12px 0;max-width:min(100%,680px)}
+.mcp-media img,.mcp-media video{display:block;max-width:100%;max-height:520px;border:1px solid var(--line);border-radius:12px;background:#080a09;object-fit:contain}
+.mcp-media a{font-size:12px;color:var(--green);overflow-wrap:anywhere}
+.mcp-meta{color:var(--muted);font-size:11px;margin:6px 0 0}
+.mcp-server-row,.skill-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.mcp-server-row:last-child,.skill-row:last-child{border-bottom:0}
+.mcp-server-copy,.skill-copy{flex:1;min-width:0;display:grid;gap:4px}
+.mcp-server-copy b,.skill-copy b{font-size:13px}
+.mcp-server-copy small,.skill-copy small{color:var(--muted);font-size:11.5px;overflow-wrap:anywhere}
+.mcp-server-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.mcp-server-actions button,.skill-actions button{font-size:11.5px;padding:6px 8px}
+.mcp-form{padding:14px;border:1px solid var(--line2);border-radius:11px;background:var(--bg);margin:14px 0}
+.mcp-form h4{font-size:13px;margin:0 0 8px}
+.mcp-form textarea{min-height:76px}
+.skill-instructions{min-height:180px!important}
+@media(max-width:700px){.mcp-server-row,.skill-row{align-items:flex-start;flex-wrap:wrap}.mcp-server-actions{width:100%;justify-content:flex-start}}
+
 /* Settings performance: no full-screen blur, no hidden-panel layout, paused ambient animation. */
 .modal-backdrop,.dialog-backdrop{-webkit-backdrop-filter:none;backdrop-filter:none;background:rgba(4,10,7,.72)}
 body.modal-open .topbar{-webkit-backdrop-filter:none;backdrop-filter:none;background:var(--bg)}
@@ -1225,7 +1256,8 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <button class="to-bottom" id="toBottom" aria-label="Scroll to latest message" title="Scroll to latest"><svg class="ic"><use href="#i-down"/></svg></button>
 <div class="composer">
 <div class="composer-attachments" id="composerAttachments" aria-live="polite" hidden></div>
-<textarea id="prompt" rows="1" placeholder="Message Kurt" aria-label="Message Kurt"></textarea>
+<textarea id="prompt" rows="1" placeholder="Message Kurt · type / for tools and skills" aria-label="Message Kurt"></textarea>
+<div class="slash-menu" id="slashMenu" hidden role="listbox" aria-label="MCP tools and skills"></div>
 <div class="compose-bottom">
 <button class="icon-btn" id="contextBtn" title="Upload files into this chat workspace" aria-label="Upload files"><svg class="ic"><use href="#i-plus"/></svg></button><button class="link-folder-btn" id="linkFolderBtn" type="button" title="Link this session to a folder on your computer">↗ <span>Link folder</span></button>
 <span class="spacer"></span>
@@ -1251,6 +1283,8 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <button class="settings-nav-btn" type="button" data-settings-tab="keys">API keys</button>
 <button class="settings-nav-btn" type="button" data-settings-tab="api-routes">API routes</button>
 <button class="settings-nav-btn" type="button" data-settings-tab="groups">Groups</button>
+<button class="settings-nav-btn" type="button" data-settings-tab="mcp">MCP servers</button>
+<button class="settings-nav-btn" type="button" data-settings-tab="skills">Skills</button>
 </nav>
 <div class="settings-panel-area">
 <section class="settings-panel active" data-settings-panel="general">
@@ -1285,6 +1319,37 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="row"><button id="addFailoverMember" type="button">Add model</button><button id="saveFailoverGroup" class="primary" type="button">Create group</button><button id="cancelFailoverGroup" type="button" hidden>Cancel edit</button></div>
 <div class="section"><h3>Saved groups</h3><div class="inline-note">Drag a saved entry to change its priority, or press Edit to rearrange and add models.</div><div id="apiGroupsList"></div></div>
 </section>
+<section class="settings-panel" data-settings-panel="mcp">
+<h3>MCP servers</h3>
+<div class="inline-note">Connect local stdio processes or remote Streamable HTTP servers. Kurt discovers their tools and exposes each one in the composer’s <code>/</code> picker. Local commands run as your current OS account. Remote servers can use API keys in custom headers; OAuth is not supported yet. Only connect servers you trust. Credentials are saved locally in your Kurt settings and are never returned to the browser after saving.</div>
+<div class="mcp-form">
+<h4 id="mcpFormTitle">Connect an MCP server</h4>
+<input id="mcpServerId" type="hidden" value="">
+<div class="settings-grid">
+<div class="field"><label>Display name</label><input id="mcpServerName" placeholder="ComfyUI" maxlength="60"></div>
+<div class="field"><label>Connection type</label><select id="mcpServerTransport"><option value="stdio">Local stdio</option><option value="streamable-http">Remote Streamable HTTP</option></select></div>
+</div>
+<div class="field" id="mcpCommandField"><label>Executable command</label><input id="mcpServerCommand" placeholder="comfy-mcp, uvx, npx or python" autocomplete="off"></div>
+<div class="field" id="mcpUrlField" hidden><label>Remote MCP URL</label><input id="mcpServerUrl" placeholder="https://cloud.comfy.org/mcp" autocomplete="url"></div>
+<div class="field" id="mcpArgsField"><label>Arguments (JSON array)</label><textarea id="mcpServerArgs" placeholder='["--stdio"]'></textarea><div class="inline-note">Do not enter a shell command string. Set one executable here and pass each argument as a separate JSON string.</div></div>
+<div class="field" id="mcpEnvField"><label>Environment variables (JSON object)</label><textarea id="mcpServerEnv" placeholder='{"COMFY_BIN":"/path/to/comfy"}'></textarea><div class="inline-note">Used by local stdio servers. Leave blank when editing to preserve saved values. Values are saved locally and only variable names are displayed.</div></div>
+<div class="field" id="mcpHeadersField" hidden><label>HTTP headers (JSON object)</label><textarea id="mcpServerHeaders" placeholder='{"X-API-Key":"paste-api-key-here"}'></textarea><div class="inline-note">Used by remote servers that accept API-key headers, such as Comfy Cloud. Leave blank when editing to preserve saved headers.</div></div>
+<div class="row"><button id="connectMcpServer" class="primary" type="button">Save and connect</button><button id="cancelMcpEdit" type="button" hidden>Cancel edit</button></div>
+</div>
+<div id="mcpServerList"></div>
+</section>
+<section class="settings-panel" data-settings-panel="skills">
+<h3>Skills</h3>
+<div class="inline-note">Skills are reusable instruction packs. Type <code>/</code> in the composer and choose a skill to apply it to one request. Custom skills are saved as local <code>SKILL.md</code> files under your Kurt configuration folder.</div>
+<div id="skillsList"></div>
+<div class="mcp-form">
+<h4 id="skillFormTitle">Create a skill</h4>
+<input id="skillId" type="hidden" value="">
+<div class="settings-grid"><div class="field"><label>Name</label><input id="skillName" placeholder="Storyboard planner" maxlength="80"></div><div class="field"><label>Description</label><input id="skillDescription" placeholder="Plan a sequence of shots" maxlength="200"></div></div>
+<div class="field"><label>Instructions</label><textarea class="skill-instructions" id="skillInstructions" placeholder="Write the reusable instructions Kurt should follow…"></textarea></div>
+<div class="row"><button id="saveSkill" class="primary" type="button">Save skill</button><button id="cancelSkillEdit" type="button" hidden>Cancel</button></div>
+</div>
+</section>
 </div></div></div></div>
 <div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files</h2><button class="ghost" data-close="filesModal">Close</button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Choose individual files or an entire folder from Finder or File Explorer. Attachments are copied into this chat and do not change their originals. In the local file browser below, use Delete to permanently remove one regular file after a separate confirmation. Only a folder selection is packaged internally as a ZIP, then unpacked automatically. Large pasted text is attached as a .txt file.</p><div class="file-source"><h3>From this computer</h3><div class="file-actions"><button id="chooseLocalFiles" class="primary">Choose files</button><button id="chooseLocalFolder">Choose folder</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList" aria-live="polite">No files selected.</div></div><div class="file-source"><h3>From the configured project</h3><div class="row"><input id="fileFolder" value="" placeholder="Project folder path"><button id="refreshFiles">Open</button><button id="selectCurrentFolder">Add this folder</button></div><div class="file-picker" id="filePicker"></div></div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
 <div class="toast" id="toast"></div>
@@ -1292,7 +1357,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="chat-context-menu" id="chatContextMenu" role="menu"></div>
 <div class="dialog-backdrop" id="appDialogBackdrop"><form class="app-dialog" id="appDialogForm"><h2 id="appDialogTitle"></h2><p class="dialog-message" id="appDialogMessage"></p><div class="dialog-fields" id="appDialogFields"></div><div class="dialog-actions"><button type="button" id="appDialogCancel">Cancel</button><button type="submit" class="primary" id="appDialogConfirm">Save</button></div></form></div>
 <script>
-const TOKEN='__TOKEN__';const HINT='Normal and Agent can read files available to your OS account. Every command, file change, and deletion pauses for approval. Link a folder to work directly in it.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],uploadPromise:null,contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[],linkedFolder:'',activeArtifactContent:''};
+const TOKEN='__TOKEN__';const HINT='Normal and Agent can read files available to your OS account. Every command, file change, and deletion pauses for approval. Link a folder to work directly in it.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],mcpServers:[],mcpTools:[],skills:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],uploadPromise:null,contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[],linkedFolder:'',activeArtifactContent:''};
 function effortForMode(mode){return mode==='normal'?'thinking':'expert'}
 function validMode(mode){const value=String(mode||'normal');return value==='agent'||value==='code'?'agent':'normal'}
 const $=id=>document.getElementById(id);const api=async(path,body)=>{const res=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:body?JSON.stringify(body):undefined});const data=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(data.error||res.statusText);return data};
@@ -1635,7 +1700,7 @@ function renderMessage(role,content,artifacts,extra){
   bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><button type="button" class="think-head" hidden aria-expanded="false"><svg class="ic chev" aria-hidden="true"><use href="#i-chev"/></svg><span class="think-label">Thinking</span></button><span class="assistant-status"></span></div>');
   bubble.appendChild(thinkBlock());bubble.querySelector('.think-head').onclick=()=>{wrap.__userToggled=true;setThinkOpen(wrap,!bubble.querySelector('.work-log').classList.contains('open'))};
   bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');
-  const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindCopy(wrap);
+  const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);renderMcpMedia(contentNode,extra?.media||[]);bindCopy(wrap);
   wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];
   if(extra?.reasoning&&!wrap.__worklog.some(entry=>entry&&entry.kind==='thinking'))wrap.__worklog.unshift({kind:'thinking',text:'Thinking',ok:null,detail:extra.reasoning});
   setThink(wrap,wrap.__worklog);setThinkLabel(wrap,false,extra?.thinkingSeconds||(extra?.stats&&extra.stats.thought_seconds)||0);
@@ -1902,7 +1967,88 @@ async function renameChat(id,current){const result=await inAppDialog({title:'Ren
 async function togglePinChat(id,pinned){try{await api('/api/chats/'+encodeURIComponent(id),{pin:!!pinned});await refreshChats()}catch(error){toast(error.message)}}
 async function deleteChat(id){const chat=state.chats.find(item=>item.id===id);if(!await confirmInApp('Delete conversation',`Delete “${chat?.title||'this chat'}” and its temporary workspace? This cannot be undone.`,'Delete chat',true))return;if(state.chatId===id)cancelRun();try{await api('/api/chats/'+encodeURIComponent(id),{delete:true});if(state.chatId===id){state.chatId=null;resetComposer();showWelcome();setTitle('New chat','')}await refreshChats();toast('Chat deleted')}catch(error){toast(error.message)}}
 let bootstrapSig='';
-async function refreshBootstrap(force){const data=await api('/api/bootstrap');const sig=JSON.stringify(data);if(force===true){delete $('systemPrompt').dataset.dirty}else if(sig===bootstrapSig)return false;bootstrapSig=sig;state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.settings=data.settings||{};state.projectRoot=data.project_root||'';if(!$('systemPrompt').dataset.dirty)$('systemPrompt').value=state.settings.system_prompt||'';fillProviders();fillModels();renderKeys();renderApiKeyChecks(currentApiKeySelection());renderApiModels();renderApiGroups();refreshFailoverMemberOptions();enhanceAllSelects();return true}
+async function refreshBootstrap(force){const data=await api('/api/bootstrap');const sig=JSON.stringify(data);if(force===true){delete $('systemPrompt').dataset.dirty}else if(sig===bootstrapSig)return false;bootstrapSig=sig;state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.mcpServers=data.mcp_servers||[];state.mcpTools=data.mcp_tools||[];state.skills=data.skills||[];state.settings=data.settings||{};state.projectRoot=data.project_root||'';if(!$('systemPrompt').dataset.dirty)$('systemPrompt').value=state.settings.system_prompt||'';fillProviders();fillModels();renderKeys();renderApiKeyChecks(currentApiKeySelection());renderApiModels();renderApiGroups();renderMcpServers();renderSkills();refreshFailoverMemberOptions();enhanceAllSelects();return true}
+function renderMcpServers(){
+ const root=$('mcpServerList');if(!root)return;root.replaceChildren();
+ if(!state.mcpServers.length){const empty=document.createElement('div');empty.className='empty';empty.textContent='No MCP servers connected yet.';root.append(empty);return}
+ state.mcpServers.forEach(server=>{
+  const row=document.createElement('div');row.className='mcp-server-row';
+  const copy=document.createElement('div');copy.className='mcp-server-copy';
+  const title=document.createElement('b');title.textContent=server.name+(server.enabled?'':' · disabled');
+  const isHttp=server.transport==='streamable-http';
+  const detail=document.createElement('small');detail.textContent=(server.tools_count||0)+' tools · '+(isHttp?'Remote HTTP · '+(server.url_display||'URL saved'):'Local stdio · '+server.command+(server.args_count?' · '+server.args_count+' args':''))+(server.env_names?.length?' · env: '+server.env_names.join(', '):'')+(server.header_names?.length?' · headers: '+server.header_names.join(', '):'');
+  copy.append(title,detail);
+  if(server.last_error){const error=document.createElement('small');error.textContent='Connection issue: '+server.last_error;error.style.color='var(--danger)';copy.append(error)}
+  const actions=document.createElement('div');actions.className='mcp-server-actions';
+  const edit=document.createElement('button');edit.type='button';edit.textContent='Edit';edit.onclick=()=>editMcpServer(server);
+  const refresh=document.createElement('button');refresh.type='button';refresh.textContent='Refresh tools';refresh.onclick=async()=>{refresh.disabled=true;try{await api('/api/mcp/refresh',{server_id:server.id});await refreshBootstrap(true);toast('MCP tools refreshed')}catch(error){toast(error.message)}finally{refresh.disabled=false}};
+  const toggle=document.createElement('button');toggle.type='button';toggle.textContent=server.enabled?'Disable':'Enable';toggle.onclick=async()=>{try{await api('/api/mcp/toggle',{server_id:server.id,enabled:!server.enabled});await refreshBootstrap(true);toast(server.enabled?'MCP server disabled':'MCP server enabled')}catch(error){toast(error.message)}};
+  const remove=document.createElement('button');remove.type='button';remove.className='danger';remove.textContent='Remove';remove.onclick=async()=>{if(!await confirmInApp('Remove MCP server','Remove '+server.name+' and its saved credentials from Kurt?','Remove',true))return;try{await api('/api/mcp/remove',{server_id:server.id});await refreshBootstrap(true);toast('MCP server removed')}catch(error){toast(error.message)}};
+  actions.append(edit,refresh,toggle,remove);row.append(copy,actions);root.append(row);
+ });
+}
+function toggleMcpTransportFields(){const http=$('mcpServerTransport').value==='streamable-http';$('mcpCommandField').hidden=http;$('mcpArgsField').hidden=http;$('mcpEnvField').hidden=http;$('mcpUrlField').hidden=!http;$('mcpHeadersField').hidden=!http}
+function resetMcpForm(){state.editingMcpServer=null;$('mcpServerId').value='';$('mcpFormTitle').textContent='Connect an MCP server';$('mcpServerName').value='';$('mcpServerTransport').value='stdio';$('mcpServerCommand').value='';$('mcpServerUrl').value='';$('mcpServerUrl').placeholder='https://your-mcp-server.example/mcp';$('mcpServerArgs').value='[]';$('mcpServerArgs').placeholder='[]';$('mcpServerEnv').value='';$('mcpServerHeaders').value='';$('mcpServerEnv').placeholder='{"COMFY_BIN":"/path/to/comfy"}';$('mcpServerHeaders').placeholder='{"X-API-Key":"paste-api-key-here"}';$('connectMcpServer').textContent='Save and connect';$('cancelMcpEdit').hidden=true;toggleMcpTransportFields()}
+function editMcpServer(server){state.editingMcpServer=server.id;$('mcpServerId').value=server.id;$('mcpFormTitle').textContent='Edit '+server.name;$('mcpServerName').value=server.name;$('mcpServerTransport').value=server.transport||'stdio';$('mcpServerCommand').value=server.command||'';$('mcpServerUrl').value='';$('mcpServerUrl').placeholder='Leave blank to keep saved URL; enter a new URL to replace it';$('mcpServerArgs').value='';$('mcpServerArgs').placeholder='Leave blank to keep saved arguments; enter a JSON array to replace them';$('mcpServerEnv').value='';$('mcpServerHeaders').value='';$('mcpServerEnv').placeholder='Leave blank to keep saved values; add or replace as JSON';$('mcpServerHeaders').placeholder='Leave blank to keep saved values; add or replace as JSON';$('connectMcpServer').textContent='Save and reconnect';$('cancelMcpEdit').hidden=false;toggleMcpTransportFields();activateSettingsTab('mcp');$('mcpServerName').focus()}
+async function saveMcpServer(){
+ const transport=$('mcpServerTransport').value,name=$('mcpServerName').value.trim(),command=$('mcpServerCommand').value.trim(),url=$('mcpServerUrl').value.trim();
+ const argsText=$('mcpServerArgs').value.trim(),envText=$('mcpServerEnv').value.trim(),headersText=$('mcpServerHeaders').value.trim();let args,env,headers;
+ if(argsText){try{args=JSON.parse(argsText);if(!Array.isArray(args))throw new Error('Arguments must be a JSON array.')}catch(error){if(transport==='stdio'){toast('Arguments: '+error.message);return}}}
+ if(envText){try{env=JSON.parse(envText);if(!env||typeof env!=='object'||Array.isArray(env))throw new Error('Environment variables must be a JSON object.')}catch(error){toast('Environment variables: '+error.message);return}}
+ if(headersText){try{headers=JSON.parse(headersText);if(!headers||typeof headers!=='object'||Array.isArray(headers))throw new Error('HTTP headers must be a JSON object.')}catch(error){toast('HTTP headers: '+error.message);return}}
+ const button=$('connectMcpServer');button.disabled=true;button.textContent='Connecting…';
+ try{await api('/api/mcp/connect',{id:$('mcpServerId').value||undefined,name,transport,command,url,args,env,headers});resetMcpForm();await refreshBootstrap(true);toast('MCP server connected')}catch(error){await refreshBootstrap(true).catch(()=>{});toast(error.message)}finally{button.disabled=false;button.textContent=state.editingMcpServer?'Save and reconnect':'Save and connect'}
+}
+function renderSkills(){
+ const root=$('skillsList');if(!root)return;root.replaceChildren();
+ (state.skills||[]).forEach(skill=>{
+  const row=document.createElement('div');row.className='skill-row';const copy=document.createElement('div');copy.className='skill-copy';
+  const title=document.createElement('b');title.textContent=skill.name+(skill.builtin?' · built-in':'');const detail=document.createElement('small');detail.textContent=skill.description+' · /'+skill.id;copy.append(title,detail);
+  const actions=document.createElement('div');actions.className='mcp-server-actions skill-actions';
+  const use=document.createElement('button');use.type='button';use.textContent='Use';use.onclick=()=>{closeSettings();$('prompt').value='/'+skill.id+' ';autosize();updateSend();$('prompt').focus()};actions.append(use);
+  if(!skill.builtin){const edit=document.createElement('button');edit.type='button';edit.textContent='Edit';edit.onclick=async()=>{try{const data=await api('/api/skills/read',{id:skill.id});const item=data.skill;state.editingSkill=skill.id;$('skillId').value=skill.id;$('skillName').value=item.name;$('skillDescription').value=item.description;$('skillInstructions').value=item.instructions;$('skillFormTitle').textContent='Edit skill';$('saveSkill').textContent='Save changes';$('cancelSkillEdit').hidden=false;$('skillName').focus()}catch(error){toast(error.message)}};
+   const remove=document.createElement('button');remove.type='button';remove.className='danger';remove.textContent='Delete';remove.onclick=async()=>{if(!await confirmInApp('Delete skill','Delete the local skill “'+skill.name+'”?','Delete',true))return;try{await api('/api/skills/delete',{id:skill.id});await refreshBootstrap(true);toast('Skill deleted')}catch(error){toast(error.message)}};actions.append(edit,remove)}
+  row.append(copy,actions);root.append(row);
+ });
+}
+function resetSkillForm(){state.editingSkill=null;$('skillId').value='';$('skillName').value='';$('skillDescription').value='';$('skillInstructions').value='';$('skillFormTitle').textContent='Create a skill';$('saveSkill').textContent='Save skill';$('cancelSkillEdit').hidden=true}
+async function saveSkillForm(){const payload={id:$('skillId').value||undefined,name:$('skillName').value,description:$('skillDescription').value,instructions:$('skillInstructions').value};const button=$('saveSkill');button.disabled=true;try{await api('/api/skills/save',payload);resetSkillForm();await refreshBootstrap(true);toast('Skill saved')}catch(error){toast(error.message)}finally{button.disabled=false}}
+function closeSettings(){$('settingsModal').classList.remove('show')}
+
+function slashItems(){
+ const tools=(state.mcpTools||[]).map(item=>({kind:'mcp',command:item.command,title:item.tool_name,description:item.server_name+' · '+(item.description||'MCP tool'),server:item.server_name,record:item}));
+ const skills=(state.skills||[]).map(item=>({kind:'skill',command:item.id,title:item.name,description:item.description,record:item}));return [{label:'Skills',items:skills},{label:'MCP tools',items:tools}];
+}
+let slashActiveIndex=0,slashVisibleItems=[];
+function hideSlashMenu(){const menu=$('slashMenu');if(menu){menu.hidden=true;menu.replaceChildren()}slashVisibleItems=[]}
+function slashQuery(){const input=$('prompt'),before=input.value.slice(0,input.selectionStart||0),match=before.match(/(?:^|\s)\/([^\s]*)$/);if(!match)return null;return {query:match[1],start:before.length-match[1].length-1,caret:input.selectionStart||0}}
+function renderSlashMenu(){
+ const target=slashQuery();const menu=$('slashMenu');if(!target){hideSlashMenu();return}
+ const groups=slashItems().map(group=>({...group,items:group.items.filter(item=>(item.command+' '+item.title+' '+item.description).toLowerCase().includes(target.query.toLowerCase()))})).filter(group=>group.items.length);
+ const all=groups.flatMap(group=>group.items);if(!all.length){hideSlashMenu();return}
+ slashVisibleItems=all;slashActiveIndex=Math.min(slashActiveIndex,all.length-1);menu.replaceChildren();let offset=0;
+ groups.forEach(group=>{const heading=document.createElement('div');heading.className='slash-menu-heading';heading.textContent=group.label;menu.append(heading);group.items.forEach(item=>{const index=offset++;const button=document.createElement('button');button.type='button';button.className='slash-option'+(index===slashActiveIndex?' active':'');button.setAttribute('role','option');button.setAttribute('aria-selected',String(index===slashActiveIndex));const icon=document.createElement('span');icon.className='slash-option-icon';icon.textContent=item.kind==='skill'?'✦':'⌘';const copy=document.createElement('span');copy.className='slash-option-copy';const title=document.createElement('b');title.textContent=item.title;const desc=document.createElement('small');desc.textContent=item.description;copy.append(title,desc);const command=document.createElement('span');command.className='slash-option-command';command.textContent='/'+item.command;button.append(icon,copy,command);button.onmousedown=e=>e.preventDefault();button.onclick=()=>chooseSlashItem(item);menu.append(button)})});menu.hidden=false;
+}
+function chooseSlashItem(item){const input=$('prompt'),target=slashQuery();if(!target)return;const before=input.value.slice(0,target.start),after=input.value.slice(target.caret);input.value=before+'/'+item.command+' '+after;const pos=(before+'/'+item.command+' ').length;input.setSelectionRange(pos,pos);autosize();updateSend();hideSlashMenu();input.focus()}
+function handleSlashKeydown(event){const menu=$('slashMenu');if(menu.hidden)return false;if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();slashActiveIndex=(slashActiveIndex+(event.key==='ArrowDown'?1:-1)+slashVisibleItems.length)%slashVisibleItems.length;renderSlashMenu();return true}if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();chooseSlashItem(slashVisibleItems[slashActiveIndex]);return true}if(event.key==='Escape'){hideSlashMenu();return true}return false}
+function parseSlashInvocation(text){const match=String(text||'').match(/^\/([a-zA-Z0-9._-]+)(?:\s+([\s\S]*))?$/);if(!match)return null;const command=match[1],rest=String(match[2]||'').trim();const tool=(state.mcpTools||[]).find(item=>item.command===command);if(tool)return {kind:'mcp',tool,args:rest};const skill=(state.skills||[]).find(item=>item.id===command);if(skill)return {kind:'skill',skill,args:rest};return null}
+function mcpToolArguments(tool,raw){
+ if(raw){try{const parsed=JSON.parse(raw);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('The JSON arguments must be an object.');return parsed}catch(error){if(raw.startsWith('{')||raw.startsWith('['))throw new Error('MCP arguments: '+error.message)}}
+ const schema=tool.input_schema||{},properties=schema.properties||{},required=Array.isArray(schema.required)?schema.required:[];
+ if(!raw){if(required.length)throw new Error('This tool needs '+required.join(', ')+'. Enter a JSON object after the command.');return {}}
+ const first=required[0]||['prompt','instruction','text','query','description'].find(key=>properties[key])||Object.keys(properties)[0];
+ if(required.length>1)throw new Error('This tool needs multiple fields. Pass them as JSON, for example: /'+tool.command+' {"'+required[0]+'":"..."}.');
+ if(!first)throw new Error('This tool does not accept plain text. Pass a JSON object after the command.');return {[first]:raw};
+}
+function renderMcpMedia(container,items){if(!container||!Array.isArray(items)||!items.length)return;const wrap=document.createElement('div');wrap.className='mcp-media';items.forEach(item=>{if(!item||!item.path)return;const src='/api/mcp/media?'+new URLSearchParams({token:TOKEN,path:item.path}).toString();if(String(item.kind)==='video'){const video=document.createElement('video');video.controls=true;video.preload='metadata';video.src=src;video.setAttribute('playsinline','');wrap.append(video)}else if(String(item.kind)==='image'){const image=document.createElement('img');image.src=src;image.alt=item.name||'Generated image';image.loading='lazy';wrap.append(image)}const caption=document.createElement('a');caption.href=src;caption.target='_blank';caption.rel='noopener';caption.textContent=item.name||'Open generated media';wrap.append(caption)});container.append(wrap)}
+async function sendMcpTool(originalText,tool,rawArgs){
+ let args;try{args=mcpToolArguments(tool,rawArgs)}catch(error){toast(error.message);return}
+ const run=++state.run,messageId=crypto.randomUUID?crypto.randomUUID():Date.now().toString(36);state.mode=validMode($('operationMode').value);state.effort=effortForMode(state.mode);setBusy(true);
+ try{if(state.pendingUploads.length){const uploaded=await attachFiles();if(!uploaded){setBusy(false);return}}await ensureChat({id:messageId,content:originalText,mode:state.mode,route:$('topModel').value})}catch(error){setBusy(false);toast(error.message);return}
+ $('prompt').value='';autosize();hideSlashMenu();hint();if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()};follow=true;renderMessage('user',originalText,null,{attachments:(state.uploadedFiles||[]).map(item=>item.path)});const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Calling '+tool.server_name+'…';$('chatMeta').textContent='MCP · Running…';scrollEnd(true);
+ try{const response=await api('/api/mcp/call',{chat_id:state.chatId,server_id:tool.server_id,tool_name:tool.tool_name,arguments:args});if(run!==state.run)return;const content=node.querySelector('.content');content.innerHTML=response.content?renderMarkdown(response.content):'';renderMcpMedia(content,response.media||[]);bindCopy(node);node.dataset.raw=response.content||'';node.querySelector('.assistant-status').textContent='Completed · '+response.server+' / '+response.tool_name;setTitle($('chatTitle').textContent||'Conversation','MCP · '+response.server);await refreshChats().catch(()=>{});scrollEnd(true)}catch(error){if(run===state.run){node.querySelector('.content').classList.add('err');node.querySelector('.content').textContent='MCP error: '+error.message;node.querySelector('.assistant-status').textContent='MCP call failed';toast(error.message)}}finally{node.classList.remove('live');if(run===state.run){setBusy(false);const meta=$('chatMeta');if(meta.textContent.includes('Running…'))meta.textContent='MCP · Ready'}}
+}
+
 function fillProviders(){const providers=state.providers.map(item=>({value:item.id,label:item.label}));setSelectOptions($('keyProvider'),providers,'Choose provider')}
 function renderLocalModels(){
  const root=$('localModelList');if(!root)return;root.replaceChildren();
@@ -2132,7 +2278,7 @@ async function ensureChat(initialMessage){
  return state.chatId;
 }
 async function newChat(){cancelRun();state.chatId=null;state.linkedFolder='';hint();state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.linkedFolder=data.linked_folder||'';state.mode=validMode(data.mode);state.effort=effortForMode(state.mode);$('operationMode').value=state.mode;syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null,attachments:message.attachments||[]}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||'',state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
+async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.linkedFolder=data.linked_folder||'';state.mode=validMode(data.mode);state.effort=effortForMode(state.mode);$('operationMode').value=state.mode;syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null,attachments:message.attachments||[],media:message.media||[]}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||'',state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
 function modeNeededForRequest(text,currentMode){
  const value=String(text||'').toLowerCase();
  if(currentMode==='normal'){
@@ -2166,8 +2312,10 @@ async function linkFolderFromMessage(text){
 }
 async function send(){
  const text=$('prompt').value.trim();if(!text||state.busy)return;
+ const slash=parseSlashInvocation(text);if(slash?.kind==='mcp'){await sendMcpTool(text,slash.tool,slash.args);return}
+ let requestText=text,skillId='';if(slash?.kind==='skill'){if(!slash.args){toast('Add a request after /'+slash.skill.id);return}requestText=slash.args;skillId=slash.skill.id}
  if(await linkFolderFromMessage(text)){return}
- const currentMode=validMode($('operationMode').value);const requiredMode=modeNeededForRequest(text,currentMode);
+ const currentMode=validMode($('operationMode').value);const requiredMode=modeNeededForRequest(requestText,currentMode);
  if(requiredMode&&requiredMode!==currentMode){const switched=await confirmModeSwitch(requiredMode,text);if(!switched)return}
  const retryExisting=!!state.retryExistingTurn;state.retryExistingTurn=false;
  const run=++state.run;state.mode=validMode($('operationMode').value);state.effort=effortForMode(state.mode);const route=$('topModel').value;
@@ -2185,7 +2333,7 @@ async function send(){
  const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseRationale(safeLiveDraft(raw),true);if(parsed.rationale){if(!thinkStart)thinkStart=performance.now();blockRationale=parsed.rationale;showReasoning(true)}const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
  try{
-  const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text,route,effort:state.effort,mode:state.mode,message_id:messageId}),signal:controller.signal});
+  const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text:requestText,skill_id:skillId,route,effort:state.effort,mode:state.mode,message_id:messageId}),signal:controller.signal});
   if(!response.ok){const result=await response.json().catch(()=>({}));throw new Error(result.error||response.statusText)}
   node.querySelector('.assistant-status').textContent='Thinking…';const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
   while(true){const packet=await reader.read();if(packet.done)break;if(run!==state.run)return;buffer+=decoder.decode(packet.value,{stream:true});let separator;
@@ -2222,7 +2370,9 @@ $('messages').addEventListener('scroll',()=>{const m=$('messages');follow=m.scro
 $('closeArtifactPane').onclick=closeArtifactPane;$('artifactPaneCopy').onclick=copyActiveArtifact;$('artifactPaneDownload').onclick=downloadActiveArtifact;$('linkFolderBtn').onclick=linkSessionFolder;
 $('sendBtn').onclick=()=>{if(state.busy){if(state.abort)state.abort.abort()}else send()};
 $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!state.busy)send()}});
-$('prompt').addEventListener('input',()=>{autosize();updateSend()});
+$('prompt').addEventListener('input',()=>{autosize();updateSend();slashActiveIndex=0;renderSlashMenu()});
+$('prompt').addEventListener('keydown',e=>{if(handleSlashKeydown(e))return});
+$('prompt').addEventListener('click',renderSlashMenu);
 $('prompt').addEventListener('paste',event=>{
  
  const clipboardItems=Array.from(event.clipboardData?.items||[]);const pastedImages=clipboardItems.filter(item=>String(item.type||'').startsWith('image/')).map(item=>item.getAsFile()).filter(Boolean);
@@ -2234,6 +2384,7 @@ $('newChat').onclick=newChat;$('selectAllChats').onchange=()=>selectAllChats($('
 function activateSettingsTab(tab){document.querySelectorAll('[data-settings-tab]').forEach(button=>button.classList.toggle('active',button.dataset.settingsTab===tab));document.querySelectorAll('[data-settings-panel]').forEach(panel=>panel.classList.toggle('active',panel.dataset.settingsPanel===tab));const area=document.querySelector('.settings-panel-area');if(area)area.scrollTop=0}
 document.querySelectorAll('[data-settings-tab]').forEach(b=>b.onclick=()=>activateSettingsTab(b.dataset.settingsTab));
 async function openSettings(){activateSettingsTab('general');$('settingsModal').classList.add('show');try{await refreshBootstrap()}catch(error){toast('Settings could not be refreshed: '+error.message)}}
+$('connectMcpServer').onclick=saveMcpServer;$('cancelMcpEdit').onclick=resetMcpForm;$('mcpServerTransport').onchange=toggleMcpTransportFields;$('saveSkill').onclick=saveSkillForm;$('cancelSkillEdit').onclick=resetSkillForm;
 async function saveSettings(){const payload={system_prompt:$('systemPrompt').value,default_route:$('settingsModel').value};const data=await api('/api/settings',payload);state.settings=data.settings||{};await refreshBootstrap(true);toast('Settings saved')}
 async function browseFiles(){if(state.mode!=='normal'&&state.mode!=='agent'){toast('Choose Normal or Agent mode.');return}await ensureChat();const path=$('fileFolder').value.trim();const d=await api('/api/files?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()};const remove=document.createElement('button');remove.type='button';remove.className='file-remove danger';remove.textContent='Delete';remove.title='Permanently delete this local file';remove.setAttribute('aria-label','Delete '+item.name);remove.onclick=()=>deleteLocalFile(item);row.appendChild(remove)}el.appendChild(row)})}
 async function deleteLocalFile(item){if(!item||item.directory||!item.path)return;try{const review=await api('/api/files/delete/prepare',{chat_id:state.chatId,path:item.path});const approved=await confirmInApp('Delete local file?',`Permanently delete this one file from your computer?\n\n${review.path}\n\nSize: ${formatFileSize(review.size)}\nThis cannot be undone. No other files or folders will be removed.`,'Delete file',true);if(!approved)return;const result=await api('/api/files/delete',{chat_id:state.chatId,path:review.path,approved:true,expected_sha256:review.sha256,linked_root:review.linked_root,device:review.device,inode:review.inode});state.selectedFiles=state.selectedFiles.filter(path=>path!==item.path);await browseFiles();renderPendingUploads();toast(result.message||'File deleted')}catch(error){toast(error.message)}}
@@ -2691,7 +2842,9 @@ class KurtWebApp:
         self.settings.setdefault("default_mode", "normal")
         self.settings["default_mode"] = valid_mode_value(self.settings.get("default_mode"))
         self.settings.setdefault("api_groups", [])
+        self.settings.setdefault("mcp_servers", [])
         self.model_lock = threading.RLock()
+        self.mcp_media_allowlist = {}
         self.pending_approvals = {}
         self._env_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="kurt-env")
         self._env_jobs = {}
@@ -2705,6 +2858,11 @@ class KurtWebApp:
             self.save_settings()
         self.chats = _load_json(CHATS_FILE, [])
         for saved_chat in self.chats:
+            for saved_message in saved_chat.get("messages", []):
+                for media_item in saved_message.get("media", []) if isinstance(saved_message.get("media"), list) else []:
+                    media_path = media_item.get("path") if isinstance(media_item, dict) else None
+                    if media_path:
+                        self.register_mcp_media(media_path)
             if saved_chat.get('mode') == 'code': saved_chat['mode'] = 'agent'
             elif saved_chat.get('mode') not in ('normal', 'agent'): saved_chat['mode'] = 'normal'
             saved_chat.setdefault('linked_folder', '')
@@ -2947,6 +3105,175 @@ class KurtWebApp:
         except Exception:
             pass
         return re.sub(r"\s+", " ", str(user_text or "")).strip()[:58] or "New conversation"
+
+    @property
+    def skills_directory(self):
+        return CONFIG_DIR / "web_skills"
+
+    def mcp_server_summaries(self):
+        result = []
+        for item in self.settings.get("mcp_servers", []):
+            if not isinstance(item, dict):
+                continue
+            result.append({
+                "id": str(item.get("id") or ""),
+                "name": str(item.get("name") or "MCP server"),
+                "transport": str(item.get("transport") or "stdio"),
+                "command": str(item.get("command") or ""),
+                "url_display": (urllib.parse.urlunsplit((urllib.parse.urlparse(str(item.get("url") or "")).scheme,
+                    urllib.parse.urlparse(str(item.get("url") or "")).netloc,
+                    urllib.parse.urlparse(str(item.get("url") or "")).path, "", "")) if item.get("url") else ""),
+                "args_count": len(item.get("args") or []),
+                "env_names": sorted(str(key) for key in (item.get("env") or {}).keys()),
+                "header_names": sorted(str(key) for key in (item.get("headers") or {}).keys()),
+                "enabled": bool(item.get("enabled", True)),
+                "tools_count": len(item.get("tools") or []),
+                "last_error": str(item.get("last_error") or "")[:500],
+            })
+        return result
+
+    def mcp_tools_view(self):
+        result = []
+        for server in self.settings.get("mcp_servers", []):
+            if not isinstance(server, dict) or not server.get("enabled", True):
+                continue
+            prefix = re.sub(r"[^a-z0-9]+", "-", str(server.get("name") or "server").lower()).strip("-") or "server"
+            for tool in server.get("tools", []):
+                if not isinstance(tool, dict) or not tool.get("name"):
+                    continue
+                tool_slug = re.sub(r"[^a-z0-9]+", "-", str(tool.get("name")).lower()).strip("-") or "tool"
+                result.append({
+                    "command": prefix + "." + tool_slug,
+                    "server_id": str(server.get("id") or ""),
+                    "server_name": str(server.get("name") or "MCP server"),
+                    "tool_name": str(tool.get("name")),
+                    "description": str(tool.get("description") or "")[:500],
+                    "input_schema": tool.get("inputSchema") if isinstance(tool.get("inputSchema"), dict) else {"type": "object", "properties": {}},
+                })
+        # Commands must be unique for the slash picker.
+        seen = set()
+        for item in result:
+            base = item["command"]
+            if base in seen:
+                item["command"] = base + "-" + item["server_id"][:4]
+            seen.add(item["command"])
+        return result
+
+    def find_mcp_server(self, server_id):
+        return next((item for item in self.settings.get("mcp_servers", []) if str(item.get("id")) == str(server_id)), None)
+
+    def connect_mcp_server(self, data):
+        servers = self.settings.setdefault("mcp_servers", [])
+        server_id = str(data.get("id") or "")
+        existing = self.find_mcp_server(server_id) if server_id else None
+        config = validate_mcp_config(data, existing=existing)
+        if existing:
+            index = servers.index(existing)
+            servers[index] = config
+        else:
+            servers.append(config)
+        self.save_settings()
+        try:
+            tools = list_mcp_tools(config, timeout=120)
+            config["tools"] = [{
+                "name": str(item.get("name") or "")[:120],
+                "description": str(item.get("description") or "")[:2000],
+                "inputSchema": item.get("inputSchema") if isinstance(item.get("inputSchema"), dict) else {"type": "object", "properties": {}},
+            } for item in tools if item.get("name")]
+            config["enabled"] = True
+            config["last_error"] = ""
+            config["connected_at"] = time.time()
+        except Exception as exc:
+            config["enabled"] = False
+            config["last_error"] = str(exc)[:500]
+            self.save_settings()
+            raise MCPError("Saved the MCP configuration, but connection failed: " + str(exc)) from exc
+        self.save_settings()
+        return config
+
+    def register_mcp_media(self, value):
+        try:
+            path = Path(str(value)).expanduser()
+            if path.is_symlink():
+                return None
+            path = path.resolve(strict=True)
+            if not path.is_file() or path.stat().st_size > 200 * 1024 * 1024:
+                return None
+            mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            if not (mime.startswith("image/") or mime.startswith("video/")):
+                return None
+            self.mcp_media_allowlist[str(path)] = time.time() + 86400
+            return {"path": str(path), "name": path.name, "mime_type": mime,
+                    "kind": "video" if mime.startswith("video/") else "image"}
+        except (OSError, ValueError):
+            return None
+
+    def normalize_mcp_result(self, result):
+        text_parts = []
+        media = []
+        media_paths = set()
+        def inspect_value(value):
+            if isinstance(value, dict):
+                uri = value.get("uri")
+                if isinstance(uri, str) and uri.startswith("file://"):
+                    from urllib.parse import unquote as _unquote
+                    media_paths.add(_unquote(uri[7:]))
+                for child in value.values():
+                    inspect_value(child)
+            elif isinstance(value, list):
+                for child in value:
+                    inspect_value(child)
+            elif isinstance(value, str):
+                for line in value.splitlines():
+                    for match in re.finditer(r"(?:file://)?(/[^\r\n<>\"'`]*?\.(?:png|jpe?g|webp|gif|avif|mp4|webm|mov|m4v))(?=$|[\s)\]}>;,])", line, re.I):
+                        candidate = match.group(1).strip().rstrip(".,;)")
+                        if candidate:
+                            media_paths.add(candidate)
+        for item in result.get("content", []) if isinstance(result, dict) else []:
+            if not isinstance(item, dict):
+                continue
+            kind = item.get("type")
+            inspect_value(item)
+            if kind == "text":
+                text_parts.append(str(item.get("text") or ""))
+                inspect_value(item.get("text") or "")
+            elif kind == "image" and item.get("data"):
+                mime = str(item.get("mimeType") or "image/png")
+                if mime not in ("image/png", "image/jpeg", "image/webp", "image/gif"):
+                    mime = "image/png"
+                try:
+                    import base64
+                    raw = base64.b64decode(item["data"], validate=True)
+                    if len(raw) <= 15 * 1024 * 1024:
+                        out_dir = CONFIG_DIR / "mcp_outputs"
+                        out_dir.mkdir(parents=True, exist_ok=True)
+                        extension = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}[mime]
+                        output = out_dir / (uuid.uuid4().hex + extension)
+                        output.write_bytes(raw)
+                        try: output.chmod(0o600)
+                        except OSError: pass
+                        media_paths.add(str(output))
+                except Exception:
+                    text_parts.append("[An image was returned but could not be decoded.] ")
+            elif kind == "resource":
+                resource = item.get("resource") if isinstance(item.get("resource"), dict) else {}
+                inspect_value(resource)
+                if resource.get("text"):
+                    text_parts.append(str(resource.get("text")))
+        inspect_value(result.get("structuredContent", {}) if isinstance(result, dict) else {})
+        for path in sorted(media_paths):
+            item = self.register_mcp_media(path)
+            if item:
+                media.append(item)
+        content = "\n\n".join(part for part in text_parts if part.strip()).strip()
+        if not content and media:
+            content = "MCP tool completed and returned {} media file(s).".format(len(media))
+        if not content and not media:
+            content = "The MCP tool completed without returning displayable content."
+        return {"content": content[:300000], "media": media[:20]}
+
+    def save_skill(self, data):
+        return save_skill(self.skills_directory, data)
 
     def save_settings(self):
         _atomic_json(WEB_SETTINGS_FILE, self.settings)
@@ -4040,7 +4367,7 @@ class KurtWebApp:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "KurtLocal/0.5"
+    server_version = "KurtLocal/0.6"
 
     @property
     def app(self):
@@ -4144,6 +4471,9 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if parsed.path == "/api/mcp/media":
+            self._serve_mcp_media(parsed)
+            return
         if not self._need_auth():
             return
         try:
@@ -4152,6 +4482,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({
                     "models": self.app.list_models(), "routes": self.app.list_chat_routes(), "providers": providers,
                     "keys": self.app.sanitized_keys(), "api_groups": self.app.api_groups_view(),
+                    "mcp_servers": self.app.mcp_server_summaries(), "mcp_tools": self.app.mcp_tools_view(),
+                    "skills": list_skills(self.app.skills_directory),
                     "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""), "system_prompt": self.app.editable_system_prompt(), "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False))},
                     "project_root": str(self.app.workspace()),
                 })
@@ -4283,6 +4615,41 @@ class Handler(BaseHTTPRequestHandler):
             data = self._body()
             if parsed.path == "/api/settings":
                 self._settings(data)
+            elif parsed.path == "/api/mcp/connect":
+                config = self.app.connect_mcp_server(data)
+                self._json({"ok": True, "server_id": config["id"], "tools_count": len(config.get("tools", []))})
+            elif parsed.path == "/api/mcp/refresh":
+                server = self.app.find_mcp_server(data.get("server_id"))
+                if not server: raise ValueError("MCP server not found.")
+                config = self.app.connect_mcp_server({"id": server["id"], "name": server["name"],
+                    "transport": server.get("transport", "stdio"), "command": server.get("command", ""),
+                    "url": server.get("url", ""), "args": server.get("args", [])})
+                self._json({"ok": True, "tools_count": len(config.get("tools", []))})
+            elif parsed.path == "/api/mcp/toggle":
+                server = self.app.find_mcp_server(data.get("server_id"))
+                if not server: raise ValueError("MCP server not found.")
+                server["enabled"] = bool(data.get("enabled"))
+                self.app.save_settings()
+                self._json({"ok": True, "enabled": server["enabled"]})
+            elif parsed.path == "/api/mcp/remove":
+                server_id = str(data.get("server_id") or "")
+                servers = self.app.settings.get("mcp_servers", [])
+                if not any(str(item.get("id")) == server_id for item in servers): raise ValueError("MCP server not found.")
+                self.app.settings["mcp_servers"] = [item for item in servers if str(item.get("id")) != server_id]
+                self.app.save_settings()
+                self._json({"ok": True})
+            elif parsed.path == "/api/mcp/call":
+                self._mcp_call(data)
+            elif parsed.path == "/api/skills/read":
+                skill = get_skill(self.app.skills_directory, str(data.get("id") or ""))
+                if not skill: raise ValueError("Skill not found.")
+                self._json({"ok": True, "skill": skill})
+            elif parsed.path == "/api/skills/save":
+                skill = self.app.save_skill(data)
+                self._json({"ok": True, "skill": skill})
+            elif parsed.path == "/api/skills/delete":
+                delete_skill(self.app.skills_directory, str(data.get("id") or ""))
+                self._json({"ok": True})
             elif parsed.path == "/api/models/delete":
                 self._delete_model(data)
             elif parsed.path == "/api/files/delete/prepare":
@@ -4483,6 +4850,91 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, 400)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+
+    def _serve_mcp_media(self, parsed):
+        if not self._host_ok():
+            self.send_error(403)
+            return
+        args = parse_qs(parsed.query)
+        supplied = str(args.get("token", [""])[0])
+        if not hmac.compare_digest(supplied, self.app.token):
+            self.send_error(403)
+            return
+        path_value = str(args.get("path", [""])[0])
+        expiry = self.app.mcp_media_allowlist.get(path_value, 0)
+        if expiry < time.time():
+            self.send_error(404)
+            return
+        try:
+            path = Path(path_value)
+            if path.is_symlink() or not path.is_file():
+                self.send_error(404)
+                return
+            size = path.stat().st_size
+            if size > 200 * 1024 * 1024:
+                self.send_error(413)
+                return
+            mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            if not (mime.startswith("image/") or mime.startswith("video/")):
+                self.send_error(415)
+                return
+            start, end, status = 0, max(0, size - 1), 200
+            range_header = self.headers.get("Range", "")
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip()) if range_header else None
+            if match and size:
+                start = int(match.group(1) or 0)
+                end = int(match.group(2) or size - 1)
+                if start >= size or end < start:
+                    self.send_response(416)
+                    self.send_header("Content-Range", "bytes */{}".format(size))
+                    self.end_headers()
+                    return
+                end = min(end, size - 1)
+                status = 206
+            length = max(0, end - start + 1) if size else 0
+            with path.open("rb") as source:
+                source.seek(start)
+                payload = source.read(length)
+            self.send_response(status)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            if status == 206:
+                self.send_header("Content-Range", "bytes {}-{}/{}".format(start, end, size))
+            self.end_headers()
+            self.wfile.write(payload)
+        except (OSError, ValueError):
+            self.send_error(404)
+
+    def _mcp_call(self, data):
+        server = self.app.find_mcp_server(data.get("server_id"))
+        if not server or not server.get("enabled", True):
+            raise ValueError("That MCP server is not connected or enabled. Check Settings → MCP servers.")
+        tool_name = str(data.get("tool_name") or "")
+        tool = next((item for item in server.get("tools", []) if str(item.get("name")) == tool_name), None)
+        if not tool:
+            raise ValueError("That MCP tool is no longer available. Refresh the server's tools in Settings.")
+        arguments = data.get("arguments") if isinstance(data.get("arguments"), dict) else {}
+        if len(json.dumps(arguments, ensure_ascii=False)) > 100000:
+            raise ValueError("MCP tool arguments are too large.")
+        chat_id = str(data.get("chat_id") or "")
+        chat = self.app.get_chat(chat_id)
+        if not chat:
+            raise ValueError("Conversation not found.")
+        raw = call_mcp_tool(server, tool_name, arguments, timeout=600)
+        normalized = self.app.normalize_mcp_result(raw)
+        record = {"role": "assistant", "content": normalized["content"], "media": normalized["media"],
+                  "mcp_tool": {"server": server.get("name"), "name": tool_name}}
+        with self.app.lock:
+            chat.setdefault("messages", []).append(record)
+            if chat.get("title") in (None, "New conversation"):
+                chat["title"] = "MCP · {}".format(tool_name.replace("_", " "))[:58]
+            chat["updated"] = time.time()
+            self.app.save_chats()
+        self._json({"ok": True, "content": normalized["content"], "media": normalized["media"],
+                    "server": server.get("name"), "tool_name": tool_name})
 
     def _delete_model(self, data):
         model_ref = str(data.get("model_ref") or "").strip()
@@ -4895,6 +5347,13 @@ class Handler(BaseHTTPRequestHandler):
             {"role": "system", "content": self.app.chat_system_prompt(chat_id, mode=mode, effort=effort)},
             {"role": "system", "content": workspace_context + "\n" + image_note + "\nUploaded files are copied into this chat's private workspace. Separately, READ/LIST may inspect local paths that the current OS account can access; uploads do not alter the originals."},
         ]
+        skill_id = str(data.get("skill_id") or "").strip()
+        if skill_id:
+            selected_skill = get_skill(self.app.skills_directory, skill_id)
+            if not selected_skill:
+                self._json({"error": "That skill is no longer installed. Refresh the Skills list and try again."}, 400)
+                return
+            messages.append({"role": "system", "content": "ACTIVE KURT SKILL: {}\nDescription: {}\n\n{}\n\nApply this skill to the current request. Treat it as task guidance, not as permission to override system safety or user approval requirements.".format(selected_skill["name"], selected_skill["description"], selected_skill["instructions"])})
         messages.extend(
             {"role": item["role"], "content": item["content"]}
             for item in previous if item.get("role") in ("user", "assistant")
