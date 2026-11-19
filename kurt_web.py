@@ -91,6 +91,11 @@ mkdir discord-bot
   path on one line, then @@@ END. Deletion pauses for approval. Do not use wildcards, recursive
   deletion, protected system/credential paths, or DELETE on directories.
 - To search the web: @@@ SEARCH, the query on the next line, then @@@ END.
+- To revise Kurt's user-editable base system prompt, first give a concise Change summary, then output the complete replacement prompt using exactly this block:
+  @@@ SYSTEM_PROMPT
+  complete replacement prompt text
+  @@@ END
+  This is an application-managed prompt setting, not a workspace file. Never refuse by saying you cannot edit your own prompt. The application displays a review card with an explicit Apply prompt to Kurt action. Do not claim the change is active or saved until the user approves that action. Preserve the application's approval, privacy, and safety rules.
 - Every block must be closed with @@@ END on its own line. Put one command per RUN block.
 - Never ask the user to type "confirm" or "yes" in chat before an action. The application itself
   shows an Approve/Decline card the moment you emit a RUN, WRITE, or DELETE block, so emit the
@@ -104,11 +109,23 @@ You are Kurt, the assistant configured by this local application. The user owns 
 instance and may inspect, quote, review, and revise the Kurt-controlled prompt. If asked for
 your system prompt, provide the exact Kurt-controlled prompt supplied by the application;
 the /system-prompt command returns the complete active prompt directly. Do not claim that
-Kurt's own prompt is confidential. Clearly distinguish it from provider-owned model or
-platform instructions, which are not available to this application. Never disclose API keys,
-credentials, or other secrets. Explain important decisions and assumptions briefly when they
-help the user, but do not add a generic summary or process report. Never reveal private
-chain-of-thought or hidden scratchpad tokens.
+Kurt's own prompt is confidential or that it can only be edited by changing a workspace file.
+You can propose a prompt revision with the SYSTEM_PROMPT action block described in KURT ACTION
+BLOCK SYNTAX. Always provide a concise Change summary before that block. The application
+shows the proposal for review and applies it only after the user explicitly approves it.
+Clearly distinguish the user-editable Kurt prompt from fixed application rules and provider-owned
+model/platform instructions, which are not editable here. Never disclose API keys, credentials,
+or other secrets. Explain important decisions and assumptions briefly when they help the user,
+but do not add a generic summary or process report. Never reveal private chain-of-thought or
+hidden scratchpad tokens.
+
+MCP IMAGE GENERATION:
+Kurt's web interface can invoke connected MCP tools from the slash picker. It does not silently
+invoke MCP tools from an ordinary chat message. When an image-generation MCP is connected,
+identify the relevant slash command and tell the user to type / and select that tool. If no image
+generation MCP is connected, clearly say that image generation is not connected and direct the
+user to Settings > MCP servers to connect one (a local ComfyUI MCP server is a suitable option).
+Do not claim to have generated an image unless an MCP tool actually ran and returned an image.
 """
 
 RESPONSE_FORMAT_INSTRUCTIONS = r"""
@@ -219,6 +236,18 @@ WEB_ACTION_RE = re.compile(
 )
 SYSTEM_PROMPT_REQUEST_RE = re.compile(
     r"^\s*(?:/system-prompt|(?:what\s+is|what's)\s+(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt|(?:show|share|reveal|print|display|quote|give)\s+(?:me\s+)?(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt)\s*[?!.\s]*$",
+    re.I,
+)
+IMAGE_GENERATION_INTENT_RE = re.compile(
+    r"\b(?:generat\w*|gernate|genrate|creat\w*|make|draw|render\w*|paint\w*|illustrat\w*)\b"
+    r"[\s\S]{0,120}\b(?:images?|pictures?|photos?|illustrations?|artworks?|portraits?|wallpapers?|logos?)\b"
+    r"|\b(?:images?|pictures?|photos?|illustrations?|artworks?|portraits?|wallpapers?|logos?)\b"
+    r"[\s\S]{0,120}\b(?:generat\w*|gernate|genrate|creat\w*|make|draw|render\w*|paint\w*|illustrat\w*)\b",
+    re.I,
+)
+IMAGE_GENERATION_TOOL_RE = re.compile(
+    r"(?:image.?gen|generate.?image|create.?image|text.?to.?image|txt2img|text2img|"
+    r"comfyui|stable.?diffusion|sdxl|flux|dall.?e|image generation|image generator)",
     re.I,
 )
 
@@ -567,6 +596,13 @@ body.nav-open .scrim{display:block;position:fixed;inset:0;background:rgba(4,10,7
 .artifact-pane-count{color:var(--muted);font-size:11.5px}
 .artifact-pane-close{flex:none}
 .artifact-pane-content{display:grid;align-content:start;gap:13px;min-width:0}
+.artifact-pane-prompt-actions{display:flex;flex:none;align-items:center;justify-content:space-between;gap:14px;padding:13px 16px;background:var(--side);border-top:1px solid var(--line)}
+.artifact-pane-prompt-actions>div{display:grid;gap:3px;min-width:0}
+.artifact-pane-prompt-actions strong{font-size:12.5px}
+.artifact-pane-prompt-actions span{font-size:11.5px;line-height:1.45;color:var(--muted)}
+.artifact-pane-prompt-actions button{flex:none;font-size:12px}
+.artifact-pane-prompt-actions[hidden]{display:none!important}
+@media(max-width:700px){.artifact-pane-prompt-actions{align-items:flex-start;flex-direction:column}.artifact-pane-prompt-actions button{width:100%}}
 .artifact-pane .artifact{margin:0;min-width:0}
 .artifact-pane .artifact-top{width:100%;text-align:left;color:var(--text);background:transparent;border:0;border-radius:0}
 .artifact-pane .artifact-body .codebox pre{max-height:48vh;overflow:auto}
@@ -1272,6 +1308,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <aside class="artifact-pane" id="artifactPane" aria-label="Selected file preview">
 <div class="artifact-pane-head"><div class="ap-title"><span class="ap-icon"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span><div class="ap-titles"><strong id="artifactPaneTitle">File preview</strong><span class="artifact-pane-count" id="artifactCount">Select a file card to preview</span></div></div><div class="ap-actions"><button class="ap-btn" id="artifactPaneCopy" type="button" title="Copy file contents"><svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg><span>Copy</span></button><button class="ap-btn icon-only" id="artifactPaneDownload" type="button" title="Download file" aria-label="Download file"><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg></button><button class="icon-btn artifact-pane-close" id="closeArtifactPane" type="button" title="Close file preview" aria-label="Close file preview">×</button></div></div>
 <div class="artifact-pane-content" id="artifactPaneContent"></div>
+<div class="artifact-pane-prompt-actions" id="artifactPanePromptActions" hidden><div><strong>System prompt change</strong><span>Review the full replacement above, then approve it to update Kurt.</span></div><button class="primary" id="applySystemPromptProposal" type="button">Apply prompt to Kurt</button></div>
 </aside>
 </main>
 </div></div>
@@ -1290,7 +1327,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <section class="settings-panel active" data-settings-panel="general">
 <h3>General</h3><div class="inline-note">Each conversation gets a private workspace. Both modes can read files accessible to your macOS account. Use Link folder in the composer to make a chosen folder this session’s working root; every change still needs approval.</div>
 <div class="settings-grid"><div class="field"><label>Default chat route</label><select id="settingsModel"></select></div><div class="field"><label>Default working environment</label><input value="Private isolated workspace per chat" disabled><div class="inline-note">Link a folder from the bottom of the composer to work directly in that folder. Unlinking returns this chat to its private workspace.</div></div></div>
-<div class="field"><label>System prompt</label><textarea id="systemPrompt" style="min-height:180px"></textarea><div class="inline-note">Kurt can review and propose edits to this prompt in chat. Proposed prompt changes appear as a review card and require your approval before saving. Type /system-prompt in chat to display the exact active Kurt prompt for the selected mode.</div></div>
+<div class="field"><label>System prompt</label><textarea id="systemPrompt" style="min-height:180px"></textarea><div class="inline-note">Edit the prompt here and select Save settings, or ask Kurt to revise it in chat. Kurt can prepare a complete replacement prompt and show an Apply prompt to Kurt review action. Type /system-prompt to inspect the active prompt or /edit-system-prompt to open this editor.</div></div>
 <div class="row"><button class="primary" id="saveSettings">Save settings</button><button id="reloadSettings">Reload from disk</button></div>
 </section>
 <section class="settings-panel" data-settings-panel="local-models">
@@ -1357,7 +1394,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="chat-context-menu" id="chatContextMenu" role="menu"></div>
 <div class="dialog-backdrop" id="appDialogBackdrop"><form class="app-dialog" id="appDialogForm"><h2 id="appDialogTitle"></h2><p class="dialog-message" id="appDialogMessage"></p><div class="dialog-fields" id="appDialogFields"></div><div class="dialog-actions"><button type="button" id="appDialogCancel">Cancel</button><button type="submit" class="primary" id="appDialogConfirm">Save</button></div></form></div>
 <script>
-const TOKEN='__TOKEN__';const HINT='Normal and Agent can read files available to your OS account. Every command, file change, and deletion pauses for approval. Link a folder to work directly in it.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],mcpServers:[],mcpTools:[],skills:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],uploadPromise:null,contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[],linkedFolder:'',activeArtifactContent:''};
+const TOKEN='__TOKEN__';const HINT='Normal and Agent can read files available to your OS account. Every command, file change, and deletion pauses for approval. Link a folder to work directly in it.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],mcpServers:[],mcpTools:[],skills:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],uploadPromise:null,contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[],linkedFolder:'',activeArtifactContent:'',activeArtifact:null};
 function effortForMode(mode){return mode==='normal'?'thinking':'expert'}
 function validMode(mode){const value=String(mode||'normal');return value==='agent'||value==='code'?'agent':'normal'}
 const $=id=>document.getElementById(id);const api=async(path,body)=>{const res=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:body?JSON.stringify(body):undefined});const data=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(data.error||res.statusText);return data};
@@ -1711,8 +1748,8 @@ function renderMessage(role,content,artifacts,extra){
  if(role==='user'){const copyPrompt=document.createElement('button');copyPrompt.type='button';copyPrompt.className='icon-btn user-copy';copyPrompt.title='Copy prompt';copyPrompt.setAttribute('aria-label','Copy prompt');copyPrompt.innerHTML='<svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg>';copyPrompt.onclick=()=>navigator.clipboard.writeText(String(content||'')).then(()=>toast('Prompt copied')).catch(()=>toast('Could not copy'));wrap.insertBefore(copyPrompt,bubble)}
  $('messages').appendChild(wrap);return wrap
 }
-function clearArtifactPane(){state.activeArtifactContent='';const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';const main=$('main');if(main)main.classList.remove('has-artifacts');document.querySelectorAll('.artifact-trigger').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
-function closeArtifactPane(){state.activeArtifactContent='';const main=$('main');if(main)main.classList.remove('has-artifacts');const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';document.querySelectorAll('.artifact-trigger.selected').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
+function clearArtifactPane(){state.activeArtifactContent='';state.activeArtifact=null;const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';const promptActions=$('artifactPanePromptActions');if(promptActions)promptActions.hidden=true;const main=$('main');if(main)main.classList.remove('has-artifacts');document.querySelectorAll('.artifact-trigger').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
+function closeArtifactPane(){state.activeArtifactContent='';state.activeArtifact=null;const promptActions=$('artifactPanePromptActions');if(promptActions)promptActions.hidden=true;const main=$('main');if(main)main.classList.remove('has-artifacts');const pane=$('artifactPaneContent');if(pane)pane.innerHTML='';document.querySelectorAll('.artifact-trigger.selected').forEach(button=>{button.classList.remove('selected');button.setAttribute('aria-expanded','false')});const title=$('artifactPaneTitle');if(title)title.textContent='File preview';const count=$('artifactCount');if(count)count.textContent='Select a file card to preview'}
 function renderArtifactTriggers(container,artifacts){
  if(!container)return;
  const selectedPath=container.querySelector('.artifact-trigger.selected')?.dataset.path||'';
@@ -1807,8 +1844,29 @@ function openArtifactPreview(a,trigger){
  const title=$('artifactPaneTitle');if(title){title.textContent=base;title.title=full}
  const content=String(a.content||''),lines=content?content.replace(/\n$/,'').split('\n').length:0;
  const count=$('artifactCount');if(count)count.textContent=artifactLang(a)+(a.kind==='terminal_output'?'':' · '+lines+' line'+(lines===1?'':'s'));
- state.activeArtifactContent=content;state.activeArtifactName=base;
+ state.activeArtifactContent=content;state.activeArtifactName=base;state.activeArtifact=a;
+ const promptActions=$('artifactPanePromptActions');if(promptActions)promptActions.hidden=a.kind!=='system_prompt';
+ const applyButton=$('applySystemPromptProposal');if(applyButton){applyButton.disabled=false;applyButton.textContent='Apply prompt to Kurt'}
  pane.scrollTop=0;const outer=$('artifactPane');if(outer)outer.scrollTop=0;
+}
+async function applySystemPromptProposal(){
+ const artifact=state.activeArtifact;
+ if(!artifact||artifact.kind!=='system_prompt'){toast('Select a system prompt proposal first');return}
+ if(!state.chatId){toast('Open the conversation containing this prompt proposal first');return}
+ const prompt=String(artifact.content||'');
+ if(!prompt.trim()||prompt.length>40000){toast('The proposed system prompt is empty or exceeds 40,000 characters');return}
+ const approved=await confirmInApp('Apply system prompt to Kurt?', 'This replaces Kurt’s user-editable base system prompt for future requests. The current application-enforced approval and safety rules remain active. Review the full text in the preview before applying.', 'Apply prompt', false);
+ if(!approved)return;
+ const button=$('applySystemPromptProposal');if(button){button.disabled=true;button.textContent='Applying…'}
+ try{
+  const result=await api('/api/settings',{system_prompt:prompt,prompt_proposal:true,chat_id:state.chatId,approved:true});
+  state.settings=result.settings||state.settings;
+  $('systemPrompt').value=(result.settings&&result.settings.system_prompt)||prompt;
+  delete $('systemPrompt').dataset.dirty;
+  if(button){button.textContent='Prompt applied';button.disabled=true}
+  const actions=$('artifactPanePromptActions');if(actions)actions.hidden=true;
+  toast('Kurt’s system prompt has been updated. New requests will use it.');
+ }catch(error){if(button){button.disabled=false;button.textContent='Apply prompt to Kurt'}toast('Could not apply system prompt: '+error.message)}
 }
 function artifactCard(a){
  const info=artifactState(a);
@@ -2312,6 +2370,9 @@ async function linkFolderFromMessage(text){
 }
 async function send(){
  const text=$('prompt').value.trim();if(!text||state.busy)return;
+ if(/^\/edit-system-prompt\s*$/i.test(text)){
+  $('prompt').value='';autosize();hideSlashMenu();await openSettings();activateSettingsTab('general');$('systemPrompt').focus();toast('Edit Kurt’s system prompt in Settings, then save it');return;
+ }
  const slash=parseSlashInvocation(text);if(slash?.kind==='mcp'){await sendMcpTool(text,slash.tool,slash.args);return}
  let requestText=text,skillId='';if(slash?.kind==='skill'){if(!slash.args){toast('Add a request after /'+slash.skill.id);return}requestText=slash.args;skillId=slash.skill.id}
  if(await linkFolderFromMessage(text)){return}
@@ -2367,7 +2428,7 @@ async function send(){
  }
 }
 $('messages').addEventListener('scroll',()=>{const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});$('toBottom').onclick=()=>{follow=true;scrollEnd(true);$('toBottom').classList.remove('show')};
-$('closeArtifactPane').onclick=closeArtifactPane;$('artifactPaneCopy').onclick=copyActiveArtifact;$('artifactPaneDownload').onclick=downloadActiveArtifact;$('linkFolderBtn').onclick=linkSessionFolder;
+$('closeArtifactPane').onclick=closeArtifactPane;$('artifactPaneCopy').onclick=copyActiveArtifact;$('artifactPaneDownload').onclick=downloadActiveArtifact;$('applySystemPromptProposal').onclick=applySystemPromptProposal;$('linkFolderBtn').onclick=linkSessionFolder;
 $('sendBtn').onclick=()=>{if(state.busy){if(state.abort)state.abort.abort()}else send()};
 $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!state.busy)send()}});
 $('prompt').addEventListener('input',()=>{autosize();updateSend();slashActiveIndex=0;renderSlashMenu()});
@@ -3159,6 +3220,19 @@ class KurtWebApp:
             seen.add(item["command"])
         return result
 
+    def image_generation_mcp_tools(self):
+        """Return connected MCP tools that plausibly provide image generation."""
+        matches = []
+        for tool in self.mcp_tools_view():
+            searchable = " ".join((
+                str(tool.get("server_name") or ""),
+                str(tool.get("tool_name") or ""),
+                str(tool.get("description") or ""),
+            ))
+            if IMAGE_GENERATION_TOOL_RE.search(searchable):
+                matches.append(tool)
+        return matches
+
     def find_mcp_server(self, server_id):
         return next((item for item in self.settings.get("mcp_servers", []) if str(item.get("id")) == str(server_id)), None)
 
@@ -3940,6 +4014,21 @@ class KurtWebApp:
         prompt += "\nUser home for absolute/relative local read paths: " + str(Path.home())
         prompt += "\nSession workspace tree:\n" + self.tree(root)
         prompt += "\nUse READ/LIST for local inspection. All command/file action blocks pause for user approval."
+        image_tools = self.image_generation_mcp_tools()
+        if image_tools:
+            prompt += "\n\nCONNECTED IMAGE-GENERATION MCP TOOLS (available in the slash picker):\n"
+            prompt += "\n".join("- /{} — {} / {}: {}".format(
+                item.get("command"), item.get("server_name"), item.get("tool_name"),
+                str(item.get("description") or "").replace("\n", " ")[:300],
+            ) for item in image_tools[:30])
+            prompt += ("\nWhen the user requests image generation, identify the best matching slash command "
+                         "and explain that they must type / and select it; do not claim execution until "
+                         "the MCP tool has actually been invoked.")
+        else:
+            prompt += ("\n\nIMAGE GENERATION MCP STATUS: no connected image-generation tool was found. "
+                       "When asked to generate an image, say that an image-generation MCP must be "
+                       "connected in Settings > MCP servers (for example local ComfyUI MCP) before "
+                       "Kurt can generate it. Do not claim that you generated an image.")
         return prompt
 
 
@@ -5382,6 +5471,42 @@ class Handler(BaseHTTPRequestHandler):
         chat["effort"] = effort
         chat["mode"] = mode
         self.app.save_chats()
+
+        if IMAGE_GENERATION_INTENT_RE.search(user_text):
+            image_tools = self.app.image_generation_mcp_tools()
+            if not image_tools:
+                setup_reply = (
+                    "Image generation is not connected in this Kurt instance yet. Connect an image-generation MCP server first: "
+                    "open Settings → MCP servers, add a server such as a local ComfyUI MCP server, and wait for Kurt to discover its tools. "
+                    "After connecting it, type `/` in the chat composer and select the image-generation tool to run your prompt. "
+                    "I will not claim an image was generated until that MCP tool has actually run and returned an image."
+                )
+                chat["messages"].append({
+                    "role": "assistant", "content": setup_reply, "model": "Kurt MCP setup",
+                    "mode": mode, "effort": effort, "route": route_info["route"],
+                })
+                chat["updated"] = time.time()
+                self.app.save_chats()
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Connection", "close")
+                    self.send_header("X-Accel-Buffering", "no")
+                    self.end_headers()
+                    event = {
+                        "type": "done", "content": setup_reply, "artifacts": [],
+                        "worklog": [{"kind": "mcp", "text": "Checked connected MCP tools", "ok": True,
+                                     "detail": "No image-generation MCP tool is currently connected. No model or MCP generation request was made."}],
+                        "reasoning": "", "thinking_seconds": 0, "chat_id": chat_id,
+                        "title": chat.get("title") or "Conversation", "route": route_info["route"],
+                        "model": "Kurt MCP setup", "effort": effort, "mode": mode, "stats": {},
+                    }
+                    self.wfile.write(b"data: " + json.dumps(event, ensure_ascii=False).encode("utf-8") + b"\n\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+                return
 
         self.app.model_lock.acquire()
         try:
