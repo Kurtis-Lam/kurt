@@ -48,6 +48,25 @@ MAX_WORKSPACE_CONTEXT = 1_400_000
 MAX_CHATS = 100
 MAX_MESSAGES_PER_CHAT = 300
 
+PATH_RESOLUTION_INSTRUCTIONS = r"""
+STRICT LOCAL PATH RESOLUTION:
+- The injected "Current session working root" and "Session workspace tree" are authoritative.
+  Every relative READ/LIST path is resolved from that exact working root (the linked folder when
+  linked, otherwise this chat's private workspace), never from the process current directory or
+  the user's home directory. A home-directory target must be written explicitly as ~/path or as
+  an absolute path. A missing relative path must never be silently reinterpreted elsewhere.
+- Never guess a filename or invent a placeholder path such as relative/path.py, path/to/file.py,
+  example.py, or <filename>. Use only paths supplied by the user, shown in the injected tree, or
+  returned by an actual LIST result. If the requested target is not in the tree and its exact
+  name/location is uncertain, LIST its known parent first (or the session root if the parent is
+  unknown); do not issue a speculative READ. Read only a confirmed exact file entry.
+- If the target is still absent, state that it was not found and ask for the exact path. Do not
+  follow a failed READ by listing an unrelated directory, trying a different base directory, or
+  retrying the same guessed path. Absolute paths and explicit ~/... paths are allowed when the
+  user identifies a location outside the session root.
+"""
+
+
 WEB_INSTRUCTIONS = r"""
 KURT WEB INTERFACE RULES:
 - You are Kurt, the local assistant in this application. Speak as Kurt.
@@ -119,6 +138,13 @@ mkdir discord-bot
 - No command, virtual environment, package manager, or other setup process runs before approval.
   Never ask the user to type "confirm" or "yes" in chat.
 - Relative paths and commands run inside the session working root named in this prompt.
+- PATH CHECK BEFORE READ/LIST: use the exact injected working root and actual tree entries. A
+  relative path means <session working root>/<relative path>. Do not prepend the home directory,
+  use a guessed project/repository name, or substitute a plausible-looking path. If the tree does
+  not establish the target, LIST the known parent or ask one focused clarification. A failed path
+  must remain failed; never retry it from another base directory unless the user explicitly gives
+  that second location. Use ~/... or an absolute path only when the user explicitly identifies a
+  home-directory or external location.
 """
 
 KURT_IDENTITY_INSTRUCTIONS = r"""
@@ -157,14 +183,26 @@ RESPONSE FORMAT — STRICTLY SEPARATE THINKING, ACTIVITY, AND ANSWER:
 - The Thinking panel is not a transcript of your private reasoning. It may contain only an optional
   concise, user-facing rationale: at most three short bullets describing the chosen approach,
   one important constraint, and/or a check actually performed. Do not include self-talk, first-
-  person planning, speculation, discarded options, or step-by-step reasoning. Use this exact block
-  only when it adds real value:
+  person planning, speculation, discarded options, hidden chain-of-thought, or step-by-step
+  reasoning. Never copy or expose provider-private reasoning tokens. When a task is non-trivial and
+  a rationale adds value, emit this short public-facing block FIRST, before the answer or any action
+  block, so the interface can stream it live; then continue with the user-facing answer/action:
   @@@ RATIONALE
   - Approach: <brief high-level explanation>
   - Key consideration: <one important constraint or trade-off>
   - Check: <what was actually verified, if applicable>
   @@@ END
   Omit the block for simple questions. The rationale is not the answer and must not repeat it.
+  Use only complete, concise public-facing bullets with these exact labels: Approach, Key
+  consideration, and Check. It is safe for the interface to stream this explicitly authored block;
+  private provider reasoning and <think> content must remain hidden at all times.
+- WHENEVER YOU MAKE CODE CHANGES: output only the modified code/source files and one
+  comment-free git_commands.txt. Do not include unchanged files, prose summaries, or extra
+  deliverables unless the user explicitly requests them. In git_commands.txt, for EACH modified
+  file, put its `git add <file>` line immediately followed by a detailed per-file `git commit`
+  (use a descriptive subject and explanatory body). Do not include co-author lines, session tags,
+  or comments. The final line must be `git push`. Include the push command in the file, but do not
+  execute it unless the user separately requests and approves that command.
 - Keep the final answer, the Thinking panel, and the activity timeline strictly separate. File
   reads, searches, command approvals, command results, and file proposals belong only in the
   activity timeline. Do not narrate those events in the response body.
@@ -1660,7 +1698,8 @@ const mathJaxScript=document.createElement('script');mathJaxScript.src='https://
 function isUserFacingRationale(value){const text=String(value||'').trim();if(!text||text.length>900)return false;const lines=text.split(/\r?\n/).filter(line=>line.trim());if(!lines.length||lines.length>3||lines.some(line=>line.length>260||!/^[-*]\s*(?:Approach|Key consideration|Check):\s+\S/i.test(line.trim())))return false;return !/\b(?:the user (?:asks|asked|wants|requested|is asking)|i (?:should|need to|must|have to|will now|am going to)|let me|we (?:need to|should|must|have to)|should i|no tool (?:is )?needed|tool not needed|need to answer the user|response format|internal monologue|chain.of.thought|let['’]s (?:answer|respond|write)|need likely respond)\b/i.test(text)}
 function markdownFenceRanges(src){const ranges=[];let offset=0,opening=null;for(const line of (src.match(/[^\n]*(?:\n|$)/g)||[])){if(!line)continue;const bare=line.replace(/\r?\n$/,'');if(!opening){const marker=/^[ \t]{0,3}(`{3,}|~{3,})/.exec(bare);if(marker)opening={start:offset,char:marker[1][0],width:marker[1].length};else if(bare.startsWith('    ')||bare.startsWith('\t'))ranges.push([offset,offset+line.length])}else{const close=new RegExp('^[ \t]{0,3}'+opening.char+'{'+opening.width+',}[ \t]*$');if(close.test(bare)){ranges.push([opening.start,offset+line.length]);opening=null}}offset+=line.length}if(opening)ranges.push([opening.start,src.length]);return ranges}
 function findOutsideFence(pattern,src,ranges,from=0){pattern.lastIndex=from;let match;while((match=pattern.exec(src))){if(!ranges.some(range=>match.index>=range[0]&&match.index<range[1]))return match;if(!match[0].length)pattern.lastIndex++}return null}
-function splitResponseRationale(src,allowOpen=false){src=String(src||'');const fences=markdownFenceRanges(src),marker=findOutsideFence(/^[ \t]*@{2,3}[ \t]*(?:RATIONALE|SUMMARY)[ \t]*\r?\n/gim,src,fences);if(!marker)return{rationale:'',answer:src};const start=marker.index,bodyStart=start+marker[0].length,end=findOutsideFence(/^[ \t]*@{2,3}[ \t]*END\b[ \t]*$/gim,src,fences,bodyStart);if(!end)return allowOpen?{rationale:'',answer:src.slice(0,start).trim()}:{rationale:'',answer:src};const rationale=src.slice(bodyStart,end.index).trim(),after=src.slice(end.index+end[0].length);return{rationale:isUserFacingRationale(rationale)?rationale:'',answer:(src.slice(0,start)+'\n'+after).replace(/\n{3,}/g,'\n\n').trim()}}
+function streamingRationalePrefix(value){const text=String(value||'').slice(0,900);const lines=text.split(/\r?\n/);const accepted=[];for(const line of lines){const clean=line.trim();if(!clean)continue;if(!/^[-*]\s*(?:Approach|Key consideration|Check):\s+\S.{0,259}$/i.test(clean))break;accepted.push(clean);if(accepted.length===3)break}const candidate=accepted.join('\n');return candidate&&isUserFacingRationale(candidate)?candidate:''}
+function splitResponseRationale(src,allowOpen=false){src=String(src||'');const fences=markdownFenceRanges(src),marker=findOutsideFence(/^[ \t]*@{2,3}[ \t]*(?:RATIONALE|SUMMARY)[ \t]*\r?\n/gim,src,fences);if(!marker)return{rationale:'',answer:src};const start=marker.index,bodyStart=start+marker[0].length,end=findOutsideFence(/^[ \t]*@{2,3}[ \t]*END\b[ \t]*$/gim,src,fences,bodyStart);if(!end){const partial=allowOpen?streamingRationalePrefix(src.slice(bodyStart)):'';return{rationale:partial,answer:src.slice(0,start).trim()}}const rationale=src.slice(bodyStart,end.index).trim(),after=src.slice(end.index+end[0].length);return{rationale:isUserFacingRationale(rationale)?rationale:'',answer:(src.slice(0,start)+'\n'+after).replace(/\n{3,}/g,'\n\n').trim()}}
 function renderMarkdown(src){src=String(src||'');return src.split(/((?:```|~~~)[^\n]*\n[\s\S]*?(?:```|~~~)|(?:```|~~~)[^\n]*\n[\s\S]*$|(?:```|~~~)[^\n]*$)/).map((seg,i)=>{if(i%2===0)return mdBlocks(seg);const fence=seg.slice(0,3),nl=seg.indexOf('\n');const lang=(nl<0?seg.slice(3):seg.slice(3,nl)).trim().split(/\s+/)[0]||'';let code=nl<0?'':seg.slice(nl+1);if(nl>=0&&seg.endsWith(fence))code=code.slice(0,-fence.length).replace(/\n$/,'');return '<div class="codebox"><div class="codehead"><span>'+esc(lang||'code')+'</span><button class="copy-mini" data-copy-code>Copy code</button></div><pre><code>'+esc(code.replace(/\n$/,''))+'</code></pre></div>'}).join('')}
 function splitThink(raw,streaming){return{think:'',answer:stripUnsupportedActions(raw),open:false}}
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
@@ -2489,7 +2528,7 @@ async function send(){
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
  const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',blockRationale='',pending=false,thinkStart=0,retryMode=null;node.__artifacts=[];const showReasoning=live=>{reasoning=[modelRationale,blockRationale].filter(Boolean).join('\n\n');setReasoning(node,reasoning,live)};
  const controller=new AbortController();state.abort=controller;
- const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseRationale(safeLiveDraft(raw),true);const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
+ const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseRationale(safeLiveDraft(raw),true);if(parsed.rationale&&parsed.rationale!==blockRationale){blockRationale=parsed.rationale;showReasoning(true)}const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
  try{
   const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text:requestText,skill_id:skillId,route,effort:state.effort,mode:state.mode,message_id:messageId}),signal:controller.signal});
@@ -3683,7 +3722,12 @@ class KurtWebApp:
     def editable_system_prompt(self):
         root = self.workspace()
         custom = str(self.settings.get("system_prompt") or "").strip()
-        return custom or (K.SYSTEM.replace("{cwd}", str(root)) + WEB_INSTRUCTIONS)
+        prompt = custom or K.SYSTEM.replace("{cwd}", str(root))
+        if "KURT WEB INTERFACE RULES:" not in prompt:
+            prompt += "\n" + WEB_INSTRUCTIONS
+        if "STRICT LOCAL PATH RESOLUTION:" not in prompt:
+            prompt += "\n" + PATH_RESOLUTION_INSTRUCTIONS
+        return prompt
 
     def chat_workspace(self, chat_id, create=True):
         chat_id = str(chat_id or '')
@@ -3749,11 +3793,10 @@ class KurtWebApp:
             raise ValueError("A file or directory path is required.")
         candidate = Path(raw).expanduser()
         if not candidate.is_absolute():
-            working_candidate = self.chat_work_root(chat_id) / candidate
-            if working_candidate.exists():
-                candidate = working_candidate
-            else:
-                candidate = Path.home() / candidate
+            # Relative reads are rooted only in this chat's active workspace. Never fall
+            # back to Path.home(): that turns a missing/guessed workspace path into an
+            # unrelated lookup under the user's home directory.
+            candidate = self.chat_work_root(chat_id, create=False) / candidate
         return self.resolve_agent_path(str(candidate), allow_missing=False)
 
     def apply_approved_file(self, chat_id, target_path, content, expected_sha256, linked_root=""):
@@ -4175,6 +4218,8 @@ class KurtWebApp:
         if "{cwd}" in base: base = base.replace("{cwd}", str(root))
         if "KURT WEB INTERFACE RULES:" not in base:
             base += "\n" + WEB_INSTRUCTIONS
+        if "STRICT LOCAL PATH RESOLUTION:" not in base:
+            base += "\n" + PATH_RESOLUTION_INSTRUCTIONS
         if "KURT ACTION BLOCK SYNTAX:" not in base:
             base += "\n" + ACTION_SYNTAX_INSTRUCTIONS
         mode_rules = NORMAL_MODE_INSTRUCTIONS if mode == "normal" else AGENT_MODE_INSTRUCTIONS
@@ -4183,7 +4228,7 @@ class KurtWebApp:
         prompt = (base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules + "\n" + RESPONSE_FORMAT_INSTRUCTIONS)
         prompt += "\nCurrent session working root: " + str(root)
         prompt += "\nWorking root type: " + ("USER-LINKED FOLDER; every change still needs approval." if linked else "PRIVATE PER-CHAT ISOLATED WORKSPACE; every change still needs approval.")
-        prompt += "\nUser home for absolute/relative local read paths: " + str(Path.home())
+        prompt += "\nUser home directory for explicitly home-qualified paths only (~): " + str(Path.home()) + ". Do not use this as the base for relative paths."
         prompt += "\nSession workspace tree:\n" + self.tree(root)
         prompt += "\nUse READ/LIST for local inspection. All command/file action blocks pause for user approval."
         image_tools = self.image_generation_mcp_tools()
