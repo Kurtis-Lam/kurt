@@ -48,25 +48,6 @@ MAX_WORKSPACE_CONTEXT = 1_400_000
 MAX_CHATS = 100
 MAX_MESSAGES_PER_CHAT = 300
 
-PATH_RESOLUTION_INSTRUCTIONS = r"""
-STRICT LOCAL PATH RESOLUTION:
-- The injected "Current session working root" and "Session workspace tree" are authoritative.
-  Every relative READ/LIST path is resolved from that exact working root (the linked folder when
-  linked, otherwise this chat's private workspace), never from the process current directory or
-  the user's home directory. A home-directory target must be written explicitly as ~/path or as
-  an absolute path. A missing relative path must never be silently reinterpreted elsewhere.
-- Never guess a filename or invent a placeholder path such as relative/path.py, path/to/file.py,
-  example.py, or <filename>. Use only paths supplied by the user, shown in the injected tree, or
-  returned by an actual LIST result. If the requested target is not in the tree and its exact
-  name/location is uncertain, LIST its known parent first (or the session root if the parent is
-  unknown); do not issue a speculative READ. Read only a confirmed exact file entry.
-- If the target is still absent, state that it was not found and ask for the exact path. Do not
-  follow a failed READ by listing an unrelated directory, trying a different base directory, or
-  retrying the same guessed path. Absolute paths and explicit ~/... paths are allowed when the
-  user identifies a location outside the session root.
-"""
-
-
 WEB_INSTRUCTIONS = r"""
 KURT WEB INTERFACE RULES:
 - You are Kurt, the local assistant in this application. Speak as Kurt.
@@ -85,6 +66,8 @@ KURT WEB INTERFACE RULES:
   propose deleting one regular local file, including an absolute path outside the chat workspace,
   when the current OS account has permission. Use RUN (or AGENT_RUN for compatibility) to propose
   one terminal command.
+- Act only on what the user's latest message asks for. Do not start unrelated work, create
+  projects or folders, or run commands the user did not request.
 - A pending action must stop the current response until the user approves or declines it.
   Do not claim a command, file change, or deletion succeeded before the approval result confirms it.
 - Before file changes or deletions, provide a concise Change summary naming each target and why it changes.
@@ -100,59 +83,42 @@ KURT WEB INTERFACE RULES:
 
 ACTION_SYNTAX_INSTRUCTIONS = r"""
 KURT ACTION BLOCK SYNTAX:
-- Action blocks are executable application protocol, not examples, quotations, or ordinary prose.
-  Never emit one to explain syntax, narrate a plan, or describe what a command might do.
-- Emit an action block only when that exact action is genuinely needed to fulfill the user's request.
-  If no local command or tool action is needed, answer normally and do not emit any action marker.
-- Do not use READ/LIST/RUN to rediscover information already present in the active Kurt prompt,
-  conversation history, or attached context. Answer informational questions about those sources
-  directly from context. In particular, never launch a terminal command for a simple explanatory,
-  factual, or prompt-inspection question unless the user explicitly asks you to execute something.
-- To run a terminal command, output exactly one complete block, with a real shell command in its body:
+- To run a terminal command, output exactly this block and nothing else for that step
+  (the placeholder below only shows the shape; never copy it, and never run a command that
+  the user's request does not call for):
 @@@ RUN
-mkdir discord-bot
+<one shell command chosen for the user's current request>
 @@@ END
-- A RUN body must contain executable shell command text only. Never include a language label,
-  Markdown backticks/fences, an explanation, an instruction fragment, or natural-language prose.
-  Do not wrap the action block in a code fence or quote it.
-- To read a file: @@@ READ on its own line, the absolute or relative path on the next line, then
-  @@@ END on its own line. To list a directory, use @@@ LIST and one path line, then @@@ END.
+- To read a file: @@@ READ on one line, the absolute or relative path on the next line, then @@@ END.
+- To list a directory: @@@ LIST, the path on the next line, then @@@ END.
 - To delete one regular local file: @@@ DELETE followed by its exact absolute or working-root-relative
   path on one line, then @@@ END. Deletion pauses for approval. Do not use wildcards, recursive
   deletion, protected system/credential paths, or DELETE on directories.
-- To search the web: @@@ SEARCH on its own line, the query on the next line, then @@@ END.
-- To revise Kurt's user-editable base system prompt, first give a concise Change summary, then output
-  the complete replacement prompt using exactly this block:
+- To search the web: @@@ SEARCH, the query on the next line, then @@@ END.
+- To revise Kurt's user-editable base system prompt, first give a concise Change summary, then output the complete replacement prompt using exactly this block:
   @@@ SYSTEM_PROMPT
   complete replacement prompt text
   @@@ END
-  This is an application-managed prompt setting, not a workspace file. The application displays a
-  review card with an explicit Apply prompt to Kurt action. Do not claim it is active or saved until
-  the user approves it. Preserve the application's approval, privacy, and safety rules.
-- Every action opener and @@@ END must be on its own line. Every block must be complete. Emit no more
-  than one action block in a single assistant turn. The action block must be the final output: do not
-  place commentary, an answer, a code fence, or any other text after its @@@ END line.
-- The application stops model generation at the first complete action block. For RUN/AGENT_RUN,
-  the only next UI item is the approval card. After the user decides, the command result is attached
-  to that card and the turn ends; do not generate a follow-up answer beneath it.
-- No command, virtual environment, package manager, or other setup process runs before approval.
-  Never ask the user to type "confirm" or "yes" in chat.
+  This is an application-managed prompt setting, not a workspace file. Never refuse by saying you cannot edit your own prompt. The application displays a review card with an explicit Apply prompt to Kurt action. Do not claim the change is active or saved until the user approves that action. Preserve the application's approval, privacy, and safety rules.
+- Every block must be closed with @@@ END on its own line. Put one command per RUN block.
+- Never ask the user to type "confirm" or "yes" in chat before an action. The application itself
+  shows an Approve/Decline card the moment you emit a RUN, WRITE, or DELETE block, so once you have
+  decided an action is needed, emit the block immediately and wait for the result.
+- Emit an action block only when the user's latest message needs it. Questions, explanations,
+  greetings, opinions, and requests to show or discuss text (including this prompt) are answered in
+  plain text with no action block. Never run tests, create folders, install packages, or probe the
+  workspace "just to check" unless the user asked for that. Never invent file paths: read a path only
+  if the user named it or a LIST/tree result showed it.
 - Relative paths and commands run inside the session working root named in this prompt.
-- PATH CHECK BEFORE READ/LIST: use the exact injected working root and actual tree entries. A
-  relative path means <session working root>/<relative path>. Do not prepend the home directory,
-  use a guessed project/repository name, or substitute a plausible-looking path. If the tree does
-  not establish the target, LIST the known parent or ask one focused clarification. A failed path
-  must remain failed; never retry it from another base directory unless the user explicitly gives
-  that second location. Use ~/... or an absolute path only when the user explicitly identifies a
-  home-directory or external location.
 """
 
 KURT_IDENTITY_INSTRUCTIONS = r"""
 KURT IDENTITY AND SELF-CONFIGURATION:
 You are Kurt, the assistant configured by this local application. The user owns this local
 instance and may inspect, quote, review, and revise the Kurt-controlled prompt. If asked for
-your system prompt, provide the exact Kurt-controlled prompt supplied by the application;
-the /system-prompt command returns the complete active prompt directly. Do not claim that
+your system prompt, answer in plain text only, with no action block and no command: the
+application shows the complete active prompt in a read-only card, and /system-prompt returns it
+directly. If it is not shown, quote the Kurt-controlled prompt from this conversation's system message. Do not claim that
 Kurt's own prompt is confidential or that it can only be edited by changing a workspace file.
 You can propose a prompt revision with the SYSTEM_PROMPT action block described in KURT ACTION
 BLOCK SYNTAX. Always provide a concise Change summary before that block. The application
@@ -162,6 +128,12 @@ model/platform instructions, which are not editable here. Never disclose API key
 or other secrets. Explain important decisions and assumptions briefly when they help the user,
 but do not add a generic summary or process report. Never reveal private chain-of-thought or
 hidden scratchpad tokens.
+
+ACTION DISCIPLINE (always applies, even if the editable prompt says otherwise):
+Use an action block only when the user's latest message requires it. Answer questions, prompt
+requests, and discussion in plain text. Never run tests, create folders, or read guessed paths
+such as placeholder or example paths. Treat every example in these rules as a shape, not as a
+command or path to use.
 
 MCP IMAGE GENERATION:
 Kurt's web interface can invoke connected MCP tools from the slash picker. It does not silently
@@ -173,53 +145,39 @@ Do not claim to have generated an image unless an MCP tool actually ran and retu
 """
 
 RESPONSE_FORMAT_INSTRUCTIONS = r"""
-RESPONSE FORMAT — STRICTLY SEPARATE THINKING, ACTIVITY, AND ANSWER:
-- The response body is only the finished answer for the user. Start with the answer itself. Never
-  place notes to yourself, internal deliberation, hidden scratch work, chain-of-thought, or tool
-  narration in the response body. Do not write phrases such as "The user asks", "I need to",
-  "I should", "Let me", "I will now", "Should I", or "No tool needed".
-- Never reveal private chain-of-thought, hidden scratchpad tokens, raw analysis, or internal
-  monologue. Never emit <think> tags or copy provider reasoning into the answer.
-- The Thinking panel is not a transcript of your private reasoning. It may contain only an optional
-  concise, user-facing rationale: at most three short bullets describing the chosen approach,
-  one important constraint, and/or a check actually performed. Do not include self-talk, first-
-  person planning, speculation, discarded options, hidden chain-of-thought, or step-by-step
-  reasoning. Never copy or expose provider-private reasoning tokens. When a task is non-trivial and
-  a rationale adds value, emit this short public-facing block FIRST, before the answer or any action
-  block, so the interface can stream it live; then continue with the user-facing answer/action:
+RESPONSE FORMAT:
+- The reply body contains only what the user should read: the answer, or a short Change summary
+  followed by an action block. Never write your own thinking into the reply body. Do not narrate
+  your reasoning ("Let me think", "The user wants", "I should", "First, I'll analyze"), do not
+  restate the request, and do not open with a recap or process report. Start with the answer.
+- Reasoning belongs only in the model's own reasoning channel or inside a RATIONALE block, never
+  in ordinary paragraphs. Never emit <think> tags and never reveal private chain-of-thought,
+  scratchpad text, or internal monologue.
+- Add a RATIONALE block only for substantive analysis, design decisions, multi-file code changes,
+  or non-trivial debugging. Omit it for greetings, simple questions, factual lookups, prompt
+  requests, and any reply that is a single action block. When used, place it before the answer
+  in exactly this form, keep it to a few lines, and write it for the user, not as a transcript
+  of your thinking:
   @@@ RATIONALE
-  - Approach: <brief high-level explanation>
-  - Key consideration: <one important constraint or trade-off>
-  - Check: <what was actually verified, if applicable>
+  - Approach: the chosen approach and why it fits.
+  - Key considerations: only the constraints or trade-offs that changed the decision.
+  - Checks and uncertainty: what was actually checked and what remains unverified.
   @@@ END
-  Omit the block for simple questions. The rationale is not the answer and must not repeat it.
-  Use only complete, concise public-facing bullets with these exact labels: Approach, Key
-  consideration, and Check. It is safe for the interface to stream this explicitly authored block;
-  private provider reasoning and <think> content must remain hidden at all times.
-- WHENEVER YOU MAKE CODE CHANGES: output only the modified code/source files and one
-  comment-free git_commands.txt. Do not include unchanged files, prose summaries, or extra
-  deliverables unless the user explicitly requests them. In git_commands.txt, for EACH modified
-  file, put its `git add <file>` line immediately followed by a detailed per-file `git commit`
-  (use a descriptive subject and explanatory body). Do not include co-author lines, session tags,
-  or comments. The final line must be `git push`. Include the push command in the file, but do not
-  execute it unless the user separately requests and approves that command.
-- Keep the final answer, the Thinking panel, and the activity timeline strictly separate. File
-  reads, searches, command approvals, command results, and file proposals belong only in the
-  activity timeline. Do not narrate those events in the response body.
-- Explain assumptions, decisions, and verification only when they materially help. Distinguish
-  checks actually performed from suggestions or work that has not been done.
+  Use only the points that apply. Do not repeat the question or summarize the final answer.
+  The block is shown in the Activity timeline, not as a separate panel.
+- Clearly separate checks actually performed from suggestions or work not yet done. Never claim
+  an action happened unless the application reports that it actually happened.
 - Whenever you provide source code, commands, configuration, or a multi-line code example,
-  put it in a fenced Markdown code block with an appropriate language label. This applies to
-  examples in the answer only; executable application action blocks must remain raw and must
-  never be put inside Markdown fences.
+  put it in a fenced Markdown code block with an appropriate language label (for example,
+  ```python). Do not put multi-line code in ordinary paragraphs or inline code.
 - Long fenced code blocks are automatically presented as downloadable file cards by the
-  interface. Keep short examples fenced; do not replace useful code with a verbal description.
-- Never claim an action happened unless the application reports that it actually happened.
+  interface. Keep short examples fenced in the answer; do not replace useful code with a
+  verbal description.
 """
 
 EFFORT_INSTRUCTIONS = {
-    "thinking": "THINKING EFFORT: use medium reasoning where the provider supports effort controls. Keep private reasoning private. When a substantive decision needs explanation, put only a concise, user-facing, high-level rationale (no more than three short bullets) in the explicit RATIONALE block. Do not stream or quote provider reasoning. Never write self-talk, planning notes, or a thought transcript.",
-    "expert": "EXPERT EFFORT: use high/deep reasoning where the provider supports effort controls and verify important details carefully. Keep private reasoning private. When a substantive decision needs explanation, put only a concise, user-facing rationale in at most three short bullets in the explicit RATIONALE block; describe decisive trade-offs and checks, not the reasoning process. Do not stream or quote provider reasoning, and never write self-talk or a thought transcript.",
+    "thinking": "THINKING EFFORT: use medium reasoning where the provider supports effort controls. Keep all reasoning out of the reply body. For substantive requests only, add a brief RATIONALE block (approach, decisive considerations, checks); simple requests get no rationale. Never expose private chain-of-thought or internal monologue.",
+    "expert": "EXPERT EFFORT: use high/deep reasoning where the provider supports effort controls and verify important details carefully. Keep all reasoning out of the reply body. For substantive requests only, add a detailed RATIONALE block (consequential decisions, trade-offs, alternatives, checks); simple requests get no rationale. Be precise about uncertainty and never expose private chain-of-thought or internal monologue.",
 }
 
 NORMAL_MODE_INSTRUCTIONS = r"""
@@ -262,84 +220,11 @@ def valid_mode_value(value, fallback="normal"):
     return raw if raw in ("normal", "agent") else (fallback if fallback in ("normal", "agent") else "normal")
 
 ACTION_MARKER_RE = r"@\s*@\s*@"
-_ACTION_NAMES = r"RUN|SEARCH|READ|LIST|DELETE|AGENT_RUN|AGENT_READ|AGENT_LIST|WRITE|EDIT|AGENT_WRITE|SUBAGENT|SYSTEM_PROMPT"
-_ACTION_OPEN_LINE_RE = re.compile(
-    r"(?im)^" + ACTION_MARKER_RE + r"[ \t]*(?:" + _ACTION_NAMES + r")\b[^\r\n]*(?:\r?\n|$)"
-)
-_ACTION_END_LINE_RE = re.compile(r"(?im)^" + ACTION_MARKER_RE + r"[ \t]*END[ \t]*$")
-
-
-def _markdown_fence_ranges(value):
-    """Return Markdown fenced-code ranges so protocol markers inside examples stay inert."""
-    text = str(value or "")
-    ranges = []
-    offset = 0
-    opening = None
-    for line in text.splitlines(keepends=True):
-        bare = line.rstrip("\r\n")
-        if opening is None:
-            match = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})", bare)
-            if match:
-                fence = match.group(1)
-                opening = (offset, fence[0], len(fence))
-            elif bare.startswith("    ") or bare.startswith("\t"):
-                ranges.append((offset, offset + len(line)))
-        else:
-            start, marker, width = opening
-            if re.match(r"^[ \t]{0,3}" + re.escape(marker) + r"{" + str(width) + r",}[ \t]*$", bare):
-                ranges.append((start, offset + len(line)))
-                opening = None
-        offset += len(line)
-    if opening is not None:
-        ranges.append((opening[0], len(text)))
-    return ranges
-
-
-def _offset_is_fenced(offset, ranges):
-    return any(start <= offset < end for start, end in ranges)
-
-
-def _find_action_matches(pattern, value, require_line_start=False):
-    text = str(value or "")
-    ranges = _markdown_fence_ranges(text)
-    matches = []
-    for match in pattern.finditer(text):
-        if _offset_is_fenced(match.start(), ranges):
-            continue
-        closer = _ACTION_END_LINE_RE.search(text, match.start(), match.end())
-        if closer and _offset_is_fenced(closer.start(), ranges):
-            continue
-        if require_line_start:
-            line_start = text.rfind("\n", 0, match.start()) + 1
-            if text[line_start:match.start()].strip():
-                continue
-        matches.append(match)
-    return matches
-
-
-def _first_complete_action_end(value):
-    """Find the first complete action block outside Markdown fences."""
-    text = str(value or "")
-    fences = _markdown_fence_ranges(text)
-    openers = [(match.start(), match.end()) for match in _ACTION_OPEN_LINE_RE.finditer(text)]
-    openers.extend((match.start(), match.end()) for match in ALT_ACTION_OPENER_RE.finditer(text))
-    for start, end in sorted(openers):
-        if _offset_is_fenced(start, fences):
-            continue
-        closer = _ACTION_END_LINE_RE.search(text, end)
-        while closer and _offset_is_fenced(closer.start(), fences):
-            closer = _ACTION_END_LINE_RE.search(text, closer.end())
-        if closer:
-            return closer.end()
-    return None
-
-
 def _tolerant_action_re(name):
-    """Parse only complete, line-oriented action blocks; an unfinished block is never executable."""
     return re.compile(
-        r"(?m)^" + ACTION_MARKER_RE + r"[ \t]*" + name + r"\b[ \t]*([^\r\n]*)[ \t]*"
-        r"(?:\r?\n([\s\S]*?))?\r?\n^[ \t]*" + ACTION_MARKER_RE + r"[ \t]*END[ \t]*$",
-        re.I | re.M,
+        ACTION_MARKER_RE + r"\s*" + name + r"\b[ \t]*([^\n]*?)[ \t]*(?:\r?\n((?:(?!@\s*@\s*@).)*?))?"
+        r"(?:\r?\n?" + ACTION_MARKER_RE + r"\s*END\b|\s*(?=" + ACTION_MARKER_RE + r")|\s*\Z)",
+        re.I | re.S,
     )
 
 
@@ -355,20 +240,23 @@ DELETE_ACTION_RE = _tolerant_action_re("DELETE")
 AGENT_RUN_ACTION_RE = _tolerant_action_re("AGENT_RUN")
 AGENT_READ_ACTION_RE = _tolerant_action_re("AGENT_READ")
 AGENT_LIST_ACTION_RE = _tolerant_action_re("AGENT_LIST")
-SUBAGENT_ACTION_RE = re.compile(r"(?m)^" + ACTION_MARKER_RE + r"[ \t]*SUBAGENT[ \t]+([^\r\n]+)\r?\n([\s\S]*?)\r?\n^[ \t]*" + ACTION_MARKER_RE + r"[ \t]*END[ \t]*$", re.I | re.M)
-AGENT_WRITE_ACTION_RE = re.compile(r"(?m)^" + ACTION_MARKER_RE + r"[ \t]*AGENT_WRITE[ \t]+([^\r\n]+)\r?\n([\s\S]*?)\r?\n^[ \t]*" + ACTION_MARKER_RE + r"[ \t]*END[ \t]*$", re.I | re.M)
-RATIONALE_ACTION_RE = re.compile(
-    r"(?im)^[ \t]*@{2,3}[ \t]*RATIONALE[ \t]*\r?\n([\s\S]*?)\r?\n^[ \t]*@{2,3}[ \t]*END[ \t]*$"
-)
-SUMMARY_ACTION_RE = re.compile(
-    r"(?im)^[ \t]*@{2,3}[ \t]*SUMMARY[ \t]*\r?\n([\s\S]*?)\r?\n^[ \t]*@{2,3}[ \t]*END[ \t]*$"
-)  # Legacy compatibility
-SYSTEM_PROMPT_ACTION_RE = re.compile(r"(?m)^" + ACTION_MARKER_RE + r"[ \t]*SYSTEM_PROMPT[ \t]*\r?\n([\s\S]*?)\r?\n^[ \t]*" + ACTION_MARKER_RE + r"[ \t]*END[ \t]*$", re.I | re.M)
+SUBAGENT_ACTION_RE = re.compile(ACTION_MARKER_RE + r"\s*SUBAGENT\s+([^\n]+)\r?\n(.*?)\r?\n?" + ACTION_MARKER_RE + r"\s*END", re.I | re.S)
+AGENT_WRITE_ACTION_RE = re.compile(ACTION_MARKER_RE + r"\s*AGENT_WRITE\s+([^\n]+)\r?\n(.*?)\r?\n?" + ACTION_MARKER_RE + r"\s*END", re.I | re.S)
+RATIONALE_ACTION_RE = re.compile(r"@{2,3}\s*RATIONALE\s*\n(.*?)\n?@{2,3}\s*END", re.I | re.S)
+SUMMARY_ACTION_RE = re.compile(r"@{2,3}\s*SUMMARY\s*\n(.*?)\n?@{2,3}\s*END", re.I | re.S)  # Legacy compatibility
+SYSTEM_PROMPT_ACTION_RE = re.compile(ACTION_MARKER_RE + r"\s*SYSTEM_PROMPT\s*\r?\n(.*?)\r?\n?" + ACTION_MARKER_RE + r"\s*END", re.I | re.S)
 WEB_ACTION_RE = re.compile(
-    r"(?m)^" + ACTION_MARKER_RE + r"[ \t]*(?:RUN|SEARCH|READ|LIST|DELETE|SYSTEM_PROMPT|AGENT_RUN|AGENT_READ|AGENT_LIST|AGENT_WRITE|SUBAGENT)\b[^\r\n]*\r?\n[\s\S]*?\r?\n^[ \t]*" + ACTION_MARKER_RE + r"[ \t]*END[ \t]*$", re.I | re.M
+    ACTION_MARKER_RE + r"\s*(?:RUN|SEARCH|READ|LIST|DELETE|SYSTEM_PROMPT|AGENT_RUN|AGENT_READ|AGENT_LIST|AGENT_WRITE|SUBAGENT)\b[^\n]*\r?\n[\s\S]*?" + ACTION_MARKER_RE + r"\s*END", re.I
 )
+_SP_OWNER = r"(?:(?:your|its|kurt(?:['\u2019]?s)?|the|ur)\s+)?"
+_SP_NOUN = r"(?:system\s*(?:prompt|message|instructions?)|base\s+prompt|initial\s+prompt)"
 SYSTEM_PROMPT_REQUEST_RE = re.compile(
-    r"^\s*(?:/system-prompt|(?:what\s+is|what's)\s+(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt|(?:show|share|reveal|print|display|quote|give)\s+(?:me\s+)?(?:your\s+|its\s+|kurt(?:'s)?\s+|the\s+)?system\s+prompt)\s*[?!.\s]*$",
+    r"^\s*(?:please\s+|pls\s+|hey\s+kurt[,!]?\s*|kurt[,!]?\s*)*(?:"
+    r"/system-prompt"
+    r"|(?:what\s+is|what['\u2019]?s|whats|what\s+are)\s+" + _SP_OWNER + _SP_NOUN +
+    r"|(?:show|share|reveal|print|display|quote|give|tell|send|paste|output|repeat)\s+(?:me\s+)?" + _SP_OWNER + _SP_NOUN +
+    r"|(?:can|could|would)\s+you\s+(?:please\s+)?(?:show|share|reveal|print|display|quote|give|tell|send|paste)\s+(?:me\s+)?" + _SP_OWNER + _SP_NOUN +
+    r")\s*(?:please|pls)?\s*[?!.\s]*$",
     re.I,
 )
 IMAGE_GENERATION_INTENT_RE = re.compile(
@@ -1695,11 +1583,7 @@ function hasMathMarkup(value){return /\\begin\{(?:equation\*?|align\*?|gather\*?
 window.MathJax={tex:{inlineMath:[],displayMath:[['\\[','\\]']],processEscapes:true,packages:{'[+]':['ams']}},options:{skipHtmlTags:['script','noscript','style','textarea','pre','code']},startup:{typeset:false}};
 function typesetMath(root){if(!root||!window.MathJax?.typesetPromise)return;try{window.MathJax.typesetClear?.([root]);window.MathJax.typesetPromise([root]).catch(error=>console.warn('Math rendering failed:',error))}catch(error){console.warn('Math rendering failed:',error)}}
 const mathJaxScript=document.createElement('script');mathJaxScript.src='https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js';mathJaxScript.async=true;mathJaxScript.onload=()=>document.querySelectorAll('.content').forEach(typesetMath);mathJaxScript.onerror=()=>console.warn('MathJax could not be loaded; equations will remain centered as TeX text.');document.head.appendChild(mathJaxScript);
-function isUserFacingRationale(value){const text=String(value||'').trim();if(!text||text.length>900)return false;const lines=text.split(/\r?\n/).filter(line=>line.trim());if(!lines.length||lines.length>3||lines.some(line=>line.length>260||!/^[-*]\s*(?:Approach|Key consideration|Check):\s+\S/i.test(line.trim())))return false;return !/\b(?:the user (?:asks|asked|wants|requested|is asking)|i (?:should|need to|must|have to|will now|am going to)|let me|we (?:need to|should|must|have to)|should i|no tool (?:is )?needed|tool not needed|need to answer the user|response format|internal monologue|chain.of.thought|let['’]s (?:answer|respond|write)|need likely respond)\b/i.test(text)}
-function markdownFenceRanges(src){const ranges=[];let offset=0,opening=null;for(const line of (src.match(/[^\n]*(?:\n|$)/g)||[])){if(!line)continue;const bare=line.replace(/\r?\n$/,'');if(!opening){const marker=/^[ \t]{0,3}(`{3,}|~{3,})/.exec(bare);if(marker)opening={start:offset,char:marker[1][0],width:marker[1].length};else if(bare.startsWith('    ')||bare.startsWith('\t'))ranges.push([offset,offset+line.length])}else{const close=new RegExp('^[ \t]{0,3}'+opening.char+'{'+opening.width+',}[ \t]*$');if(close.test(bare)){ranges.push([opening.start,offset+line.length]);opening=null}}offset+=line.length}if(opening)ranges.push([opening.start,src.length]);return ranges}
-function findOutsideFence(pattern,src,ranges,from=0){pattern.lastIndex=from;let match;while((match=pattern.exec(src))){if(!ranges.some(range=>match.index>=range[0]&&match.index<range[1]))return match;if(!match[0].length)pattern.lastIndex++}return null}
-function streamingRationalePrefix(value){const text=String(value||'').slice(0,900);const lines=text.split(/\r?\n/);const accepted=[];for(const line of lines){const clean=line.trim();if(!clean)continue;if(!/^[-*]\s*(?:Approach|Key consideration|Check):\s+\S.{0,259}$/i.test(clean))break;accepted.push(clean);if(accepted.length===3)break}const candidate=accepted.join('\n');return candidate&&isUserFacingRationale(candidate)?candidate:''}
-function splitResponseRationale(src,allowOpen=false){src=String(src||'');const fences=markdownFenceRanges(src),marker=findOutsideFence(/^[ \t]*@{2,3}[ \t]*(?:RATIONALE|SUMMARY)[ \t]*\r?\n/gim,src,fences);if(!marker)return{rationale:'',answer:src};const start=marker.index,bodyStart=start+marker[0].length,end=findOutsideFence(/^[ \t]*@{2,3}[ \t]*END\b[ \t]*$/gim,src,fences,bodyStart);if(!end){const partial=allowOpen?streamingRationalePrefix(src.slice(bodyStart)):'';return{rationale:partial,answer:src.slice(0,start).trim()}}const rationale=src.slice(bodyStart,end.index).trim(),after=src.slice(end.index+end[0].length);return{rationale:isUserFacingRationale(rationale)?rationale:'',answer:(src.slice(0,start)+'\n'+after).replace(/\n{3,}/g,'\n\n').trim()}}
+function splitResponseRationale(src,allowOpen=false){src=String(src||'');const marker=/@{2,3}\s*(?:RATIONALE|SUMMARY)\s*\r?\n/i.exec(src);if(!marker)return{rationale:'',answer:src};const start=marker.index,bodyStart=start+marker[0].length,tail=src.slice(bodyStart),end=/\r?\n?@{2,3}\s*END\b/i.exec(tail);if(!end)return allowOpen?{rationale:tail.trim(),answer:src.slice(0,start).trim()}:{rationale:'',answer:src};const rationale=tail.slice(0,end.index).trim(),after=tail.slice(end.index+end[0].length);return{rationale,answer:(src.slice(0,start)+'\n'+after).replace(/\n{3,}/g,'\n\n').trim()}}
 function renderMarkdown(src){src=String(src||'');return src.split(/((?:```|~~~)[^\n]*\n[\s\S]*?(?:```|~~~)|(?:```|~~~)[^\n]*\n[\s\S]*$|(?:```|~~~)[^\n]*$)/).map((seg,i)=>{if(i%2===0)return mdBlocks(seg);const fence=seg.slice(0,3),nl=seg.indexOf('\n');const lang=(nl<0?seg.slice(3):seg.slice(3,nl)).trim().split(/\s+/)[0]||'';let code=nl<0?'':seg.slice(nl+1);if(nl>=0&&seg.endsWith(fence))code=code.slice(0,-fence.length).replace(/\n$/,'');return '<div class="codebox"><div class="codehead"><span>'+esc(lang||'code')+'</span><button class="copy-mini" data-copy-code>Copy code</button></div><pre><code>'+esc(code.replace(/\n$/,''))+'</code></pre></div>'}).join('')}
 function splitThink(raw,streaming){return{think:'',answer:stripUnsupportedActions(raw),open:false}}
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
@@ -1789,8 +1673,8 @@ function createApprovalRow(node,item){
   if(approval.artifactPath){const open=document.createElement('button');open.type='button';open.className='ghost';open.textContent='Open file preview';open.onclick=()=>{const t=Array.from(document.querySelectorAll('.artifact-trigger')).find(b=>b.dataset.path===approval.artifactPath);if(t)t.click()};actions.appendChild(open)}
   actions.appendChild(result);box.appendChild(actions);
  }
- if(item.output)box.appendChild(outputBlock(item.output));
- return box;
+ const group=document.createDocumentFragment();group.appendChild(box);if(item.output)group.appendChild(outputBlock(item.output));
+ return group;
 }
 function outputBlock(output){
  const text=String((output&&output.text)||'');const bad=!!output&&output.ok===false;
@@ -1810,7 +1694,7 @@ function resolveApprovalPause(node,event){
 
 
 
-function endThink(node){const status=node.querySelector('.assistant-status');if(status&&node.dataset.terminalAction!=='1')status.textContent='';const seconds=node.__thinkSeconds||(node.__t0?(performance.now()-node.__t0)/1000:0);setThinkLabel(node,false,seconds);if(!node.__userToggled)setThinkOpen(node,false)}
+function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const seconds=node.__thinkSeconds||(node.__t0?(performance.now()-node.__t0)/1000:0);setThinkLabel(node,false,seconds);if(!node.__userToggled)setThinkOpen(node,false)}
 function setApprovalOutput(node,event){const entries=node.__worklog||[];const item=entries.find(value=>value&&value.kind==='approval'&&value.approval&&value.approval.id===event.approval_id);if(item){item.output=event.output;setThink(node,entries)}}
 
 
@@ -1875,8 +1759,8 @@ function renderMessage(role,content,artifacts,extra){
   bubble.appendChild(thinkBlock());bubble.querySelector('.think-head').onclick=()=>{wrap.__userToggled=true;setThinkOpen(wrap,!bubble.querySelector('.work-log').classList.contains('open'))};
   bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');
   const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);renderMcpMedia(contentNode,extra?.media||[]);bindCopy(wrap);
-  wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.filter(entry=>!(entry&&entry.kind==='thinking'&&!isUserFacingRationale(entry.detail))).slice():[];
-  if(extra?.reasoning&&!wrap.__worklog.some(entry=>entry&&entry.kind==='thinking')&&isUserFacingRationale(extra.reasoning))wrap.__worklog.unshift({kind:'thinking',text:'Thinking',ok:null,detail:extra.reasoning});
+  wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];
+  if(extra?.reasoning&&!wrap.__worklog.some(entry=>entry&&entry.kind==='thinking'))wrap.__worklog.unshift({kind:'thinking',text:'Thinking',ok:null,detail:extra.reasoning});
   setThink(wrap,wrap.__worklog);setThinkLabel(wrap,false,extra?.thinkingSeconds||(extra?.stats&&extra.stats.thought_seconds)||0);
   setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);
   wrap.__artifacts=Array.isArray(artifacts)?artifacts.slice():[];
@@ -2528,7 +2412,7 @@ async function send(){
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
  const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',blockRationale='',pending=false,thinkStart=0,retryMode=null;node.__artifacts=[];const showReasoning=live=>{reasoning=[modelRationale,blockRationale].filter(Boolean).join('\n\n');setReasoning(node,reasoning,live)};
  const controller=new AbortController();state.abort=controller;
- const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseRationale(safeLiveDraft(raw),true);if(parsed.rationale&&parsed.rationale!==blockRationale){blockRationale=parsed.rationale;showReasoning(true)}const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
+ const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseRationale(safeLiveDraft(raw),true);if(parsed.rationale){if(!thinkStart)thinkStart=performance.now();blockRationale=parsed.rationale;showReasoning(true)}const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
  try{
   const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text:requestText,skill_id:skillId,route,effort:state.effort,mode:state.mode,message_id:messageId}),signal:controller.signal});
@@ -2545,12 +2429,10 @@ async function send(){
     else if(event.type==='agents'){node.__agents=event.agents||[];node.querySelector('.assistant-status').textContent=(event.running||0)+' subagent(s) running';renderAgentBoard(node)}
     else if(event.type==='agent_event'){const agent=(node.__agents||[]).find(item=>item.id===event.id);if(agent){agent.status=event.status;agent.detail=event.detail||''}node.querySelector('.assistant-status').textContent=(event.running||0)+' subagent(s) running';renderAgentBoard(node)}
     else if(event.type==='draft_reset'){raw='';blockRationale='';modelRationale='';node.__thinkingEntry=null;contentEl.replaceChildren();node.dataset.raw='';queue()}
-    else if(event.type==='response_reset'){raw='';contentEl.replaceChildren();node.dataset.raw='';queue()}
     else if(event.type==='draft'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}
     else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();modelRationale+=event.text||'';node.querySelector('.assistant-status').textContent='Thinking…';showReasoning(true)}
-    else if(event.type==='rationale'){if(!thinkStart)thinkStart=performance.now();setReasoning(node,event.text||'')}
     else if(event.type==='reasoning_reset'){const entries=node.__worklog||[];const entry=node.__thinkingEntry;if(entry){const at=entries.indexOf(entry);if(at>=0)entries.splice(at,1);node.__thinkingEntry=null;setThink(node,entries)}modelRationale='';blockRationale=''}
-    else if(event.type==='done'){pending=false;retryMode=event.mode_switch_required||null;raw=event.content||'';const parsed=splitResponseRationale(raw,false);const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;node.__worklog=Array.isArray(event.worklog)?event.worklog.slice(): (node.__worklog||[]);node.__thinkingEntry=null;setThink(node,node.__worklog);node.__thinkSeconds=Number(event.thinking_seconds)||Number(event.stats&&event.stats.thought_seconds)||0;setResponseMeta(node,event.stats,event.model);node.__artifacts=event.artifacts||node.__artifacts||[];renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);if(event.terminal_action){node.dataset.terminalAction='1';node.querySelector('.assistant-status').textContent=event.terminal_status||'Command finished'}setTitle(event.title||'Conversation',[event.model||'',event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='done'){pending=false;retryMode=event.mode_switch_required||null;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;node.__worklog=Array.isArray(event.worklog)?event.worklog.slice():(node.__worklog||[]);node.__thinkingEntry=null;setThink(node,node.__worklog);node.__thinkSeconds=Number(event.thinking_seconds)||Number(event.stats&&event.stats.thought_seconds)||0;setResponseMeta(node,event.stats,event.model);node.__artifacts=event.artifacts||node.__artifacts||[];renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);setTitle(event.title||'Conversation',[event.model||'',event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
     else if(event.type==='error')throw new Error(event.message||'The model request failed');
    }
   }
@@ -2651,10 +2533,10 @@ resetFailoverForm();
 </script></body></html>'''
 
 
-# Provider reasoning channels are private and are never copied into the Thinking panel.
-# The only user-visible rationale is a validated explicit RATIONALE block in content.
-THINKING_KINDS = ("thinking", "reasoning", "thought", "analysis")
-MODEL_RATIONALE_KINDS = ()
+# Raw thinking/reasoning channels can contain private chain-of-thought. They are
+# deliberately ignored; only provider-designated summary channels are displayed.
+THINKING_KINDS = ("thinking", "reasoning", "thought")
+MODEL_RATIONALE_KINDS = ("reasoning_summary", "summary", "summary_text", "analysis_summary")
 THINK_OPEN_RE = re.compile(r"<think(?:ing)?>", re.I)
 THINK_CLOSE_RE = re.compile(r"</think(?:ing)?>", re.I)
 THINK_TAG_RE = re.compile(r"<(/)?think(?:ing)?>", re.I)
@@ -2680,59 +2562,17 @@ def _clean_action_text(text):
 
 
 def action_argument(match):
-    """Return the exact payload from a complete action block without flattening scripts."""
+    """Join an action header and optional body; tolerate commands split across lines."""
     header = _clean_action_text(match.group(1))
     body = _clean_action_text(match.group(2))
+    if not re.search(ACTION_MARKER_RE + r"\s*END\s*$", match.group(0), re.I):
+        if header:
+            return header
+        first_line = next((line.strip() for line in body.splitlines() if line.strip()), "")
+        return first_line
     if header and body:
-        return header + "\n" + body
-    return header or body
-
-
-_SHELL_BUILTINS = {
-    "[", ":", "alias", "bg", "break", "cd", "command", "continue", "echo",
-    "eval", "exec", "exit", "export", "false", "getopts", "hash", "jobs", "kill",
-    "local", "printf", "pwd", "read", "readonly", "return", "set", "shift", "source",
-    "test", "time", "times", "trap", "true", "type", "typeset", "ulimit", "umask",
-    "unalias", "unset", "wait",
-}
-_ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$", re.S)
-
-
-def validate_terminal_command(command):
-    """Reject malformed prose/action payloads before they can reach the approval gate."""
-    value = str(command or "").strip()
-    if not value:
-        return "The RUN block did not contain a command. Nothing was executed."
-    if len(value) > 4000:
-        return "The command exceeds the 4,000-character limit. Nothing was executed."
-    if "\x00" in value:
-        return "The command contains a null character. Nothing was executed."
-    if "`" in value:
-        return "The RUN block contains Markdown backticks or a fenced-code label, not plain shell command text. Nothing was executed."
-    try:
-        tokens = shlex.split(value, posix=True)
-    except ValueError as exc:
-        return "The command has invalid shell quoting ({}). Nothing was executed.".format(exc)
-    while tokens and _ENV_ASSIGNMENT_RE.match(tokens[0]):
-        tokens.pop(0)
-    if not tokens:
-        return "The RUN block contains only environment assignments and no executable command. Nothing was executed."
-    executable = tokens[0]
-    if executable in _SHELL_BUILTINS:
-        return None
-    candidate = Path(executable).expanduser()
-    if candidate.is_absolute():
-        if candidate.is_file() and (os.name == "nt" or os.access(str(candidate), os.X_OK)):
-            return None
-        return "The command starts with a path that is not an executable file: {}. Nothing was executed.".format(executable)
-    if "/" in executable or "\\" in executable:
-        # Relative paths are resolved by the command runner inside the approved workspace.
-        return None
-    search_path = list(filter(None, os.environ.get("PATH", "").split(os.pathsep)))
-    search_path.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
-    if any((Path(folder) / executable).is_file() and (os.name == "nt" or os.access(str(Path(folder) / executable), os.X_OK)) for folder in dict.fromkeys(search_path)):
-        return None
-    return "'{}' is not a recognized executable or shell built-in. This looks like explanatory text rather than a command, so nothing was executed.".format(executable)
+        return header + " " + re.sub(r"\s+", " ", body)
+    return header or re.sub(r"\s+", " ", body)
 
 
 def strip_unsupported_actions(value):
@@ -2743,44 +2583,14 @@ def strip_unsupported_actions(value):
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-_INTERNAL_RATIONALE_RE = re.compile(
-    r"\b(?:the user (?:asks|asked|wants|requested|is asking)|"
-    r"i (?:should|need to|must|have to|will now|am going to)|"
-    r"let me|we (?:need to|should|must|have to)|should i|"
-    r"no tool (?:is )?needed|tool not needed|need to answer the user|"
-    r"response format|internal monologue|chain.of.thought|"
-    r"let's (?:answer|respond|write)|need likely respond)\b",
-    re.I,
-)
-
-
-def clean_user_rationale(value):
-    """Accept only short user-facing summaries; reject self-talk and thought transcripts."""
-    text = re.sub(r"\n{3,}", "\n\n", str(value or "")).strip()
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not text or len(text) > 900 or not 1 <= len(lines) <= 3:
-        return ""
-    if any(not re.match(r"^-\s*(?:Approach|Key consideration|Check):\s+\S", line, re.I) for line in lines):
-        return ""
-    if _INTERNAL_RATIONALE_RE.search(text):
-        return ""
-    if any(len(line) > 260 for line in lines):
-        return ""
-    return text
-
-
 def split_thinking(raw):
-    """Extract only short, user-facing rationale and discard private inline thought tags."""
+    """Extract user-facing rationale while discarding private inline thought tags."""
     reply = str(raw or "")
-    rationale = []
-    for pattern in (RATIONALE_ACTION_RE, SUMMARY_ACTION_RE):
-        matches = _find_action_matches(pattern, reply)
-        for match in matches:
-            summary = clean_user_rationale(match.group(1))
-            if summary:
-                rationale.append(summary)
-        for match in reversed(matches):
-            reply = reply[:match.start()] + reply[match.end():]
+    rationale = [match.group(1).strip() for match in RATIONALE_ACTION_RE.finditer(reply) if match.group(1).strip()]
+    if not rationale:
+        rationale = [match.group(1).strip() for match in SUMMARY_ACTION_RE.finditer(reply) if match.group(1).strip()]
+    reply = RATIONALE_ACTION_RE.sub("", reply)
+    reply = SUMMARY_ACTION_RE.sub("", reply)
     opener = THINK_OPEN_RE.search(reply)
     closer = THINK_CLOSE_RE.search(reply)
     if closer and (not opener or closer.start() < opener.start()):
@@ -3722,12 +3532,7 @@ class KurtWebApp:
     def editable_system_prompt(self):
         root = self.workspace()
         custom = str(self.settings.get("system_prompt") or "").strip()
-        prompt = custom or K.SYSTEM.replace("{cwd}", str(root))
-        if "KURT WEB INTERFACE RULES:" not in prompt:
-            prompt += "\n" + WEB_INSTRUCTIONS
-        if "STRICT LOCAL PATH RESOLUTION:" not in prompt:
-            prompt += "\n" + PATH_RESOLUTION_INSTRUCTIONS
-        return prompt
+        return custom or (K.SYSTEM.replace("{cwd}", str(root)) + WEB_INSTRUCTIONS)
 
     def chat_workspace(self, chat_id, create=True):
         chat_id = str(chat_id or '')
@@ -3793,10 +3598,11 @@ class KurtWebApp:
             raise ValueError("A file or directory path is required.")
         candidate = Path(raw).expanduser()
         if not candidate.is_absolute():
-            # Relative reads are rooted only in this chat's active workspace. Never fall
-            # back to Path.home(): that turns a missing/guessed workspace path into an
-            # unrelated lookup under the user's home directory.
-            candidate = self.chat_work_root(chat_id, create=False) / candidate
+            working_candidate = self.chat_work_root(chat_id) / candidate
+            if working_candidate.exists():
+                candidate = working_candidate
+            else:
+                candidate = Path.home() / candidate
         return self.resolve_agent_path(str(candidate), allow_missing=False)
 
     def apply_approved_file(self, chat_id, target_path, content, expected_sha256, linked_root=""):
@@ -4218,8 +4024,6 @@ class KurtWebApp:
         if "{cwd}" in base: base = base.replace("{cwd}", str(root))
         if "KURT WEB INTERFACE RULES:" not in base:
             base += "\n" + WEB_INSTRUCTIONS
-        if "STRICT LOCAL PATH RESOLUTION:" not in base:
-            base += "\n" + PATH_RESOLUTION_INSTRUCTIONS
         if "KURT ACTION BLOCK SYNTAX:" not in base:
             base += "\n" + ACTION_SYNTAX_INSTRUCTIONS
         mode_rules = NORMAL_MODE_INSTRUCTIONS if mode == "normal" else AGENT_MODE_INSTRUCTIONS
@@ -4228,7 +4032,7 @@ class KurtWebApp:
         prompt = (base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules + "\n" + RESPONSE_FORMAT_INSTRUCTIONS)
         prompt += "\nCurrent session working root: " + str(root)
         prompt += "\nWorking root type: " + ("USER-LINKED FOLDER; every change still needs approval." if linked else "PRIVATE PER-CHAT ISOLATED WORKSPACE; every change still needs approval.")
-        prompt += "\nUser home directory for explicitly home-qualified paths only (~): " + str(Path.home()) + ". Do not use this as the base for relative paths."
+        prompt += "\nUser home for absolute/relative local read paths: " + str(Path.home())
         prompt += "\nSession workspace tree:\n" + self.tree(root)
         prompt += "\nUse READ/LIST for local inspection. All command/file action blocks pause for user approval."
         image_tools = self.image_generation_mcp_tools()
@@ -4310,7 +4114,7 @@ class KurtWebApp:
     def agent_artifacts_from_answer(self, answer):
         artifacts = []
         errors = []
-        for match in _find_action_matches(AGENT_WRITE_ACTION_RE, answer):
+        for match in AGENT_WRITE_ACTION_RE.finditer(str(answer or "")):
             target_text = match.group(1).strip()
             content = match.group(2)
             try:
@@ -4430,11 +4234,10 @@ class KurtWebApp:
         artifacts = []
         errors = []
         proposals = []
-        for match in _find_action_matches(K.BLOCK_RE, answer, require_line_start=True):
-            kind, arg, body = match.groups()
+        for kind, arg, body in K.BLOCK_RE.findall(str(answer or "")):
             if kind in ("WRITE", "EDIT"):
                 proposals.append((kind, arg.strip(), body))
-        for match in _find_action_matches(AGENT_WRITE_ACTION_RE, answer):
+        for match in AGENT_WRITE_ACTION_RE.finditer(str(answer or "")):
             proposals.append(("AGENT_WRITE", match.group(1).strip(), match.group(2)))
         for kind, filename, body in proposals:
             try:
@@ -4486,7 +4289,7 @@ class KurtWebApp:
                 artifacts.append(artifact)
             except Exception as exc:
                 errors.append("{}: {}".format(filename or "(unnamed file)", exc))
-        for match in _find_action_matches(SYSTEM_PROMPT_ACTION_RE, answer):
+        for match in SYSTEM_PROMPT_ACTION_RE.finditer(str(answer or "")):
             proposed = match.group(1).strip()
             if not proposed: errors.append("Kurt system prompt: proposed prompt is empty."); continue
             if len(proposed) > 40000: errors.append("Kurt system prompt: replacement exceeds 40,000 characters."); continue
@@ -5803,8 +5606,6 @@ class Handler(BaseHTTPRequestHandler):
         worklog = []
         artifacts_by_path = {}
         mode_switch_required = None
-        terminal_command_turn = False
-        terminal_command_status = "Command request finished"
         finished = False
         disconnected = False
         temperature = {"thinking": 0.2, "expert": 0.15}[effort]
@@ -5871,9 +5672,6 @@ class Handler(BaseHTTPRequestHandler):
                     in_think = False
                     pend = ""
 
-                    draft_emitted_chars = 0
-                    terminal_action_detected = False
-
                     def push_reasoning(text):
                         if not text:
                             return
@@ -5882,25 +5680,17 @@ class Handler(BaseHTTPRequestHandler):
                         emit({"type": "reasoning", "text": piece})
 
                     def push_answer(text):
-                        nonlocal thinking_ended_at, draft_emitted_chars, terminal_action_detected
-                        if not text or terminal_action_detected:
+                        nonlocal thinking_ended_at
+                        if not text:
                             return
-                        combined = "".join(chunks) + text
-                        action_end = _first_complete_action_end(combined)
-                        if action_end is not None:
-                            combined = combined[:action_end]
-                            terminal_action_detected = True
-                        delta = combined[draft_emitted_chars:]
-                        chunks[:] = [combined] if combined else []
-                        if delta:
-                            emit({"type": "draft", "text": delta})
-                            draft_emitted_chars = len(combined)
-                            if thinking_ended_at is None and rationale_chunks:
-                                thinking_ended_at = time.monotonic()
+                        chunks.append(text)
+                        emit({"type": "draft", "text": text})
+                        if thinking_ended_at is None and rationale_chunks and text.strip():
+                            thinking_ended_at = time.monotonic()
 
                     def route_text(text, final=False):
-                        """Discard private <think> content and keep final answer text separate."""
-                        nonlocal in_think, pend, draft_emitted_chars
+                        """Split streamed content into reasoning (inside <think>) and answer text."""
+                        nonlocal in_think, pend
                         pend += text
                         while True:
                             tag = THINK_TAG_RE.search(pend)
@@ -5908,13 +5698,15 @@ class Handler(BaseHTTPRequestHandler):
                                 before = pend[:tag.start()]
                                 closing = bool(tag.group(1))
                                 if closing and not in_think:
-                                    # A stray closing tag means the preceding draft was thought-like; retract it.
+                                    # Closing tag with no opener: everything so far was reasoning.
+                                    earlier = "".join(chunks) + before
                                     chunks.clear()
-                                    draft_emitted_chars = 0
                                     emit({"type": "draft_reset"})
-                                elif not in_think:
+                                    push_reasoning(earlier)
+                                elif in_think:
+                                    push_reasoning(before)
+                                else:
                                     push_answer(before)
-                                # Text inside explicit private-thought tags is always discarded.
                                 in_think = not closing
                                 pend = pend[tag.end():]
                                 continue
@@ -5924,8 +5716,7 @@ class Handler(BaseHTTPRequestHandler):
                                 if cut != -1 and ">" not in pend[cut:] and len(pend) - cut < 12:
                                     hold = pend[cut:]
                                     pend = pend[:cut]
-                            if not in_think:
-                                push_answer(pend)
+                            (push_reasoning if in_think else push_answer)(pend)
                             pend = hold
                             break
 
@@ -5933,13 +5724,9 @@ class Handler(BaseHTTPRequestHandler):
                         if not chunk:
                             continue
                         kind_name = str(kind or "").strip().lower().replace("-", "_")
-                        if kind_name in MODEL_RATIONALE_KINDS:
+                        if kind_name in MODEL_RATIONALE_KINDS or kind_name in THINKING_KINDS:
                             if isinstance(chunk, str):
                                 push_reasoning(chunk)
-                            continue
-                        if kind_name in THINKING_KINDS:
-                            # Provider reasoning deltas may contain private chain-of-thought.
-                            # Only an explicit user-facing RATIONALE block is displayable.
                             continue
                         if kind_name in ("usage", "stats", "metadata") and isinstance(chunk, dict):
                             usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else chunk
@@ -5952,12 +5739,7 @@ class Handler(BaseHTTPRequestHandler):
                             continue
                         if kind_name == "content":
                             route_text(chunk if isinstance(chunk, str) else str(chunk))
-                            if terminal_action_detected:
-                                break
-                    if terminal_action_detected:
-                        pend = ""
-                    else:
-                        route_text("", final=True)
+                    route_text("", final=True)
                     raw_response = "".join(chunks).strip()
                     if not raw_response:
                         raise RuntimeError("The model returned no response text.")
@@ -6098,32 +5880,31 @@ class Handler(BaseHTTPRequestHandler):
                 round_rationale = "\n\n".join(part for part in (last_round_reasoning["text"], split_thinking(raw)[0].strip()) if part).strip()
                 if round_rationale:
                     worklog.append({"kind": "thinking", "text": "Thinking", "ok": None, "detail": round_rationale[:12000]})
-                    emit({"type": "rationale", "text": round_rationale[:12000]})
 
                 tool_actions = []
-                for match in _find_action_matches(RUN_ACTION_RE, raw):
+                for match in RUN_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "RUN", action_argument(match)))
-                for match in _find_action_matches(SEARCH_ACTION_RE, raw):
+                for match in SEARCH_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "SEARCH", action_argument(match)))
-                for match in _find_action_matches(READ_ACTION_RE, raw):
+                for match in READ_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "READ", action_argument(match)))
-                for match in _find_action_matches(LIST_ACTION_RE, raw):
+                for match in LIST_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "LIST", action_argument(match)))
-                for match in _find_action_matches(DELETE_ACTION_RE, raw):
+                for match in DELETE_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "DELETE", action_argument(match)))
-                for match in _find_action_matches(AGENT_RUN_ACTION_RE, raw):
+                for match in AGENT_RUN_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "AGENT_RUN", action_argument(match)))
-                for match in _find_action_matches(AGENT_READ_ACTION_RE, raw):
+                for match in AGENT_READ_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "AGENT_READ", action_argument(match)))
-                for match in _find_action_matches(AGENT_LIST_ACTION_RE, raw):
+                for match in AGENT_LIST_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "AGENT_LIST", action_argument(match)))
-                for match in _find_action_matches(SUBAGENT_ACTION_RE, raw):
+                for match in SUBAGENT_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "SUBAGENT", (match.group(1).strip(), match.group(2).strip())))
-                for match in _find_action_matches(K.BLOCK_RE, raw, require_line_start=True):
+                for match in K.BLOCK_RE.finditer(raw):
                     kind, target, body = match.group(1), match.group(2), match.group(3)
                     if kind in ("WRITE", "EDIT"):
                         tool_actions.append((match.start(), kind, (target.strip(), body)))
-                for match in _find_action_matches(AGENT_WRITE_ACTION_RE, raw):
+                for match in AGENT_WRITE_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "AGENT_WRITE", (match.group(1).strip(), match.group(2))))
                 tool_actions.sort(key=lambda item: item[0])
 
@@ -6186,17 +5967,14 @@ class Handler(BaseHTTPRequestHandler):
                             if action == "SUBAGENT":
                                 continue
                             if action in ("RUN", "AGENT_RUN"):
-                                command_error = validate_terminal_command(argument)
-                                if command_error:
-                                    log_step("Rejected malformed terminal command", False, status="Command not run…", detail=command_error)
-                                    results.append("[Command rejected] " + command_error)
+                                if not argument:
+                                    results.append("[Command rejected] The command action did not include a command.")
                                 else:
-                                    emit({"type": "response_reset"})
+                                    try: self.app.prewarm_chat_environment(chat_id, with_pip=self.app._command_needs_pip(argument))
+                                    except Exception: pass
                                     approved, approval_item = wait_for_user_approval("command", "Run terminal command", command=argument,
-                                        detail="Review this exact shell command. Nothing is prepared or executed before approval. It will run in the session's isolated workspace" + (" / linked folder" if chat.get("linked_folder") else "") + ".")
-                                    terminal_command_turn = True
+                                        detail="This exact command will run in the session's isolated workspace" + (" / linked folder" if chat.get("linked_folder") else "") + ".")
                                     if not approved:
-                                        terminal_command_status = "Command declined"
                                         results.append("[Command declined] The user declined this command. It was not executed: " + argument)
                                     else:
                                         linked = str(chat.get("linked_folder") or "").strip()
@@ -6208,7 +5986,6 @@ class Handler(BaseHTTPRequestHandler):
                                         command_ok = bool(command_result.get("ok"))
                                         output_text = str(command_result.get("output") or "(No terminal output.)")
                                         duration = command_result.get("elapsed")
-                                        terminal_command_status = "Command completed" if command_ok else "Command failed · exit code {}".format(exit_code)
                                         approval_item["output"] = {"text": output_text, "returncode": exit_code, "ok": command_ok, "elapsed": duration}; emit({"type": "approval_output", "approval_id": approval_item["approval"]["id"], "output": approval_item["output"]})
                                         results.append("[Actual terminal result]\nCommand: {}\nExit code: {}\nStatus: {}\nDuration: {}\nOutput:\n{}\nUse this actual result; do not claim success when the exit code is non-zero.".format(
                                             argument, exit_code, "succeeded" if command_ok else "failed", (str(duration)+"s" if duration is not None else "not reported"), output_text))
@@ -6317,9 +6094,6 @@ class Handler(BaseHTTPRequestHandler):
                                 search_details = search_result_text(argument, result)
                                 log_step(result.get("message", "Web search completed."), result.get("ok"), status="Reviewing sources…", detail=search_details[:10000])
                                 results.append("[Web search result]\n" + search_details)
-                        if terminal_command_turn:
-                            final_raw = ""
-                            break
                         messages.append({"role": "assistant", "content": raw})
                         messages.append({
                             "role": "user",
@@ -6329,8 +6103,7 @@ class Handler(BaseHTTPRequestHandler):
                         })
                         continue
 
-                has_file_action = any(_find_action_matches(pattern, raw, require_line_start=(pattern is K.BLOCK_RE)) for pattern in (K.BLOCK_RE, AGENT_WRITE_ACTION_RE, SYSTEM_PROMPT_ACTION_RE))
-                if not tool_actions and not has_file_action:
+                if not tool_actions and not re.search(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT|DELETE|SYSTEM_PROMPT|AGENT_WRITE)\b", raw, re.I):
                     _rationale_probe, reply_probe = split_thinking(raw)
                     reply_probe = K.BLOCK_RE.sub("", strip_unsupported_actions(reply_probe)).strip()
                     if not re.search(r"\w", reply_probe) and round_index < max_rounds - 1:
@@ -6347,12 +6120,7 @@ class Handler(BaseHTTPRequestHandler):
                         })
                         continue
 
-                edit_candidates = []
-                for pattern in (K.BLOCK_RE, AGENT_WRITE_ACTION_RE, SYSTEM_PROMPT_ACTION_RE):
-                    for action_match in _find_action_matches(pattern, raw, require_line_start=(pattern is K.BLOCK_RE)):
-                        if pattern is not K.BLOCK_RE or action_match.group(1) in ("WRITE", "EDIT"):
-                            edit_candidates.append(action_match)
-                first_edit = min(edit_candidates, key=lambda item: item.start()) if edit_candidates else None
+                first_edit = re.search(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT|DELETE|SYSTEM_PROMPT|AGENT_WRITE)\b", raw, re.I)
                 if first_edit:
                     preamble = raw[:first_edit.start()]
                     if preamble.strip():
@@ -6428,9 +6196,9 @@ class Handler(BaseHTTPRequestHandler):
             artifacts = list(artifacts_by_path.values())
             if visible and chat.get("title") in (None, "New conversation"):
                 chat["title"] = self.app.generate_chat_title(user_text, visible, model)
-            if (not visible or not re.search(r"\w", visible)) and not artifacts and not terminal_command_turn:
+            if (not visible or not re.search(r"\w", visible)) and not artifacts:
                 visible = EMPTY_REPLY_PLACEHOLDER_PREFIX + " or validated file artifact. Check the work log for tool and validation results."
-            if visible or artifacts or terminal_command_turn:
+            if visible or artifacts:
                 record = {
                     "role": "assistant", "content": visible, "artifacts": artifacts,
                     "worklog": worklog, "reasoning": response_rationale,
@@ -6453,8 +6221,6 @@ class Handler(BaseHTTPRequestHandler):
                 "chat_id": chat_id, "title": chat["title"], "route": route_info["route"],
                 "model": model, "effort": effort, "mode": mode, "stats": stats,
                 "mode_switch_required": mode_switch_required,
-                "terminal_action": terminal_command_turn,
-                "terminal_status": terminal_command_status if terminal_command_turn else "",
             })
         except (BrokenPipeError, ConnectionResetError):
             disconnected = True
