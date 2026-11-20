@@ -178,6 +178,26 @@ KURT ACTION BLOCK SYNTAX:
 - Relative paths and commands run inside the session working root named in this prompt.
 """
 
+FILE_ACTION_INSTRUCTIONS = r"""
+KURT FILE ACTION SYNTAX (fixed application rule; always applies, even if the editable prompt omits it):
+- To create a new file or fully overwrite an existing one, output exactly this shape, with the
+  relative path on the SAME line as WRITE, the complete file contents on the following lines, and
+  @@@ END alone on its own final line:
+@@@ WRITE <relative/path/to/file.ext>
+<complete file contents>
+@@@ END
+- Never put the path on a separate line below WRITE, never wrap the file contents in a Markdown
+  code fence, and never abbreviate or elide any part of the file.
+- To change an existing file, use WRITE with the complete updated contents.
+- A file request is finished only when the block has been emitted. Give a short Change summary
+  first, then emit the complete block in the SAME reply. Never stop after the summary, never say
+  you will create the file later, and never ask the user to confirm before emitting the block: the
+  application shows the Approve/Decline card itself.
+- Put one file per WRITE block. For several files, emit several complete blocks in order.
+- After the application reports that a file was saved, verify it with one RUN command when useful
+  (for example python -m py_compile <file>), then answer.
+"""
+
 KURT_IDENTITY_INSTRUCTIONS = r"""
 KURT IDENTITY AND SELF-CONFIGURATION:
 You are Kurt, the assistant configured by this local application. The user owns this local
@@ -2957,6 +2977,69 @@ TOOL_CALL_BLOCK_RE = re.compile(
 )
 
 
+_FILE_ACTION_HEAD_RE = re.compile(ACTION_MARKER_RE + r"[ \t]*(WRITE|EDIT)[ \t]*\r?\n[ \t]*([^\n]+?)[ \t]*\r?\n", re.I)
+_PATH_LINE_RE = re.compile(r"^[`'\"]?(?:[\w.\-]+/)*(?:[\w.\-]+\.[A-Za-z0-9]{1,8}|Dockerfile|Makefile)[`'\"]?$")
+
+
+def normalize_file_action_blocks(text):
+    """Repair common WRITE/EDIT formatting slips before parsing.
+
+    Moves a path written on the line below the keyword up onto the keyword line and removes a
+    Markdown code fence that wraps the whole file body.
+    """
+    raw = str(text or "")
+    if not re.search(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT)\b", raw, re.I):
+        return raw
+
+    def move_path(match):
+        candidate = match.group(2).strip()
+        if _PATH_LINE_RE.match(candidate):
+            return "@@@ {} {}\n".format(match.group(1).upper(), candidate.strip("`'\""))
+        return match.group(0)
+
+    raw = _FILE_ACTION_HEAD_RE.sub(move_path, raw)
+    raw = re.sub(ACTION_MARKER_RE + r"[ \t]*(WRITE|EDIT)[ \t]+[`'\"]+([^\n`'\"]+?)[`'\"]+[ \t]*\r?\n",
+                 lambda m: "@@@ {} {}\n".format(m.group(1).upper(), m.group(2).strip()), raw, flags=re.I)
+
+    def unfence(match):
+        head, body = match.group(1), match.group(2)
+        lines = body.split("\n")
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        if len(lines) >= 2 and re.match(r"^\s*(`{3,}|~{3,})[\w+.#-]*\s*$", lines[0]) and re.match(r"^\s*(`{3,}|~{3,})\s*$", lines[-1]):
+            body = "\n".join(lines[1:-1]) + "\n"
+        return head + body + match.group(3)
+
+    return re.sub(
+        r"(" + ACTION_MARKER_RE + r"[ \t]*(?:WRITE|EDIT)[ \t]+[^\n]+\r?\n)(.*?)(\r?\n?" + ACTION_MARKER_RE + r"[ \t]*END\b)",
+        unfence, raw, flags=re.I | re.S)
+
+
+def file_action_retry_reason(raw, tool_actions):
+    """Explain why a reply that mentions a file change did not actually propose one."""
+    text = str(raw or "")
+    if any(action in ("WRITE", "EDIT", "AGENT_WRITE") for _position, action, _argument in tool_actions):
+        return ""
+    if re.search(ACTION_MARKER_RE + r"\s*SYSTEM_PROMPT\b", text, re.I):
+        return ""
+    if re.search(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT|AGENT_WRITE)\b", text, re.I):
+        return "its WRITE block was incomplete or was never closed with @@@ END, so nothing was proposed or saved"
+    if re.search(r"(?i)\bchange\s+summary\b", text):
+        return "it described a file change but ended without any WRITE block, so nothing was proposed or saved"
+    return ""
+
+
+FILE_ACTION_RETRY_MESSAGE = (
+    "Your previous reply failed: {reason}. Reply again now with a one-line Change summary followed by the "
+    "COMPLETE block in exactly this shape, with the path on the same line as WRITE, the entire file contents "
+    "next with no Markdown code fence, and @@@ END alone on the final line:\n"
+    "@@@ WRITE <relative/path/to/file.ext>\n<complete file contents>\n@@@ END\n"
+    "Do not stop after the summary and do not ask for confirmation."
+)
+
+
 EMPTY_REPLY_PLACEHOLDER_PREFIX = "Kurt completed the request without a text response"
 
 
@@ -4438,7 +4521,7 @@ class KurtWebApp:
         mode_rules = NORMAL_MODE_INSTRUCTIONS if mode == "normal" else AGENT_MODE_INSTRUCTIONS
         effort_rules = EFFORT_INSTRUCTIONS.get(effort, EFFORT_INSTRUCTIONS["thinking"])
         linked = str(chat.get("linked_folder") or "").strip()
-        prompt = (base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + CLI_WORKFLOW_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules + "\n" + RESPONSE_FORMAT_INSTRUCTIONS)
+        prompt = (base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + FILE_ACTION_INSTRUCTIONS + "\n" + CLI_WORKFLOW_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules + "\n" + RESPONSE_FORMAT_INSTRUCTIONS)
         prompt += "\nCurrent session working root: " + str(root)
         prompt += "\nWorking root type: " + ("USER-LINKED FOLDER; every change still needs approval." if linked else "PRIVATE PER-CHAT ISOLATED WORKSPACE; every change still needs approval.")
         prompt += "\nUser home for absolute/relative local read paths: " + str(Path.home())
@@ -6546,6 +6629,7 @@ class Handler(BaseHTTPRequestHandler):
             final_raw = ""
             validation_errors = []
             max_rounds = 12
+            file_action_retries = 0
             for round_index in range(max_rounds):
                 if round_index == 0 and DESKTOP_VISUAL_REQUEST_RE.search(user_text):
                     if mode == "normal":
@@ -6593,6 +6677,7 @@ class Handler(BaseHTTPRequestHandler):
                 raw = generate_response()
                 if raw:
                     raw = ALT_ACTION_OPENER_RE.sub("\n@@@ ", raw)
+                    raw = normalize_file_action_blocks(raw)
                 if not raw:
                     final_raw = "Kurt did not return any response text. Check the selected model and provider configuration."
                     break
@@ -6762,6 +6847,8 @@ class Handler(BaseHTTPRequestHandler):
                                 if proposal_errors or not proposed:
                                     message = "; ".join(proposal_errors) if proposal_errors else "No valid file proposal was produced."
                                     log_step("File proposal rejected: " + target, False, status="Could not prepare file…", detail=message)
+                                    if re.search(r"(?i)path is required|outside this session", message):
+                                        message += " Use exactly: @@@ WRITE <relative/path.ext> on ONE line, then the complete file contents, then @@@ END on its own line."
                                     results.append("[File proposal rejected] {}: {}".format(target, message))
                                 else:
                                     artifact = proposed[0]
@@ -6831,6 +6918,15 @@ class Handler(BaseHTTPRequestHandler):
                                 if any("did not complete" in str(item) for item in results) else ""),
                         })
                         continue
+
+                retry_reason = file_action_retry_reason(raw, tool_actions) if not tool_actions else ""
+                if retry_reason and file_action_retries < 2 and round_index < max_rounds - 1:
+                    file_action_retries += 1
+                    log_step("The model described a file change but did not emit a usable WRITE block. Asking it to emit the block.", False, status="Retrying…",
+                             detail="Reason: " + retry_reason + ". The application is asking the model to repeat the Change summary together with the complete action block.")
+                    messages.append({"role": "assistant", "content": raw})
+                    messages.append({"role": "user", "content": FILE_ACTION_RETRY_MESSAGE.format(reason=retry_reason)})
+                    continue
 
                 if not tool_actions and not re.search(ACTION_MARKER_RE + r"\s*(?:WRITE|EDIT|DELETE|SYSTEM_PROMPT|AGENT_WRITE)\b", raw, re.I):
                     _rationale_probe, reply_probe = split_thinking(raw)
