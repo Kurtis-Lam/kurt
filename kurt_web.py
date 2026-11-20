@@ -198,6 +198,25 @@ KURT FILE ACTION SYNTAX (fixed application rule; always applies, even if the edi
   (for example python -m py_compile <file>), then answer.
 """
 
+COMPLETION_SUMMARY_INSTRUCTIONS = r"""
+KURT COMPLETION SUMMARY (fixed application rule; always applies):
+- When your work in this reply chain created, changed or deleted files, or ran commands, your FINAL
+  message must be visible reply text, never only reasoning, and must tell the user: (1) what you
+  created or changed, naming each file; (2) what it does, as a few short bullets of key behavior or
+  features; (3) what you actually checked and the real result of that check; (4) how to run or open it.
+- Keep it to roughly 4 to 8 short lines. Do not paste file contents into the summary.
+- Never end with only "done" or a one-line confirmation. The user does not see your reasoning as an
+  answer, so never assume that explaining something in your reasoning has told them.
+"""
+
+COMPLETION_SUMMARY_MESSAGE = (
+    "Your last message was too brief to count as the final answer. Reply now in visible text, not in your reasoning, "
+    "with a concise summary for the user: what you created or changed (name each file), what it does in a few short "
+    "bullets, what you checked and the actual result, and how to run or open it. Do not emit any action block and "
+    "do not repeat file contents."
+)
+
+
 KURT_IDENTITY_INSTRUCTIONS = r"""
 KURT IDENTITY AND SELF-CONFIGURATION:
 You are Kurt, the assistant configured by this local application. The user owns this local
@@ -1443,6 +1462,11 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 .tk-fn{color:var(--tk-fn)}
 .tk-ty{color:var(--tk-ty)}
 .ap-status{flex-wrap:wrap;row-gap:6px}
+.ap-status.live .dot{animation:apPulse 1s ease-in-out infinite}
+.ap-pre.live code>.cl:last-child::after{content:"";display:inline-block;width:7px;height:1.1em;margin-left:2px;vertical-align:text-bottom;background:var(--green);animation:apBlink 1s steps(1) infinite}
+@keyframes apPulse{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes apBlink{0%,100%{opacity:1}50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.ap-status.live .dot,.ap-pre.live code>.cl:last-child::after{animation:none}}
 .ap-status-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ap-tools{margin-left:auto;display:flex;align-items:center;flex-wrap:wrap;gap:6px;flex:none}
 .ap-tab{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--muted);font:12px var(--sans);cursor:pointer;text-decoration:none}
@@ -2084,6 +2108,7 @@ function artifactLang(a){
 }
 function artifactState(a){
  const message=String((a.validation&&a.validation.message)||'');
+ if(a.live)return {cls:'wait',text:message||'Writing…'};
  if(a.kind==='file_ref')return {cls:'',text:message||'Workspace file'};
  if(a.kind==='terminal_output')return {cls:(a.validation&&a.validation.ok===false)?'bad':'ok',text:message||'Terminal output'};
  if(a.workspace_written)return {cls:'ok',text:'Saved after approval'};
@@ -2132,7 +2157,7 @@ function pvExt(a){const n=String(a.path||a.name||'');return n.includes('.')?n.sp
 function pvName(a){return String(a.name||a.path||'file').split('/').pop()||'file'}
 function pvSize(n){n=Number(n)||0;if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';if(n<1073741824)return (n/1048576).toFixed(1)+' MB';return (n/1073741824).toFixed(2)+' GB'}
 function artifactType(a){
- if(!a||['terminal_output','command','agent_command','system_prompt','agent_file'].includes(a.kind))return 'text';
+ if(!a||['terminal_output','command','agent_command','system_prompt','agent_file','live_file'].includes(a.kind))return 'text';
  const type=PV_TYPES[pvExt(a)];if(type)return type;
  return (a.kind==='file_ref'&&PV_BINARY.has(pvExt(a)))?'binary':'text';
 }
@@ -2317,7 +2342,70 @@ function pvPython(a,tools,panel,info){
  tools.appendChild(run);run.onclick=()=>pvRun(a);
  PV_UI.set(a,{fill,tabs});fill();
 }
+function pvLiveAppend(a,delta){
+ const code=a.__code;if(!code||!delta)return;
+ String(delta).replace(/\r\n?/g,'\n').split('\n').forEach((part,index)=>{
+  if(index>0||!a.__last){if(a.__last)a.__last.textContent+='\n';a.__last=document.createElement('span');a.__last.className='cl';code.appendChild(a.__last)}
+  a.__last.textContent+=part;
+ });
+}
+function pvLive(a){
+ const view=document.createElement('div');view.className='ap-view';
+ const status=document.createElement('div');status.className='ap-status wait live';
+ const dot=document.createElement('span');dot.className='dot';
+ const label=document.createElement('span');label.className='ap-status-text';label.textContent=a.validation.message;
+ status.append(dot,label);
+ const pre=document.createElement('pre');pre.className='ap-pre numbered live';
+ const code=document.createElement('code');pre.appendChild(code);
+ a.__code=code;a.__last=null;a.__label=label;a.__status=status;a.__pre=pre;
+ pvLiveAppend(a,a.content);
+ if(a.liveDone){status.classList.remove('live');pre.classList.remove('live')}
+ view.append(status,pre);return view;
+}
+function liveRefresh(a,ev){
+ if(state.activeArtifact!==a||!a.__code)return;
+ const pane=$('artifactPaneContent');
+ const stick=pane?pane.scrollHeight-pane.scrollTop-pane.clientHeight<64:false;
+ if(ev.reset){a.__code.replaceChildren();a.__last=null;pvLiveAppend(a,a.content)}else pvLiveAppend(a,ev.delta);
+ if(a.__label)a.__label.textContent=a.validation.message;
+ if(ev.done){if(a.__status)a.__status.classList.remove('live');if(a.__pre)a.__pre.classList.remove('live')}
+ const total=a.content?a.content.split('\n').length:0;
+ const count=$('artifactCount');if(count)count.textContent=artifactLang(a)+' · '+total+' line'+(total===1?'':'s');
+ if(stick&&pane)pane.scrollTop=pane.scrollHeight;
+}
+function liveFileEvent(node,ev){
+ const store=node.__live||(node.__live={});
+ let a=store[ev.id];const created=!a;
+ if(created){
+  a={kind:'live_file',live:true,path:ev.path||('new-file-'+ev.id),content:'',liveDone:false,approval_required:true,validation:{ok:true,checked:false,message:'Writing…'}};
+  store[ev.id]=a;node.__artifacts=node.__artifacts||[];node.__artifacts.push(a);
+ }
+ if(ev.path&&a.path!==ev.path)a.path=ev.path;
+ if(ev.reset)a.content='';
+ a.content+=String(ev.delta||'');
+ a.liveDone=!!ev.done;
+ const verb=ev.kind==='EDIT'?'Editing ':'Writing ';
+ a.validation.message=ev.done?(ev.incomplete?'The block ended before it was closed':'Finished writing · preparing approval'):verb+pvName(a)+'…';
+ const status=node.querySelector('.assistant-status');if(status)status.textContent=ev.done?'Preparing approval…':verb+pvName(a)+'…';
+ if(created){
+  renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);
+  const trigger=Array.from(node.querySelectorAll('.artifact-trigger')).at(-1);
+  if(trigger)trigger.click();
+  const pane=$('artifactPaneContent');if(pane)pane.scrollTop=pane.scrollHeight;
+ }else{
+  liveRefresh(a,ev);
+  if(ev.done){const trigger=Array.from(node.querySelectorAll('.artifact-trigger')).find(b=>b.dataset.path===String(a.path));const text=trigger&&trigger.querySelector('.artifact-trigger-status');if(text)text.textContent=artifactLang(a)+' · '+a.validation.message}
+ }
+}
+function dropLiveFiles(node,match){
+ if(!node.__artifacts)return false;
+ const before=node.__artifacts.length;
+ node.__artifacts=node.__artifacts.filter(item=>!(item.live&&(!match||pvName(item)===pvName(match))));
+ if(node.__live)Object.keys(node.__live).forEach(key=>{if(!node.__artifacts.includes(node.__live[key]))delete node.__live[key]});
+ return node.__artifacts.length!==before;
+}
 function artifactCard(a){
+ if(a.live)return pvLive(a);
  const info=artifactState(a),type=artifactType(a),hasText=typeof a.content==='string';
  const view=document.createElement('div');view.className='ap-view';
  const status=document.createElement('div');status.className='ap-status'+(info.cls?' '+info.cls:'');
@@ -2849,17 +2937,18 @@ async function send(){
    while((separator=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,separator);buffer=buffer.slice(separator+2);const line=frame.split('\n').find(value=>value.startsWith('data:'));if(!line)continue;const event=JSON.parse(line.slice(5).trim());
     if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail);node.querySelector('.assistant-status').textContent=event.status||'Working…'}
     else if(event.type==='approval_required'){appendApprovalPause(node,event);node.querySelector('.assistant-status').textContent='Waiting for your approval…'}
-    else if(event.type==='artifact'){node.__artifacts=node.__artifacts||[];node.__artifacts.push(event.artifact);renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);const trigger=Array.from(node.querySelectorAll('.artifact-trigger')).at(-1);if(trigger&&event.artifact?.content!==undefined)trigger.click()}
+    else if(event.type==='artifact'){node.__artifacts=node.__artifacts||[];dropLiveFiles(node,event.artifact);node.__artifacts.push(event.artifact);renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);const trigger=Array.from(node.querySelectorAll('.artifact-trigger')).at(-1);if(trigger&&event.artifact?.content!==undefined)trigger.click()}
     else if(event.type==='artifact_update'){const selectedPath=node.querySelector('.artifact-trigger.selected')?.dataset.path;node.__artifacts=(node.__artifacts||[]).map(item=>item.path===event.artifact.path?event.artifact:item);renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);const trigger=Array.from(node.querySelectorAll('.artifact-trigger')).find(b=>b.dataset.path===(selectedPath||event.artifact.target_path||event.artifact.path));if(trigger)trigger.click()}
     else if(event.type==='approval_resolved'){resolveApprovalPause(node,event);node.querySelector('.assistant-status').textContent=event.approved?'Running…':'Continuing…'}
     else if(event.type==='approval_output'){setApprovalOutput(node,event)}
     else if(event.type==='agents'){node.__agents=event.agents||[];node.querySelector('.assistant-status').textContent=(event.running||0)+' subagent(s) running';renderAgentBoard(node)}
     else if(event.type==='agent_event'){const agent=(node.__agents||[]).find(item=>item.id===event.id);if(agent){agent.status=event.status;agent.detail=event.detail||''}node.querySelector('.assistant-status').textContent=(event.running||0)+' subagent(s) running';renderAgentBoard(node)}
-    else if(event.type==='draft_reset'){raw='';blockRationale='';modelRationale='';node.__thinkingEntry=null;contentEl.replaceChildren();node.dataset.raw='';queue()}
-    else if(event.type==='draft'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}
+    else if(event.type==='draft_reset'){if(dropLiveFiles(node)){renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);if(state.activeArtifact&&state.activeArtifact.live)clearArtifactPane()}raw='';blockRationale='';modelRationale='';node.__thinkingEntry=null;contentEl.replaceChildren();node.dataset.raw='';queue()}
+    else if(event.type==='file_stream'){liveFileEvent(node,event)}
+    else if(event.type==='draft'){raw+=event.text||'';if(!node.__live||!Object.keys(node.__live).length)node.querySelector('.assistant-status').textContent='Writing…';queue()}
     else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();modelRationale+=event.text||'';node.querySelector('.assistant-status').textContent='Thinking…';showReasoning(true)}
     else if(event.type==='reasoning_reset'){const entries=node.__worklog||[];const entry=node.__thinkingEntry;if(entry){const at=entries.indexOf(entry);if(at>=0)entries.splice(at,1);node.__thinkingEntry=null;setThink(node,entries)}modelRationale='';blockRationale=''}
-    else if(event.type==='done'){pending=false;retryMode=event.mode_switch_required||null;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);bindFileLinks(contentEl);node.dataset.raw=safe;node.__worklog=Array.isArray(event.worklog)?event.worklog.slice():(node.__worklog||[]);node.__thinkingEntry=null;setThink(node,node.__worklog);node.__thinkSeconds=Number(event.thinking_seconds)||Number(event.stats&&event.stats.thought_seconds)||0;setResponseMeta(node,event.stats,event.model);node.__artifacts=event.artifacts||node.__artifacts||[];renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);setTitle(event.title||'Conversation',[event.model||'',event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='done'){pending=false;retryMode=event.mode_switch_required||null;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);bindFileLinks(contentEl);node.dataset.raw=safe;node.__worklog=Array.isArray(event.worklog)?event.worklog.slice():(node.__worklog||[]);node.__thinkingEntry=null;setThink(node,node.__worklog);node.__thinkSeconds=Number(event.thinking_seconds)||Number(event.stats&&event.stats.thought_seconds)||0;setResponseMeta(node,event.stats,event.model);node.__live={};node.__artifacts=event.artifacts||node.__artifacts||[];renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);setTitle(event.title||'Conversation',[event.model||'',event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
     else if(event.type==='error')throw new Error(event.message||'The model request failed');
    }
   }
@@ -3038,6 +3127,122 @@ FILE_ACTION_RETRY_MESSAGE = (
     "@@@ WRITE <relative/path/to/file.ext>\n<complete file contents>\n@@@ END\n"
     "Do not stop after the summary and do not ask for confirmation."
 )
+
+
+def build_work_recap(items):
+    lines = []
+    for item in items:
+        if item[0] == "file":
+            lines.append("- {} `{}`.".format(item[2], item[1]))
+        elif item[0] == "delete":
+            lines.append("- Deleted `{}`.".format(item[1]))
+        else:
+            command = re.sub(r"\s+", " ", str(item[1])).strip()
+            if len(command) > 110:
+                command = command[:107] + "..."
+            lines.append("- Ran `{}`: {}.".format(command, "succeeded" if item[2] else "failed (exit code {})".format(item[3])))
+    return "**What was done**\n" + "\n".join(lines[:12])
+
+
+class FileStreamTracker:
+    """Reports the growing contents of an in-progress WRITE/EDIT block while the model streams it."""
+
+    _HEAD = re.compile(ACTION_MARKER_RE + r"[ \t]*(WRITE|EDIT)[ \t]*([^\n]*)\r?\n", re.I)
+    _END = re.compile(r"\r?\n?" + ACTION_MARKER_RE + r"[ \t]*END\b", re.I)
+    _PARTIAL_END = re.compile(r"\r?\n?@{1,3}[ \t]*(?:E(?:N(?:D)?)?)?$", re.I)
+
+    def __init__(self, interval=0.06):
+        self.interval = interval
+        self.reset()
+
+    def reset(self):
+        self.buf = ""
+        self.scan_from = 0
+        self.active = None
+        self.counter = 0
+        self.last_emit = 0.0
+
+    @staticmethod
+    def _display(body, done):
+        text = body
+        fence = re.match(r"^[ \t]*(?:\r?\n)*[ \t]*(`{3,}|~{3,})[\w+.#-]*[ \t]*\r?\n", text)
+        if fence:
+            text = text[fence.end():]
+        elif re.match(r"^[ \t]*(?:\r?\n)*[ \t]*`{1,3}[\w+.#-]*$", text):
+            text = ""
+        if done:
+            text = re.sub(r"\r?\n[ \t]*(?:`{3,}|~{3,})[ \t]*\s*$", "\n", text)
+        return text
+
+    def _event(self, done, incomplete=False):
+        block = self.active
+        end = block["end"]
+        body = self.buf[block["start"]:end] if end is not None else self.buf[block["start"]:]
+        if end is None and not done:
+            body = self._PARTIAL_END.sub("", body)
+        shown = self._display(body, done)
+        extends = shown.startswith(block["shown"])
+        delta = shown[len(block["shown"]):] if extends else shown
+        reset = (not extends) or (not block["announced"])
+        if not delta and not done and not reset:
+            return None
+        block["shown"] = shown
+        block["announced"] = True
+        return {"type": "file_stream", "id": block["id"], "kind": block["kind"], "path": block["path"],
+                "delta": delta, "reset": reset, "done": bool(done), "incomplete": bool(incomplete)}
+
+    def _open_block(self, final):
+        head = self._HEAD.search(self.buf, self.scan_from)
+        if not head:
+            return False
+        arg = head.group(2).strip().strip("`'\"")
+        start = head.end()
+        if not arg:
+            following = re.match(r"[ \t]*([^\n]*)\r?\n", self.buf[start:])
+            if not following and not final:
+                return False
+            candidate = following.group(1).strip().strip("`'\"") if following else ""
+            if candidate and _PATH_LINE_RE.match(candidate):
+                arg = candidate
+                start += following.end()
+        self.counter += 1
+        self.active = {"id": self.counter, "kind": head.group(1).upper(), "path": arg, "start": start, "end": None,
+                       "shown": "", "announced": False}
+        return True
+
+    def feed(self, text, final=False):
+        self.buf += str(text or "")
+        events = []
+        while True:
+            if self.active is None and not self._open_block(final):
+                break
+            end = self._END.search(self.buf, self.active["start"])
+            if end:
+                self.active["end"] = end.start()
+                event = self._event(True)
+                if event:
+                    events.append(event)
+                self.scan_from = end.end()
+                self.active = None
+                continue
+            now = time.monotonic()
+            if final or now - self.last_emit >= self.interval:
+                event = self._event(False)
+                if event:
+                    self.last_emit = now
+                    events.append(event)
+            break
+        return events
+
+    def finish(self):
+        events = self.feed("", final=True)
+        if self.active is not None:
+            event = self._event(True, incomplete=True)
+            if event:
+                events.append(event)
+            self.active = None
+        return events
+
 
 
 EMPTY_REPLY_PLACEHOLDER_PREFIX = "Kurt completed the request without a text response"
@@ -4521,7 +4726,7 @@ class KurtWebApp:
         mode_rules = NORMAL_MODE_INSTRUCTIONS if mode == "normal" else AGENT_MODE_INSTRUCTIONS
         effort_rules = EFFORT_INSTRUCTIONS.get(effort, EFFORT_INSTRUCTIONS["thinking"])
         linked = str(chat.get("linked_folder") or "").strip()
-        prompt = (base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + FILE_ACTION_INSTRUCTIONS + "\n" + CLI_WORKFLOW_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules + "\n" + RESPONSE_FORMAT_INSTRUCTIONS)
+        prompt = (base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + FILE_ACTION_INSTRUCTIONS + "\n" + COMPLETION_SUMMARY_INSTRUCTIONS + "\n" + CLI_WORKFLOW_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules + "\n" + RESPONSE_FORMAT_INSTRUCTIONS)
         prompt += "\nCurrent session working root: " + str(root)
         prompt += "\nWorking root type: " + ("USER-LINKED FOLDER; every change still needs approval." if linked else "PRIVATE PER-CHAT ISOLATED WORKSPACE; every change still needs approval.")
         prompt += "\nUser home for absolute/relative local read paths: " + str(Path.home())
@@ -6449,6 +6654,7 @@ class Handler(BaseHTTPRequestHandler):
                 retrying_empty = empty_retries.get(candidate_index, 0) > 0
                 emit({"type": "draft_reset"})
                 chunks = []
+                file_tracker = FileStreamTracker()
                 rationale_chunks = []
                 lead = ""
                 thinking_ended_at = None
@@ -6489,6 +6695,8 @@ class Handler(BaseHTTPRequestHandler):
                             return
                         chunks.append(text)
                         emit({"type": "draft", "text": text})
+                        for stream_event in file_tracker.feed(text):
+                            emit(stream_event)
                         if thinking_ended_at is None and rationale_chunks and text.strip():
                             thinking_ended_at = time.monotonic()
 
@@ -6544,6 +6752,8 @@ class Handler(BaseHTTPRequestHandler):
                         if kind_name == "content":
                             route_text(chunk if isinstance(chunk, str) else str(chunk))
                     route_text("", final=True)
+                    for stream_event in file_tracker.finish():
+                        emit(stream_event)
                     raw_response = "".join(chunks).strip()
                     if not raw_response:
                         raise RuntimeError("The model returned no response text.")
@@ -6630,6 +6840,8 @@ class Handler(BaseHTTPRequestHandler):
             validation_errors = []
             max_rounds = 12
             file_action_retries = 0
+            summary_requests = 0
+            work_recap = []
             for round_index in range(max_rounds):
                 if round_index == 0 and DESKTOP_VISUAL_REQUEST_RE.search(user_text):
                     if mode == "normal":
@@ -6801,6 +7013,8 @@ class Handler(BaseHTTPRequestHandler):
                                             log_step("Ran read-only command: " + argument[:160], command_ok, status="Inspecting workspace…", detail="Exit code {}\n{}".format(exit_code, output_text))
                                         else:
                                             emit({"type": "approval_output", "approval_id": approval_item["approval"]["id"], "output": approval_item["output"]})
+                                        if not auto_run:
+                                            work_recap.append(("command", argument, command_ok, exit_code))
                                         results.append("[Actual terminal result]\nCommand: {}\nExit code: {}\nStatus: {}\nDuration: {}\nOutput:\n{}\nUse this actual result; do not claim success when the exit code is non-zero.".format(
                                             argument, exit_code, "succeeded" if command_ok else "failed", (str(duration)+"s" if duration is not None else "not reported"), output_text))
                             elif action == "DELETE":
@@ -6833,6 +7047,7 @@ class Handler(BaseHTTPRequestHandler):
                                                 emit({"type": "approval_output", "approval_id": approval_item["approval"]["id"], "output": approval_item["output"]})
                                                 log_step("Deleted approved file: " + deleted["path"], True,
                                                          status="File deleted…", detail=deleted["message"])
+                                                work_recap.append(("delete", deleted["path"]))
                                                 results.append("[File deletion succeeded] " + deleted["path"])
                                             except Exception as exc:
                                                 approval_item["output"] = {"text": str(exc), "returncode": 1, "ok": False, "elapsed": 0}
@@ -6868,6 +7083,7 @@ class Handler(BaseHTTPRequestHandler):
                                                 artifact["approval_required"] = False
                                                 artifact["validation"]["message"] = "Saved with approval"
                                                 log_step("Saved approved file: " + artifact["target_path"], True, status="File saved…", detail=saved.get("message", "File write completed."))
+                                                work_recap.append(("file", saved.get("path") or artifact["target_path"], "Replaced" if artifact.get("exists") else "Created"))
                                                 results.append("[File write succeeded] {}".format(saved.get("path")))
                                             except Exception as exc:
                                                 artifact["validation"]={"ok":False,"checked":True,"message":"Write failed: "+str(exc)}
@@ -6991,6 +7207,15 @@ class Handler(BaseHTTPRequestHandler):
                         "content": "The application rejected these file changes during syntax/structure validation:\n" + details + "\nFix the reported problems, provide a concise Change summary, and return complete corrected file actions. Do not claim checks passed unless they do.",
                     })
                     continue
+                if work_recap and summary_requests < 1 and round_index < max_rounds - 1:
+                    thin_probe = K.BLOCK_RE.sub("", strip_unsupported_actions(split_thinking(raw)[1])).strip()
+                    if len(re.sub(r"\s+", " ", thin_probe)) < 220:
+                        summary_requests += 1
+                        log_step("The final reply was too brief. Asking the model for a summary of what was done.", False, status="Writing summary…",
+                                 detail="Files were changed or commands were run, but the visible reply did not summarize the work. The application is asking the model to write that summary as visible text.")
+                        messages.append({"role": "assistant", "content": raw})
+                        messages.append({"role": "user", "content": COMPLETION_SUMMARY_MESSAGE})
+                        continue
                 final_raw = raw
                 break
 
@@ -7003,6 +7228,8 @@ class Handler(BaseHTTPRequestHandler):
             response_rationale = "\n\n".join(str(item.get("detail") or "") for item in worklog if isinstance(item, dict) and item.get("kind") == "thinking").strip()
             reply = strip_unsupported_actions(reply)
             reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
+            if work_recap and len(re.sub(r"\s+", " ", K.BLOCK_RE.sub("", reply)).strip()) < 220:
+                reply = (reply + "\n\n" + build_work_recap(work_recap)).strip()
             if validation_errors:
                 warning = "\n\n**Validation warning:** " + "; ".join(validation_errors)
                 reply = (reply + warning).strip()
