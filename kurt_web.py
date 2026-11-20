@@ -1808,8 +1808,10 @@ function stripUnsupportedActions(src){let text=String(src||'');const opener=/<th
  .replace(/<\/think(?:ing)?>/gi,'')
  .replace(/<\|tool_call_start\|>[\s\S]*?(?:<\|tool_call_end\|>|$)/gi,'')
  .replace(/<\|tool_call_(?:start|end)\|>/gi,'')
+ .replace(/<\/?\s*(?:[A-Za-z0-9]+_)?(?:function_calls?|tool_calls?|tool_use|tool_code)\s*\/?>/gi,'')
  .trim()}
-function safeLiveDraft(src){const text=String(src||'');const action=/@\s*@\s*@\s*(?:RUN|SEARCH|READ|LIST|WRITE|EDIT|SYSTEM_PROMPT|AGENT_RUN|AGENT_READ|AGENT_LIST|AGENT_WRITE|SUBAGENT|EXEC|BASH|SHELL)\b/i.exec(text);return stripUnsupportedActions(action?text.slice(0,action.index):text)}
+const ACTION_START_RE=/@\s*@\s*@\s*(?:RUN|SEARCH|READ|LIST|WRITE|EDIT|SYSTEM_PROMPT|AGENT_RUN|AGENT_READ|AGENT_LIST|AGENT_WRITE|SUBAGENT|EXEC|BASH|SHELL)\b/i;
+function safeLiveDraft(src){const text=String(src||'');const action=ACTION_START_RE.exec(text);const head=action?text.slice(0,action.index):text.replace(/\s*@{1,3}[ \t]*[A-Za-z_]{0,12}$/,'');return stripUnsupportedActions(head)}
 function inline(s){const spans=[];s=s.replace(/`([^`\n]+)`/g,(_,c)=>{spans.push('<code>'+c+'</code>');return '\u0001'+(spans.length-1)+'\u0001'});s=s.replace(/\*\*([^*\n]+?)\*\*/g,'<strong>$1</strong>').replace(/(^|[^*\w])\*([^*\n]+?)\*(?![*\w])/g,'$1<em>$2</em>').replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');return s.replace(/\u0001(\d+)\u0001/g,(_,i)=>spans[+i])}
 function mdBlocks(text){
  const math=[];
@@ -2927,7 +2929,7 @@ async function send(){
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
  const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',blockRationale='',pending=false,thinkStart=0,retryMode=null;node.__artifacts=[];const showReasoning=live=>{reasoning=[modelRationale,blockRationale].filter(Boolean).join('\n\n');setReasoning(node,reasoning,live)};
  const controller=new AbortController();state.abort=controller;
- const paint=()=>{pending=false;if(run!==state.run)return;const parsed=splitResponseRationale(safeLiveDraft(raw),true);if(parsed.rationale){if(!thinkStart)thinkStart=performance.now();blockRationale=parsed.rationale;showReasoning(true)}const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
+ const paint=()=>{pending=false;if(run!==state.run)return;const hasAction=ACTION_START_RE.test(raw);const parsed=splitResponseRationale(safeLiveDraft(raw),true);let rationale=parsed.rationale,answer=parsed.answer;if(hasAction){const narration=stripUnsupportedActions(parsed.answer);rationale=[parsed.rationale,narration].filter(Boolean).join('\n\n');answer=''}if(rationale){if(!thinkStart)thinkStart=performance.now();blockRationale=rationale;showReasoning(true)}const safe=stripUnsupportedActions(answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
  try{
   const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text:requestText,skill_id:skillId,route,effort:state.effort,mode:state.mode,message_id:messageId}),signal:controller.signal});
@@ -3064,6 +3066,11 @@ UNSUPPORTED_ACTION_BLOCK_RE = re.compile(
 TOOL_CALL_BLOCK_RE = re.compile(
     r"<\|tool_call_start\|>[\s\S]*?(?:<\|tool_call_end\|>|\Z)", re.I
 )
+STRAY_TOOL_TAG_RE = re.compile(
+    r"</?\s*(?:[A-Za-z0-9]+_)?(?:function_calls?|tool_calls?|tool_use|tool_code)\s*/?>"
+    r"|<\|(?:tool_calls?_?(?:begin|end|sep)?|tool_sep|im_start|im_end|eot_id|end_of_text)\|>", re.I
+)
+ACTION_WORDS_RE = r"(?:RUN|SEARCH|READ|LIST|WRITE|EDIT|DELETE|SYSTEM_PROMPT|AGENT_RUN|AGENT_READ|AGENT_LIST|AGENT_WRITE|SUBAGENT|EXEC|BASH|SHELL)"
 
 
 _FILE_ACTION_HEAD_RE = re.compile(ACTION_MARKER_RE + r"[ \t]*(WRITE|EDIT)[ \t]*\r?\n[ \t]*([^\n]+?)[ \t]*\r?\n", re.I)
@@ -3127,6 +3134,16 @@ FILE_ACTION_RETRY_MESSAGE = (
     "@@@ WRITE <relative/path/to/file.ext>\n<complete file contents>\n@@@ END\n"
     "Do not stop after the summary and do not ask for confirmation."
 )
+
+
+def pre_action_narration(raw):
+    """Return the text a model wrote before its first action block (process narration, not the answer)."""
+    visible = split_thinking(raw)[1]
+    match = re.search(ACTION_MARKER_RE + r"\s*" + ACTION_WORDS_RE + r"\b", visible, re.I)
+    if not match:
+        return ""
+    text = STRAY_TOOL_TAG_RE.sub("", visible[:match.start()])
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def build_work_recap(items):
@@ -3275,6 +3292,7 @@ def strip_unsupported_actions(value):
     text = UNSUPPORTED_ACTION_BLOCK_RE.sub("", str(value or ""))
     text = TOOL_CALL_BLOCK_RE.sub("", text)
     text = re.sub(r"<\|tool_call_(?:start|end)\|>", "", text, flags=re.I)
+    text = STRAY_TOOL_TAG_RE.sub("", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
@@ -6703,7 +6721,7 @@ class Handler(BaseHTTPRequestHandler):
                     def route_text(text, final=False):
                         """Split streamed content into reasoning (inside <think>) and answer text."""
                         nonlocal in_think, pend
-                        pend += text
+                        pend = STRAY_TOOL_TAG_RE.sub("", pend + text)
                         while True:
                             tag = THINK_TAG_RE.search(pend)
                             if tag:
@@ -6725,7 +6743,8 @@ class Handler(BaseHTTPRequestHandler):
                             hold = ""
                             if not final:
                                 cut = pend.rfind("<")
-                                if cut != -1 and ">" not in pend[cut:] and len(pend) - cut < 12:
+                                tail_len = len(pend) - cut
+                                if cut != -1 and ">" not in pend[cut:] and (tail_len < 12 or (tail_len < 40 and re.fullmatch(r"</?[A-Za-z0-9_|:]*", pend[cut:]))):
                                     hold = pend[cut:]
                                     pend = pend[:cut]
                             (push_reasoning if in_think else push_answer)(pend)
@@ -6895,7 +6914,7 @@ class Handler(BaseHTTPRequestHandler):
                     break
 
                 # Keep rationale in the same Activity list at the time it was produced.
-                round_rationale = "\n\n".join(part for part in (last_round_reasoning["text"], split_thinking(raw)[0].strip()) if part).strip()
+                round_rationale = "\n\n".join(part for part in (last_round_reasoning["text"], split_thinking(raw)[0].strip(), pre_action_narration(raw)) if part).strip()
                 if round_rationale:
                     worklog.append({"kind": "thinking", "text": "Thinking", "ok": None, "detail": round_rationale[:12000]})
 
