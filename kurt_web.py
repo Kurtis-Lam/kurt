@@ -32,7 +32,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlencode, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import kurt as K
 from kurt_sandbox import is_code_file, validate_content, run_workspace_command
@@ -47,6 +47,68 @@ MAX_IMPORT_BYTES = 20 * 1024 * 1024
 MAX_WORKSPACE_CONTEXT = 1_400_000
 MAX_CHATS = 100
 MAX_MESSAGES_PER_CHAT = 300
+
+PREVIEW_CAP_TTL = 24 * 60 * 60
+PREVIEW_TEXT_LIMIT = 2 * 1024 * 1024
+PREVIEW_STAGE_LIMIT = 5 * 1024 * 1024
+PREVIEW_MAX_SERVE = 2 * 1024 * 1024 * 1024
+PREVIEW_BLOCKED_DIRS = {"node_modules", "__pycache__", "venv", "credentials", "secrets"}
+PREVIEW_MIME_OVERRIDES = {
+    ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8",
+    ".xhtml": "application/xhtml+xml; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml", ".wasm": "application/wasm", ".pdf": "application/pdf",
+    ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac",
+    ".wav": "audio/wav", ".oga": "audio/ogg", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".weba": "audio/webm",
+    ".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+    ".ogv": "video/ogg", ".mkv": "video/x-matroska",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+    ".webp": "image/webp", ".avif": "image/avif", ".bmp": "image/bmp", ".ico": "image/x-icon",
+    ".md": "text/plain; charset=utf-8", ".markdown": "text/plain; charset=utf-8",
+    ".py": "text/plain; charset=utf-8", ".pyw": "text/plain; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8", ".tsv": "text/tab-separated-values; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8", ".log": "text/plain; charset=utf-8",
+}
+PREVIEW_BINARY_EXTS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".bmp", ".ico", ".pdf",
+    ".mp3", ".m4a", ".aac", ".flac", ".wav", ".oga", ".ogg", ".opus", ".weba",
+    ".mp4", ".m4v", ".webm", ".mov", ".ogv", ".mkv",
+    ".zip", ".gz", ".tar", ".7z", ".rar", ".exe", ".dll", ".so", ".bin", ".pyc", ".class", ".jar",
+    ".db", ".sqlite", ".ttf", ".otf", ".woff", ".woff2", ".docx", ".xlsx", ".pptx", ".npy", ".npz", ".pkl",
+}
+PREVIEW_HTML_CSP = (
+    "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads; "
+    "default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; "
+    "media-src 'self' data: blob:; font-src 'self' data: https://cdn.jsdelivr.net; "
+    "connect-src 'self' data: blob:; frame-src 'self' data: blob:; worker-src 'self' blob:; "
+    "form-action 'none'; base-uri 'self'; frame-ancestors 'self'"
+)
+
+
+def preview_mime(name):
+    ext = os.path.splitext(str(name))[1].lower()
+    if ext in PREVIEW_MIME_OVERRIDES:
+        return PREVIEW_MIME_OVERRIDES[ext]
+    guessed = mimetypes.guess_type(str(name))[0]
+    if not guessed:
+        return "application/octet-stream"
+    if guessed.startswith("text/") and "charset" not in guessed:
+        guessed += "; charset=utf-8"
+    return guessed
+
+
+def preview_is_text(path):
+    ext = os.path.splitext(str(path))[1].lower()
+    if ext in PREVIEW_BINARY_EXTS:
+        return False
+    try:
+        with open(path, "rb") as handle:
+            return b"\0" not in handle.read(4096)
+    except OSError:
+        return False
+
 
 WEB_INSTRUCTIONS = r"""
 KURT WEB INTERFACE RULES:
@@ -1360,6 +1422,42 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 .tk-num{color:var(--tk-num)}
 .tk-fn{color:var(--tk-fn)}
 .tk-ty{color:var(--tk-ty)}
+.ap-status{flex-wrap:wrap;row-gap:6px}
+.ap-status-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ap-tools{margin-left:auto;display:flex;align-items:center;flex-wrap:wrap;gap:6px;flex:none}
+.ap-tab{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--muted);font:12px var(--sans);cursor:pointer;text-decoration:none}
+.ap-tab:hover{color:var(--text);background:var(--raise)}
+.ap-tab.active{color:var(--text);background:var(--raise);border-color:var(--line2)}
+.ap-run{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:7px;font:600 12px var(--sans)}
+.ap-run .ic{width:13px;height:13px}
+.ap-run:disabled{opacity:.6;cursor:default}
+.ap-panel{flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column}
+.ap-panel>*{flex:1 0 auto}
+.ap-frame{display:block;width:100%;height:calc(100dvh - 190px);min-height:320px;border:0;background:#fff}
+.ap-media{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px 18px;min-height:240px}
+.ap-media img,.ap-media video{max-width:100%;max-height:calc(100dvh - 240px);border-radius:10px;background:#080a09;object-fit:contain}
+.ap-media video{width:100%}
+.ap-media audio{width:min(100%,560px)}
+.ap-cap{color:var(--muted);font:12px var(--mono);overflow-wrap:anywhere;text-align:center}
+.ap-md{padding:18px 22px 32px;max-width:860px}
+.ap-table-wrap{overflow:auto;max-height:calc(100dvh - 190px)}
+.ap-table{border-collapse:collapse;min-width:100%;font:12.5px/1.5 var(--mono)}
+.ap-table th,.ap-table td{padding:5px 12px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;max-width:420px;overflow:hidden;text-overflow:ellipsis}
+.ap-table th{position:sticky;top:0;background:var(--panel);color:var(--text);font-weight:600}
+.ap-empty{display:grid;gap:10px;justify-items:start;align-content:start;padding:22px 18px;color:var(--muted);font:13px/1.55 var(--sans)}
+.ap-empty strong{color:var(--text);overflow-wrap:anywhere}
+.ap-empty a.ap-btn{text-decoration:none}
+.ap-note{padding:18px;color:var(--muted);font:13px/1.55 var(--sans)}
+.ap-output{display:flex;flex-direction:column}
+.ap-files-label{padding:6px 16px 8px;color:var(--muted);font:600 11.5px var(--sans);text-transform:uppercase;letter-spacing:.04em}
+.ap-files{display:flex;flex-wrap:wrap;gap:8px;padding:0 16px 18px}
+.ap-file-chip{padding:5px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--panel);color:var(--text);font:12px var(--mono);cursor:pointer;overflow-wrap:anywhere;text-align:left}
+.ap-file-chip:hover{border-color:var(--green);background:var(--raise)}
+.ap-run-img{display:block;max-width:calc(100% - 32px);max-height:360px;margin:0 16px 14px;border:1px solid var(--line);border-radius:10px;background:#fff}
+.content code.file-link{cursor:pointer;border-color:var(--green);color:var(--green)}
+.content code.file-link:hover{background:var(--green-soft)}
+.attach-open{margin:0 10px 0 0;padding:0;border:0;background:none;color:inherit;font:inherit;text-decoration:underline dotted;cursor:pointer}
+.attach-open:hover{color:var(--green)}
 @media(max-width:700px){
  .main.has-artifacts .artifact-pane{margin:0;border:0;border-radius:0;box-shadow:var(--shadow)}
  .ap-btn span{display:none}
@@ -1396,6 +1494,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
 <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></symbol>
 <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor" stroke="none"/></symbol>
 <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
 <symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></symbol>
 </svg>
@@ -1698,10 +1797,10 @@ window.MathJax={tex:{inlineMath:[],displayMath:[['\\[','\\]']],processEscapes:tr
 function typesetMath(root){if(!root||!window.MathJax?.typesetPromise)return;try{window.MathJax.typesetClear?.([root]);window.MathJax.typesetPromise([root]).catch(error=>console.warn('Math rendering failed:',error))}catch(error){console.warn('Math rendering failed:',error)}}
 const mathJaxScript=document.createElement('script');mathJaxScript.src='https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js';mathJaxScript.async=true;mathJaxScript.onload=()=>document.querySelectorAll('.content').forEach(typesetMath);mathJaxScript.onerror=()=>console.warn('MathJax could not be loaded; equations will remain centered as TeX text.');document.head.appendChild(mathJaxScript);
 function splitResponseRationale(src,allowOpen=false){src=String(src||'');const marker=/@{2,3}\s*(?:RATIONALE|SUMMARY)\s*\r?\n/i.exec(src);if(!marker)return{rationale:'',answer:src};const start=marker.index,bodyStart=start+marker[0].length,tail=src.slice(bodyStart),end=/\r?\n?@{2,3}\s*END\b/i.exec(tail);if(!end)return allowOpen?{rationale:tail.trim(),answer:src.slice(0,start).trim()}:{rationale:'',answer:src};const rationale=tail.slice(0,end.index).trim(),after=tail.slice(end.index+end[0].length);return{rationale,answer:(src.slice(0,start)+'\n'+after).replace(/\n{3,}/g,'\n\n').trim()}}
-function renderMarkdown(src){src=String(src||'');return src.split(/((?:```|~~~)[^\n]*\n[\s\S]*?(?:```|~~~)|(?:```|~~~)[^\n]*\n[\s\S]*$|(?:```|~~~)[^\n]*$)/).map((seg,i)=>{if(i%2===0)return mdBlocks(seg);const fence=seg.slice(0,3),nl=seg.indexOf('\n');const lang=(nl<0?seg.slice(3):seg.slice(3,nl)).trim().split(/\s+/)[0]||'';let code=nl<0?'':seg.slice(nl+1);if(nl>=0&&seg.endsWith(fence))code=code.slice(0,-fence.length).replace(/\n$/,'');return '<div class="codebox"><div class="codehead"><span>'+esc(lang||'code')+'</span><button class="copy-mini" data-copy-code>Copy code</button></div><pre><code>'+esc(code.replace(/\n$/,''))+'</code></pre></div>'}).join('')}
+function renderMarkdown(src){src=String(src||'');return src.split(/((?:```|~~~)[^\n]*\n[\s\S]*?(?:```|~~~)|(?:```|~~~)[^\n]*\n[\s\S]*$|(?:```|~~~)[^\n]*$)/).map((seg,i)=>{if(i%2===0)return mdBlocks(seg);const fence=seg.slice(0,3),nl=seg.indexOf('\n');const lang=(nl<0?seg.slice(3):seg.slice(3,nl)).trim().split(/\s+/)[0]||'';let code=nl<0?'':seg.slice(nl+1);if(nl>=0&&seg.endsWith(fence))code=code.slice(0,-fence.length).replace(/\n$/,'');return '<div class="codebox"><div class="codehead"><span>'+esc(lang||'code')+'</span><span>'+codeAction(lang)+'<button class="copy-mini" data-copy-code>Copy code</button></span></div><pre><code>'+esc(code.replace(/\n$/,''))+'</code></pre></div>'}).join('')}
 function splitThink(raw,streaming){return{think:'',answer:stripUnsupportedActions(raw),open:false}}
 function fmtSecs(s){s=Math.max(1,Math.round(s));return s<60?s+'s':Math.floor(s/60)+'m '+(s%60)+'s'}
-function bindCopy(root){root.querySelectorAll('[data-copy-code]').forEach(b=>b.onclick=()=>{const code=b.closest('.codebox').querySelector('code');navigator.clipboard.writeText(code?code.textContent:'').then(()=>toast('Code copied'))})}
+function bindCopy(root){root.querySelectorAll('[data-copy-code]').forEach(b=>b.onclick=()=>{const code=b.closest('.codebox').querySelector('code');navigator.clipboard.writeText(code?code.textContent:'').then(()=>toast('Code copied'))});root.querySelectorAll('[data-open-code]').forEach(b=>b.onclick=()=>{const code=b.closest('.codebox').querySelector('code');openCodeSnippet(b.dataset.openCode,code?code.textContent:'')})}
 function formatThought(seconds){const s=Number(seconds);if(!Number.isFinite(s)||s<=0)return '';if(s<60){const n=Math.max(1,Math.round(s));return n+(n===1?' second':' seconds')}const m=Math.floor(s/60),r=Math.round(s%60);return r?m+'m '+r+'s':m+'m'}
 function setReasoningOpen(panel,open){panel.classList.toggle('open',open);if(panel._head){panel._head.classList.toggle('open',open);panel._head.setAttribute('aria-expanded',String(open))}}
 function reasoningBlock(){return null}
@@ -1867,12 +1966,12 @@ function renderMessage(role,content,artifacts,extra){
  wrap.dataset.raw=safeContent;const bubble=document.createElement('div');bubble.className='bubble';wrap.appendChild(bubble);
  if(role==='user'){
   if(hasMathMarkup(safeContent)){const userContent=document.createElement('div');userContent.className='content user-content';userContent.innerHTML=renderMarkdown(safeContent);bubble.appendChild(userContent);typesetMath(userContent)}else bubble.textContent=content;
-  if(extra?.attachments?.length){const files=document.createElement('div');files.className='user-attachment-list';files.textContent='📎 '+extra.attachments.map(path=>String(path).split('/').pop()).join(' · ');bubble.appendChild(files)}
+  if(extra?.attachments?.length){const files=document.createElement('div');files.className='user-attachment-list';extra.attachments.forEach(path=>{const chip=document.createElement('button');chip.type='button';chip.className='attach-open';chip.textContent='📎 '+String(path).split('/').pop();chip.title='Open '+path+' in the file card';chip.onclick=()=>openWorkspaceFile(path,'private').catch(error=>toast(error.message));files.appendChild(chip)});bubble.appendChild(files)}
  }else{
   bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><button type="button" class="think-head" hidden aria-expanded="false"><svg class="ic chev" aria-hidden="true"><use href="#i-chev"/></svg><span class="think-label">Thinking</span></button><span class="assistant-status"></span></div>');
   bubble.appendChild(thinkBlock());bubble.querySelector('.think-head').onclick=()=>{wrap.__userToggled=true;setThinkOpen(wrap,!bubble.querySelector('.work-log').classList.contains('open'))};
   bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');
-  const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);renderMcpMedia(contentNode,extra?.media||[]);bindCopy(wrap);
+  const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindFileLinks(contentNode);renderMcpMedia(contentNode,extra?.media||[]);bindCopy(wrap);
   wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];
   if(extra?.reasoning&&!wrap.__worklog.some(entry=>entry&&entry.kind==='thinking'))wrap.__worklog.unshift({kind:'thinking',text:'Thinking',ok:null,detail:extra.reasoning});
   setThink(wrap,wrap.__worklog);setThinkLabel(wrap,false,extra?.thinkingSeconds||(extra?.stats&&extra.stats.thought_seconds)||0);
@@ -1965,6 +2064,7 @@ function artifactLang(a){
 }
 function artifactState(a){
  const message=String((a.validation&&a.validation.message)||'');
+ if(a.kind==='file_ref')return {cls:'',text:message||'Workspace file'};
  if(a.kind==='terminal_output')return {cls:(a.validation&&a.validation.ok===false)?'bad':'ok',text:message||'Terminal output'};
  if(a.workspace_written)return {cls:'ok',text:'Saved after approval'};
  if(/declined/i.test(message))return {cls:'',text:message};
@@ -1978,8 +2078,9 @@ function openArtifactPreview(a,trigger){
  const full=String(a.path||'File preview'),base=full.split('/').pop()||full;
  const title=$('artifactPaneTitle');if(title){title.textContent=base;title.title=full}
  const content=String(a.content||''),lines=content?content.replace(/\n$/,'').split('\n').length:0;
- const count=$('artifactCount');if(count)count.textContent=artifactLang(a)+(a.kind==='terminal_output'?'':' · '+lines+' line'+(lines===1?'':'s'));
- state.activeArtifactContent=content;state.activeArtifactName=base;state.activeArtifact=a;
+ const count=$('artifactCount');if(count)count.textContent=artifactLang(a)+(a.kind==='terminal_output'?'':(content?' · '+lines+' line'+(lines===1?'':'s'):(a.size?' · '+pvSize(a.size):'')));
+ state.activeArtifactContent=content;state.activeArtifactName=pvName(a);state.activeArtifact=a;
+ const copyBtn=$('artifactPaneCopy');if(copyBtn)copyBtn.style.display=content?'':'none';
  const promptActions=$('artifactPanePromptActions');if(promptActions)promptActions.hidden=a.kind!=='system_prompt';
  const applyButton=$('applySystemPromptProposal');if(applyButton){applyButton.disabled=false;applyButton.textContent='Apply prompt to Kurt'}
  pane.scrollTop=0;const outer=$('artifactPane');if(outer)outer.scrollTop=0;
@@ -2003,20 +2104,88 @@ async function applySystemPromptProposal(){
   toast('Kurt’s system prompt has been updated. New requests will use it.');
  }catch(error){if(button){button.disabled=false;button.textContent='Apply prompt to Kurt'}toast('Could not apply system prompt: '+error.message)}
 }
-function artifactCard(a){
- const info=artifactState(a);
- const view=document.createElement('div');view.className='ap-view';
- const status=document.createElement('div');status.className='ap-status'+(info.cls?' '+info.cls:'');
- const dot=document.createElement('span');dot.className='dot';
- const label=document.createElement('span');label.textContent=info.text;
- status.append(dot,label);
- const pre=document.createElement('pre');const code=document.createElement('code');
+Object.assign(LANG_BY_EXT,{png:'PNG image',jpg:'JPEG image',jpeg:'JPEG image',gif:'GIF image',webp:'WebP image',bmp:'BMP image',ico:'Icon',avif:'AVIF image',mp3:'MP3 audio',wav:'WAV audio',ogg:'Ogg audio',oga:'Ogg audio',m4a:'M4A audio',aac:'AAC audio',flac:'FLAC audio',opus:'Opus audio',weba:'WebM audio',mp4:'MP4 video',m4v:'MP4 video',webm:'WebM video',mov:'QuickTime video',ogv:'Ogg video',mkv:'MKV video',pdf:'PDF',tsv:'TSV',xhtml:'XHTML',markdown:'Markdown',log:'Log'});
+const PV_TYPES={py:'python',pyw:'python',html:'html',htm:'html',xhtml:'html',svg:'svg',md:'markdown',markdown:'markdown',csv:'csv',tsv:'csv',pdf:'pdf',png:'image',jpg:'image',jpeg:'image',gif:'image',webp:'image',bmp:'image',ico:'image',avif:'image',mp3:'audio',wav:'audio',ogg:'audio',oga:'audio',m4a:'audio',aac:'audio',flac:'audio',opus:'audio',weba:'audio',mp4:'video',webm:'video',mov:'video',m4v:'video',ogv:'video',mkv:'video'};
+const PV_BINARY=new Set('zip gz tar 7z rar exe dll so bin pyc class jar db sqlite ttf otf woff woff2 docx xlsx pptx npy npz pkl'.split(' '));
+const PV_RUNS=new WeakMap(),PV_UI=new WeakMap(),PV_URLS=new WeakMap();
+function pvExt(a){const n=String(a.path||a.name||'');return n.includes('.')?n.split('.').pop().toLowerCase():''}
+function pvName(a){return String(a.name||a.path||'file').split('/').pop()||'file'}
+function pvSize(n){n=Number(n)||0;if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';if(n<1073741824)return (n/1048576).toFixed(1)+' MB';return (n/1073741824).toFixed(2)+' GB'}
+function artifactType(a){
+ if(!a||['terminal_output','command','agent_command','system_prompt','agent_file'].includes(a.kind))return 'text';
+ const type=PV_TYPES[pvExt(a)];if(type)return type;
+ return (a.kind==='file_ref'&&PV_BINARY.has(pvExt(a)))?'binary':'text';
+}
+function ensurePreviewUrl(a){
+ if(a.url)return Promise.resolve(a.url);
+ let pending=PV_URLS.get(a);
+ if(!pending){
+  pending=(async()=>{
+   if(!state.chatId)throw new Error('Open a conversation first');
+   if(a.workspace_written&&a.path){try{return (await api('/api/artifact/open',{chat_id:state.chatId,area:a.area||'work',path:a.path,include_text:false})).url}catch(error){}}
+   if(typeof a.content!=='string')throw new Error('The file is no longer available');
+   return (await api('/api/artifact/preview',{chat_id:state.chatId,name:pvName(a),content:a.content})).url;
+  })();
+  PV_URLS.set(a,pending);pending.catch(()=>PV_URLS.delete(a));
+ }
+ return pending;
+}
+async function openWorkspaceFile(path,area){
+ if(!state.chatId)throw new Error('Open a conversation first');
+ const r=await api('/api/artifact/open',{chat_id:state.chatId,area:area||'work',path});
+ const a={kind:'file_ref',path:r.path,name:r.name,area:r.area,mime:r.mime,size:r.size,url:r.url,workspace_written:true,validation:{ok:true,checked:true,message:'Workspace file · '+pvSize(r.size)}};
+ if(typeof r.content==='string')a.content=r.content;
+ openArtifactPreview(a,null);return a;
+}
+function openCodeSnippet(kind,text){
+ const names={py:'snippet.py',html:'snippet.html',svg:'snippet.svg',md:'snippet.md'};
+ openArtifactPreview({kind:'code',path:names[kind]||'snippet.txt',content:String(text||''),approval_required:false,validation:{ok:true,checked:false,message:'Code snippet · not saved'}},null);
+}
+function codeAction(lang){
+ const kind={python:'py',py:'py',html:'html',htm:'html',svg:'svg',markdown:'md',md:'md'}[String(lang||'').toLowerCase()];
+ return kind?'<button class="copy-mini" data-open-code="'+kind+'">'+(kind==='py'?'Run':'Preview')+'</button>':'';
+}
+function bindFileLinks(root){
+ if(!root)return;
+ const known=new Set([...Object.keys(PV_TYPES),...Object.keys(LANG_BY_EXT)]);
+ root.querySelectorAll('code').forEach(code=>{
+  if(code.closest('pre')||code.closest('.codebox')||code.dataset.fileLink)return;
+  const text=(code.textContent||'').trim();
+  if(!text||text.length>180||/[\s<>"|?*\\]/.test(text)||text.includes('..')||text.includes('://'))return;
+  const match=text.match(/\.([A-Za-z0-9]{1,5})$/);if(!match||!known.has(match[1].toLowerCase()))return;
+  code.dataset.fileLink='1';code.classList.add('file-link');code.title='Open in the file card';code.setAttribute('role','button');code.tabIndex=0;
+  const open=async()=>{try{await openWorkspaceFile(text,'work')}catch(error){if(state.linkedFolder){try{await openWorkspaceFile(text,'private');return}catch(inner){}}toast('Could not open '+text+': '+error.message)}};
+  code.onclick=open;code.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open()}};
+ });
+}
+function pvNote(text){const n=document.createElement('div');n.className='ap-note';n.textContent=text;return n}
+function pvInfo(a,message){
+ const box=document.createElement('div');box.className='ap-empty';
+ const title=document.createElement('strong');title.textContent=pvName(a);
+ const detail=document.createElement('span');detail.textContent=message||((a.mime||artifactLang(a))+(a.size?' · '+pvSize(a.size):'')+' · No inline preview is available for this file type.');
+ box.append(title,detail);
+ if(a.url){const link=document.createElement('a');link.className='ap-btn';link.href=a.url;link.download=pvName(a);link.textContent='Download file';box.appendChild(link)}
+ return box;
+}
+function pvTerm(text,ok){
+ const pre=document.createElement('pre');pre.className='ap-pre term';const code=document.createElement('code');
+ const rows=String(text).replace(/\r\n?/g,'\n').replace(/\n$/,'').split('\n');
+ code.innerHTML=rows.map((line,index)=>{
+  const safe=esc(line)||' ';let out=safe;
+  if(index===0&&line.startsWith('$ '))out='<span class="term-cmd">'+safe+'</span>';
+  else if(/^Exit code:/.test(line))out='<span class="term-exit '+(ok?'ok':'bad')+'">'+safe+'</span>';
+  return '<span class="cl">'+out+'\n</span>';
+ }).join('');
+ pre.appendChild(code);return pre;
+}
+function pvCode(a,info){
+ if(typeof a.content!=='string')return pvInfo(a,'This file is too large to show as text.');
+ const pre=document.createElement('pre'),code=document.createElement('code');
  const content=String(a.content||'').replace(/\r\n?/g,'\n');
  let lines;
  if(a.kind==='terminal_output'){
   pre.className='ap-pre term';
-  const raw=content.replace(/\n$/,'').split('\n');
-  lines=raw.map((line,index)=>{
+  lines=content.replace(/\n$/,'').split('\n').map((line,index)=>{
    const safe=esc(line)||' ';
    if(index===0&&line.startsWith('$ '))return '<span class="term-cmd">'+safe+'</span>';
    if(/^Exit code:/.test(line))return '<span class="term-exit '+(info.cls==='bad'?'bad':'ok')+'">'+safe+'</span>';
@@ -2029,7 +2198,129 @@ function artifactCard(a){
   if(lines.length>1&&lines[lines.length-1]==='')lines.pop();
  }
  code.innerHTML=lines.map(line=>'<span class="cl">'+line+'\n</span>').join('');
- pre.appendChild(code);view.append(status,pre);
+ pre.appendChild(code);return pre;
+}
+function pvFrame(a,plain){
+ const wrap=document.createElement('div');wrap.className='ap-frame-wrap';
+ const frame=document.createElement('iframe');frame.className='ap-frame';frame.title='Preview of '+pvName(a);frame.referrerPolicy='no-referrer';
+ if(!plain)frame.setAttribute('sandbox','allow-scripts allow-forms allow-modals allow-popups allow-downloads');
+ ensurePreviewUrl(a).then(url=>{frame.src=url}).catch(error=>wrap.replaceChildren(pvInfo(a,'Preview unavailable: '+error.message)));
+ wrap.appendChild(frame);return wrap;
+}
+function pvMedia(a,type){
+ const box=document.createElement('div');box.className='ap-media '+type;
+ ensurePreviewUrl(a).then(url=>{
+  let el;
+  if(type==='audio'){el=document.createElement('audio');el.controls=true;el.preload='metadata'}
+  else if(type==='video'){el=document.createElement('video');el.controls=true;el.preload='metadata';el.setAttribute('playsinline','')}
+  else{el=document.createElement('img');el.alt=pvName(a)}
+  el.onerror=()=>{const fail=pvInfo(a,'Your browser could not play or display this '+type+' format. You can download it instead.');box.replaceChildren(fail)};
+  el.src=url;box.prepend(el);
+ }).catch(error=>box.replaceChildren(pvInfo(a,'Preview unavailable: '+error.message)));
+ const caption=document.createElement('div');caption.className='ap-cap';caption.textContent=pvName(a)+(a.size?' · '+pvSize(a.size):'');box.appendChild(caption);
+ return box;
+}
+function pvMarkdown(a){const d=document.createElement('div');d.className='content ap-md';d.innerHTML=renderMarkdown(String(a.content||''));bindCopy(d);typesetMath(d);return d}
+function pvParseCsv(text,delim){
+ const rows=[];let row=[],cell='',quoted=false;
+ for(let i=0;i<text.length&&rows.length<1001;i++){
+  const c=text[i];
+  if(quoted){if(c==='"'){if(text[i+1]==='"'){cell+='"';i++}else quoted=false}else cell+=c}
+  else if(c==='"')quoted=true;
+  else if(c===delim){row.push(cell);cell=''}
+  else if(c==='\n'||c==='\r'){if(c==='\r'&&text[i+1]==='\n')i++;row.push(cell);rows.push(row);row=[];cell=''}
+  else cell+=c;
+ }
+ if(cell!==''||row.length){row.push(cell);rows.push(row)}
+ return rows;
+}
+function pvCsv(a){
+ const rows=pvParseCsv(String(a.content||''),pvExt(a)==='tsv'?'\t':',');
+ if(!rows.length)return pvNote('This file is empty.');
+ const wrap=document.createElement('div');wrap.className='ap-table-wrap';
+ const table=document.createElement('table');table.className='ap-table';
+ const head=document.createElement('thead'),body=document.createElement('tbody');
+ const hr=document.createElement('tr');rows[0].forEach(cell=>{const th=document.createElement('th');th.textContent=cell;hr.appendChild(th)});head.appendChild(hr);
+ rows.slice(1,1001).forEach(r=>{const tr=document.createElement('tr');r.forEach(cell=>{const td=document.createElement('td');td.textContent=cell;td.title=cell;tr.appendChild(td)});body.appendChild(tr)});
+ table.append(head,body);wrap.appendChild(table);
+ if(rows.length>1000)wrap.appendChild(pvNote('Showing the first 1,000 rows.'));
+ return wrap;
+}
+function pvTabs(tools,panel,tabs,start){
+ const cache={},buttons={};
+ const api2={show(key){
+  Object.entries(buttons).forEach(([k,b])=>{b.classList.toggle('active',k===key);b.setAttribute('aria-selected',String(k===key))});
+  if(!cache[key])cache[key]=tabs.find(t=>t.key===key).render();
+  panel.replaceChildren(cache[key]);
+ }};
+ if(tabs.length>1)tabs.forEach(t=>{const b=document.createElement('button');b.type='button';b.className='ap-tab';b.textContent=t.label;b.setAttribute('role','tab');b.onclick=()=>api2.show(t.key);buttons[t.key]=b;tools.appendChild(b)});
+ api2.show(start||tabs[0].key);return api2;
+}
+async function pvRun(a){
+ const ui=PV_UI.get(a);if(!ui)return;
+ const prior=PV_RUNS.get(a)||{};if(prior.running)return;
+ if(!state.chatId){toast('Open a conversation first');return}
+ if(!prior.approved){
+  const where=state.linkedFolder?'the linked folder':'this conversation’s private workspace';
+  const ok=await confirmInApp('Run '+pvName(a)+'?','Kurt will run this Python file with the private Python environment of this conversation, using '+where+' as the working folder. Only run code you have reviewed.','Run',false);
+  if(!ok)return;
+ }
+ PV_RUNS.set(a,{approved:true,running:true});ui.fill();ui.tabs.show('output');
+ let result;
+ try{result=await api('/api/artifact/run',{chat_id:state.chatId,name:pvName(a),path:(a.workspace_written&&a.path)?a.path:'',area:a.area||'work',content:typeof a.content==='string'?a.content:undefined,approved:true})}
+ catch(error){result={ok:false,returncode:-1,output:error.message,files:[],command:'python '+pvName(a)}}
+ PV_RUNS.set(a,{approved:true,result});
+ const latest=PV_UI.get(a);if(latest)latest.fill();
+}
+function pvPython(a,tools,panel,info){
+ const holder=document.createElement('div');holder.className='ap-output';
+ const run=document.createElement('button');run.type='button';run.className='ap-run primary';
+ run.innerHTML='<svg class="ic" aria-hidden="true"><use href="#i-play"/></svg><span>Run</span>';
+ const label=run.querySelector('span');
+ const fill=()=>{
+  const st=PV_RUNS.get(a)||{};holder.replaceChildren();
+  if(st.running){run.disabled=true;label.textContent='Running…';holder.appendChild(pvNote('Running… this can take up to two minutes.'));return}
+  run.disabled=false;label.textContent=st.result?'Run again':'Run';
+  if(!st.result){holder.appendChild(pvNote('Press Run to execute this file. Its output appears here.'));return}
+  const r=st.result,secs=(r.elapsed!==null&&r.elapsed!==undefined)?' ('+r.elapsed+'s)':'';
+  holder.appendChild(pvTerm('$ '+r.command+'\n'+r.output+'\nExit code: '+r.returncode+secs,!!r.ok));
+  const files=Array.isArray(r.files)?r.files:[];
+  if(files.length){
+   const title=document.createElement('div');title.className='ap-files-label';title.textContent='Files created or changed';holder.appendChild(title);
+   files.filter(f=>String(f.mime).startsWith('image/')).slice(0,4).forEach(f=>{const img=document.createElement('img');img.className='ap-run-img';img.src=f.url;img.alt=f.name;holder.appendChild(img)});
+   const row=document.createElement('div');row.className='ap-files';
+   files.forEach(f=>{const chip=document.createElement('button');chip.type='button';chip.className='ap-file-chip';chip.textContent=f.path+' · '+pvSize(f.size);chip.onclick=()=>openWorkspaceFile(f.path,f.area||'work').catch(error=>toast(error.message));row.appendChild(chip)});
+   holder.appendChild(row);
+  }
+ };
+ const tabs=pvTabs(tools,panel,[{key:'code',label:'Code',render:()=>pvCode(a,info)},{key:'output',label:'Output',render:()=>holder}],(PV_RUNS.get(a)||{}).result||(PV_RUNS.get(a)||{}).running?'output':'code');
+ tools.appendChild(run);run.onclick=()=>pvRun(a);
+ PV_UI.set(a,{fill,tabs});fill();
+}
+function artifactCard(a){
+ const info=artifactState(a),type=artifactType(a),hasText=typeof a.content==='string';
+ const view=document.createElement('div');view.className='ap-view';
+ const status=document.createElement('div');status.className='ap-status'+(info.cls?' '+info.cls:'');
+ const dot=document.createElement('span');dot.className='dot';
+ const label=document.createElement('span');label.className='ap-status-text';label.textContent=info.text;
+ const tools=document.createElement('span');tools.className='ap-tools';
+ status.append(dot,label,tools);
+ const panel=document.createElement('div');panel.className='ap-panel';view.append(status,panel);
+ const codeTab={key:'code',label:'Code',render:()=>pvCode(a,info)};
+ const withCode=tabs=>hasText?tabs.concat([codeTab]):tabs;
+ if(['html','pdf','svg','image','audio','video'].includes(type)){
+  const open=document.createElement('a');open.className='ap-tab';open.target='_blank';open.rel='noopener';open.textContent='Open';open.style.display='none';
+  ensurePreviewUrl(a).then(url=>{open.href=url;open.style.display=''}).catch(()=>{});tools.appendChild(open);
+ }
+ if(type==='python'&&hasText)pvPython(a,tools,panel,info);
+ else if(type==='html')pvTabs(tools,panel,withCode([{key:'preview',label:'Preview',render:()=>pvFrame(a)}]),'preview');
+ else if(type==='svg')pvTabs(tools,panel,withCode([{key:'preview',label:'Preview',render:()=>pvMedia(a,'image')}]),'preview');
+ else if(type==='markdown'&&hasText)pvTabs(tools,panel,[{key:'preview',label:'Preview',render:()=>pvMarkdown(a)},codeTab],'preview');
+ else if(type==='csv'&&hasText)pvTabs(tools,panel,[{key:'table',label:'Table',render:()=>pvCsv(a)},codeTab],'table');
+ else if(type==='pdf')pvTabs(tools,panel,[{key:'preview',label:'Preview',render:()=>pvFrame(a,true)}],'preview');
+ else if(type==='image'||type==='audio'||type==='video')pvTabs(tools,panel,[{key:'preview',label:'Preview',render:()=>pvMedia(a,type)}],'preview');
+ else if(type==='binary')panel.appendChild(pvInfo(a));
+ else panel.appendChild(pvCode(a,info));
  return view;
 }
 function copyActiveArtifact(){
@@ -2041,6 +2332,8 @@ function copyActiveArtifact(){
  }).catch(()=>toast('Could not copy'));
 }
 function downloadActiveArtifact(){
+ const current=state.activeArtifact;
+ if(current&&current.url&&!state.activeArtifactContent){const anchor=document.createElement('a');anchor.href=current.url;anchor.download=pvName(current);document.body.appendChild(anchor);anchor.click();anchor.remove();return}
  const text=state.activeArtifactContent||'';if(!text){toast('Nothing to download');return}
  let name=String(state.activeArtifactName||'kurt-file').replace(/[^\w.\-]+/g,'_');if(!name.includes('.'))name+='.txt';
  const url=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'}));
@@ -2546,7 +2839,7 @@ async function send(){
     else if(event.type==='draft'){raw+=event.text||'';node.querySelector('.assistant-status').textContent='Writing…';queue()}
     else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();modelRationale+=event.text||'';node.querySelector('.assistant-status').textContent='Thinking…';showReasoning(true)}
     else if(event.type==='reasoning_reset'){const entries=node.__worklog||[];const entry=node.__thinkingEntry;if(entry){const at=entries.indexOf(entry);if(at>=0)entries.splice(at,1);node.__thinkingEntry=null;setThink(node,entries)}modelRationale='';blockRationale=''}
-    else if(event.type==='done'){pending=false;retryMode=event.mode_switch_required||null;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);node.dataset.raw=safe;node.__worklog=Array.isArray(event.worklog)?event.worklog.slice():(node.__worklog||[]);node.__thinkingEntry=null;setThink(node,node.__worklog);node.__thinkSeconds=Number(event.thinking_seconds)||Number(event.stats&&event.stats.thought_seconds)||0;setResponseMeta(node,event.stats,event.model);node.__artifacts=event.artifacts||node.__artifacts||[];renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);setTitle(event.title||'Conversation',[event.model||'',event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='done'){pending=false;retryMode=event.mode_switch_required||null;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);bindFileLinks(contentEl);node.dataset.raw=safe;node.__worklog=Array.isArray(event.worklog)?event.worklog.slice():(node.__worklog||[]);node.__thinkingEntry=null;setThink(node,node.__worklog);node.__thinkSeconds=Number(event.thinking_seconds)||Number(event.stats&&event.stats.thought_seconds)||0;setResponseMeta(node,event.stats,event.model);node.__artifacts=event.artifacts||node.__artifacts||[];renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);setTitle(event.title||'Conversation',[event.model||'',event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
     else if(event.type==='error')throw new Error(event.message||'The model request failed');
    }
   }
@@ -3041,6 +3334,8 @@ class KurtWebApp:
         self.settings.setdefault("mcp_servers", [])
         self.model_lock = threading.RLock()
         self.mcp_media_allowlist = {}
+        self.preview_caps = {}
+        self.preview_lock = threading.Lock()
         self.pending_approvals = {}
         self._env_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="kurt-env")
         self._env_jobs = {}
@@ -4347,6 +4642,187 @@ class KurtWebApp:
         )
 
 
+    def preview_cap_for(self, root):
+        root = Path(root).resolve()
+        now = time.time()
+        with self.preview_lock:
+            for cap in [key for key, entry in self.preview_caps.items() if entry["expires"] < now]:
+                self.preview_caps.pop(cap, None)
+            for cap, entry in self.preview_caps.items():
+                if entry["root"] == root:
+                    entry["expires"] = now + PREVIEW_CAP_TTL
+                    return cap
+            cap = secrets.token_urlsafe(24)
+            self.preview_caps[cap] = {"root": root, "expires": now + PREVIEW_CAP_TTL}
+            return cap
+
+    def preview_root(self, chat_id, area):
+        if not self.get_chat(chat_id):
+            raise ValueError("Conversation not found.")
+        if str(area or "work") == "private":
+            return self.chat_workspace(chat_id)
+        return self.chat_work_root(chat_id)
+
+    @staticmethod
+    def _preview_rel(root, value):
+        raw = str(value or "").replace("\\", "/").strip()
+        if not raw:
+            raise ValueError("A file path is required.")
+        root = Path(root).resolve()
+        if raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
+            try:
+                raw = Path(os.path.abspath(raw)).relative_to(root).as_posix()
+            except ValueError:
+                raise ValueError("That file is outside this conversation's workspace.")
+        parts = [part for part in raw.split("/") if part not in ("", ".")]
+        if not parts or any(part == ".." for part in parts):
+            raise ValueError("The file path is not valid.")
+        if any(part.startswith(".") for part in parts) or any(part.lower() in PREVIEW_BLOCKED_DIRS for part in parts[:-1]) or KurtWebApp._skip_context_name(parts[-1]):
+            raise ValueError("That path is not available for preview.")
+        return "/".join(parts)
+
+    @staticmethod
+    def _preview_target(root, rel):
+        root = Path(root).resolve()
+        current = root
+        for part in rel.split("/"):
+            current = current / part
+            if current.is_symlink():
+                raise ValueError("Symbolic links cannot be previewed.")
+        try:
+            target = current.resolve(strict=True)
+        except OSError:
+            raise ValueError("File not found: " + rel)
+        target.relative_to(root)
+        if not target.is_file():
+            raise ValueError("That path is not a regular file: " + rel)
+        return target
+
+    def open_preview_file(self, chat_id, area, value, include_text=True):
+        root = self.preview_root(chat_id, area)
+        rel = self._preview_rel(root, value)
+        target = self._preview_target(root, rel)
+        size = target.stat().st_size
+        result = {
+            "name": target.name, "path": rel, "area": "private" if str(area) == "private" else "work",
+            "size": size, "mime": preview_mime(target.name).split(";")[0],
+            "url": "/preview/{}/{}".format(self.preview_cap_for(root), quote(rel)),
+        }
+        if include_text and size <= PREVIEW_TEXT_LIMIT and preview_is_text(target):
+            result["content"] = target.read_text(encoding="utf-8", errors="replace")
+        return result
+
+    def stage_preview(self, chat_id, name, content):
+        if not re.fullmatch(r"[0-9a-fA-F]{32}", str(chat_id or "")) or not self.get_chat(chat_id):
+            raise ValueError("Conversation not found.")
+        data = str(content if content is not None else "").encode("utf-8")
+        if len(data) > PREVIEW_STAGE_LIMIT:
+            raise ValueError("Previews are limited to 5 MB.")
+        safe = re.sub(r"[^\w.\- ]+", "_", os.path.basename(str(name or "").replace("\\", "/"))).strip(" .")[:80] or "preview.html"
+        digest = hashlib.sha256(safe.encode("utf-8") + b"\0" + data).hexdigest()[:20]
+        base = (CONFIG_DIR / "web_previews" / str(chat_id)).resolve()
+        folder = base / digest
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / safe
+        if not target.is_file():
+            target.write_bytes(data)
+        try:
+            os.utime(folder, None)
+            cutoff = time.time() - 2 * 86400
+            for child in base.iterdir():
+                if child != folder and child.is_dir() and child.stat().st_mtime < cutoff:
+                    shutil.rmtree(child, ignore_errors=True)
+        except OSError:
+            pass
+        return {"name": safe, "url": "/preview/{}/{}".format(self.preview_cap_for(folder), quote(safe))}
+
+    @staticmethod
+    def _snapshot_outputs(root, limit=4000, max_depth=6):
+        found = {}
+        root = Path(root)
+        base_depth = len(root.parts)
+        try:
+            for current, dirs, files in os.walk(root, followlinks=False):
+                depth = len(Path(current).parts) - base_depth
+                dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d.lower() not in PREVIEW_BLOCKED_DIRS and not (Path(current) / d).is_symlink())
+                if depth >= max_depth:
+                    dirs[:] = []
+                for name in files:
+                    if name.startswith(".") or name.endswith((".pyc", ".pyo")) or KurtWebApp._skip_context_name(name):
+                        continue
+                    full = Path(current) / name
+                    try:
+                        if full.is_symlink():
+                            continue
+                        stat = full.stat()
+                    except OSError:
+                        continue
+                    found[full.relative_to(root).as_posix()] = (stat.st_size, stat.st_mtime_ns)
+                    if len(found) >= limit:
+                        return found
+        except OSError:
+            pass
+        return found
+
+    def run_python_artifact(self, chat_id, name, path=None, content=None, area="work", timeout=120):
+        if not self.get_chat(chat_id):
+            raise ValueError("Conversation not found.")
+        private = self.chat_workspace(chat_id)
+        work_root = self.chat_work_root(chat_id).resolve()
+        script = None
+        display = ""
+        if path:
+            try:
+                root = self.preview_root(chat_id, area)
+                rel = self._preview_rel(root, path)
+                target = self._preview_target(root, rel)
+                if target.suffix.lower() not in (".py", ".pyw"):
+                    raise ValueError("Only Python files can be run from the file card.")
+                script = target
+                display = rel
+            except ValueError:
+                if content is None:
+                    raise
+        if script is None:
+            text = str(content or "")
+            if not text.strip():
+                raise ValueError("There is no Python code to run.")
+            if len(text.encode("utf-8")) > PREVIEW_STAGE_LIMIT:
+                raise ValueError("Python files run from the card are limited to 5 MB.")
+            safe = re.sub(r"[^\w.\-]+", "_", os.path.basename(str(name or "script.py").replace("\\", "/"))).strip(".") or "script.py"
+            if not safe.lower().endswith((".py", ".pyw")):
+                safe += ".py"
+            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:10]
+            temp_dir = private / ".tmp"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            script = temp_dir / "kurt_card_{}_{}".format(digest, safe)
+            script.write_text(text, encoding="utf-8")
+            display = safe
+        try:
+            shown = script.relative_to(work_root).as_posix()
+        except ValueError:
+            shown = str(script)
+        quoted = subprocess.list2cmdline([shown]) if os.name == "nt" else shlex.quote(shown)
+        before = self._snapshot_outputs(work_root)
+        try:
+            result = self.run_command(chat_id, "python " + quoted, timeout=timeout)
+        except Exception as exc:
+            result = {"ok": False, "returncode": -1, "output": str(exc), "elapsed": None}
+        after = self._snapshot_outputs(work_root)
+        files = []
+        for rel in sorted(key for key, sig in after.items() if before.get(key) != sig)[:24]:
+            try:
+                info = self.open_preview_file(chat_id, "work", rel, include_text=False)
+            except (ValueError, OSError):
+                continue
+            files.append({key: info[key] for key in ("name", "path", "area", "size", "mime", "url")})
+        output = str(result.get("output") or "")
+        if len(output) > 200000:
+            output = output[:200000] + "\n... output truncated ..."
+        return {"ok": bool(result.get("ok")), "returncode": result.get("returncode", -1),
+                "output": output or "(No output.)", "elapsed": result.get("elapsed"),
+                "command": "python " + display, "files": files}
+
     def search_web(self, query):
         return _web_search(query)
 
@@ -4710,13 +5186,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; font-src 'self' data: https://cdn.jsdelivr.net; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+            self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; font-src 'self' data: https://cdn.jsdelivr.net; connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(data)
             return
         if parsed.path == "/api/mcp/media":
             self._serve_mcp_media(parsed)
+            return
+        if parsed.path.startswith("/preview/"):
+            self._serve_preview(parsed)
             return
         if not self._need_auth():
             return
@@ -5082,6 +5561,17 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("Direct mutation endpoints are disabled. Commands and file changes must be approved inline in the chat Activity timeline.")
 
 
+            elif parsed.path == "/api/artifact/open":
+                self._json(self.app.open_preview_file(str(data.get("chat_id") or ""), data.get("area"), data.get("path"),
+                                                      include_text=data.get("include_text", True) is not False))
+            elif parsed.path == "/api/artifact/preview":
+                self._json(self.app.stage_preview(str(data.get("chat_id") or ""), data.get("name"), data.get("content")))
+            elif parsed.path == "/api/artifact/run":
+                if data.get("approved") is not True:
+                    raise ValueError("Running a file requires explicit approval from the Run button.")
+                self._json(self.app.run_python_artifact(str(data.get("chat_id") or ""), data.get("name"), path=data.get("path") or None,
+                                                        content=data.get("content") if isinstance(data.get("content"), str) else None,
+                                                        area=data.get("area") or "work"))
             elif parsed.path == "/api/download":
                 job = self.app.start_download(data.get("model"), data.get("source"))
                 self._json({"job": job}, 202)
@@ -5094,6 +5584,103 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, 400)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+
+    def _serve_preview(self, parsed):
+        if not self._host_ok():
+            self.send_error(403)
+            return
+        pieces = parsed.path.split("/", 3)
+        if len(pieces) < 4 or not pieces[2]:
+            self.send_error(404)
+            return
+        cap, rest = pieces[2], unquote(pieces[3])
+        now = time.time()
+        with self.app.preview_lock:
+            entry = self.app.preview_caps.get(cap)
+            if entry and entry["expires"] >= now:
+                entry["expires"] = now + PREVIEW_CAP_TTL
+                root = entry["root"]
+            else:
+                root = None
+        if root is None:
+            self.send_error(404)
+            return
+        try:
+            parts = [part for part in rest.replace("\\", "/").split("/") if part not in ("", ".")]
+            if not parts or any(part == ".." or part.startswith(".") for part in parts) \
+                    or any(part.lower() in PREVIEW_BLOCKED_DIRS for part in parts[:-1]) or KurtWebApp._skip_context_name(parts[-1]):
+                self.send_error(404)
+                return
+            current = root
+            for part in parts:
+                current = current / part
+                if current.is_symlink():
+                    self.send_error(404)
+                    return
+            target = current.resolve(strict=True)
+            target.relative_to(root)
+            if not target.is_file():
+                self.send_error(404)
+                return
+            size = target.stat().st_size
+            if size > PREVIEW_MAX_SERVE:
+                self.send_error(413)
+                return
+            mime = preview_mime(target.name)
+            base_mime = mime.split(";")[0]
+            if base_mime in ("text/html", "application/xhtml+xml"):
+                csp = PREVIEW_HTML_CSP
+            elif base_mime == "application/pdf":
+                csp = "frame-ancestors 'self'"
+            else:
+                csp = "sandbox; default-src 'none'; frame-ancestors 'self'"
+            start, end, status = 0, max(0, size - 1), 200
+            range_header = self.headers.get("Range", "").strip()
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header) if range_header else None
+            if match and size and (match.group(1) or match.group(2)):
+                if match.group(1):
+                    start = int(match.group(1))
+                    end = int(match.group(2)) if match.group(2) else size - 1
+                else:
+                    start = max(0, size - int(match.group(2)))
+                    end = size - 1
+                if start >= size or end < start:
+                    self.send_response(416)
+                    self.send_header("Content-Range", "bytes */{}".format(size))
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                end = min(end, size - 1)
+                status = 206
+            length = (end - start + 1) if size else 0
+            source = target.open("rb")
+        except (OSError, ValueError):
+            self.send_error(404)
+            return
+        try:
+            with source:
+                self.send_response(status)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Length", str(length))
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", csp)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Disposition", "inline")
+                if status == 206:
+                    self.send_header("Content-Range", "bytes {}-{}/{}".format(start, end, size))
+                self.end_headers()
+                source.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = source.read(min(1 << 20, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            return
 
     def _serve_mcp_media(self, parsed):
         if not self._host_ok():
