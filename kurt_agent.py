@@ -11,6 +11,7 @@ routing, workspace files, commands, approvals, usage) are reached through the
 ``host`` object, which is the KurtWebApp instance.
 """
 
+import difflib
 import hashlib
 import re
 import threading
@@ -69,15 +70,128 @@ def slug(value, fallback="agent"):
     return (value or fallback)[:24]
 
 
+FUNC_CALL_RE = re.compile(r"<function=\s*([A-Za-z_][\w.-]*)\s*>(.*?)(?:</function>|\Z)", re.S | re.I)
+FUNC_PARAM_RE = re.compile(r"<parameter=\s*([A-Za-z_][\w.-]*)\s*>\s*(.*?)\s*(?:</parameter>|(?=<parameter=)|\Z)", re.S | re.I)
+WRAPPER_TAG_RE = re.compile(r"</?\s*(?:tool_call|tool_calls|function_calls|function|parameter|invoke)\b[^>]*>", re.I)
+FUNC_ALIASES = {
+    "READ_FILE": "READ", "VIEW": "READ", "CAT": "READ", "OPEN": "READ",
+    "LIST_DIR": "LIST", "LIST_FILES": "LIST", "LS": "LIST", "LIST_DIRECTORY": "LIST",
+    "WRITE_FILE": "WRITE", "CREATE_FILE": "WRITE", "SAVE_FILE": "WRITE",
+    "RUN_COMMAND": "RUN", "BASH": "RUN", "SHELL": "RUN", "EXEC": "RUN", "EXECUTE": "RUN",
+    "WEB_SEARCH": "SEARCH", "SEND_MESSAGE": "SAY", "MESSAGE": "SAY", "REPORT": "SAY",
+}
+PARAM_NAMES = {
+    "path": ("path", "file", "file_path", "filepath", "filename", "directory", "dir", "target", "name"),
+    "query": ("query", "q", "search", "text"),
+    "content": ("content", "file_text", "contents", "body", "text", "data"),
+    "command": ("command", "cmd", "body", "script"),
+    "target": ("target", "to", "recipient", "agent", "name"),
+    "message": ("body", "message", "text", "content", "msg"),
+    "key": ("key", "name", "title", "topic"),
+    "note": ("body", "value", "text", "content", "note"),
+    "summary": ("summary", "body", "text", "content", "result"),
+    "name": ("name", "agent", "target", "id"),
+    "role": ("role", "title", "type"),
+    "mission": ("mission", "body", "task", "instructions", "instruction", "text", "content", "prompt"),
+    "plan": ("plan", "body", "text", "content"),
+    "seconds": ("seconds", "duration", "time", "delay", "value"),
+}
+
+
+def _param(params, kind):
+    for key in PARAM_NAMES[kind]:
+        if key in params and str(params[key]).strip():
+            return str(params[key])
+    return ""
+
+
+def _oneline(value):
+    return " ".join(str(value or "").split())
+
+
+def _function_to_block(name, raw_params):
+    verb = re.sub(r"[^A-Za-z_]", "_", name).upper()
+    verb = FUNC_ALIASES.get(verb, verb)
+    if verb not in VERBS:
+        return ""
+    params = {key.lower(): value for key, value in raw_params}
+    if verb in ("READ", "LIST"):
+        args, body = _oneline(_param(params, "path")), ""
+    elif verb == "SEARCH":
+        args, body = _oneline(_param(params, "query")), ""
+    elif verb == "WRITE":
+        args, body = _oneline(_param(params, "path")), _param(params, "content")
+    elif verb == "RUN":
+        args, body = "", _param(params, "command")
+    elif verb == "SAY":
+        args, body = _oneline(_param(params, "target")) or "all", _param(params, "message")
+    elif verb == "NOTE":
+        args, body = _oneline(_param(params, "key")), _param(params, "note")
+    elif verb == "DONE":
+        args, body = "", _param(params, "summary")
+    elif verb == "SPAWN":
+        name_value = _oneline(_param(params, "name")) or "agent"
+        role_value = _oneline(_param(params, "role")) or "Specialist"
+        args, body = "{} | {}".format(name_value, role_value), _param(params, "mission")
+    elif verb == "ASSIGN":
+        args, body = _oneline(_param(params, "name")), _param(params, "mission")
+    elif verb == "RETIRE":
+        args, body = _oneline(_param(params, "name")), ""
+    elif verb == "PLAN":
+        args, body = "", _param(params, "plan")
+    else:
+        args, body = _oneline(_param(params, "seconds")), ""
+    return "@@@ {} {}\n{}\n@@@ END".format(verb, args, body).replace("@@@ {} \n".format(verb), "@@@ {}\n".format(verb), 1)
+
+
+def normalize_function_calls(text):
+    """Rewrite <function=NAME><parameter=key>value</parameter></function> calls as @@@ blocks."""
+    text = str(text or "")
+    if "<function" not in text.lower():
+        return text
+
+    def convert(match):
+        params = [(item.group(1), item.group(2)) for item in FUNC_PARAM_RE.finditer(match.group(2))]
+        return "\n" + _function_to_block(match.group(1), params) + "\n"
+
+    return FUNC_CALL_RE.sub(convert, text)
+
+
+def strip_markup(text):
+    """Remove leftover tool-call tags and stray @@@ lines from text meant for people."""
+    text = WRAPPER_TAG_RE.sub("", str(text or ""))
+    lines = [line for line in text.split("\n") if not BLOCK_END_RE.match(line)]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def _bare_opener(lines, index):
+    """A line like 'READ game.js' (the model forgot '@@@') that is closed by a later '@@@ END'."""
+    match = re.match(r"^\s*([A-Z]{3,7})\b[ \t]*(.*)$", lines[index])
+    if not match or match.group(1) not in VERBS:
+        return None
+    for probe in range(index + 1, len(lines)):
+        if BLOCK_END_RE.match(lines[probe]):
+            return match.group(1), match.group(2).strip()
+        if BLOCK_START_RE.match(lines[probe]):
+            return None
+    return None
+
+
 def parse_actions(text):
     """Split model output into (prose, [(verb, args, body)])."""
-    lines = str(text or "").split("\n")
+    lines = normalize_function_calls(text).split("\n")
     prose, actions = [], []
     index = 0
     while index < len(lines):
         match = BLOCK_START_RE.match(lines[index])
+        verb = args = None
         if match and match.group(1).upper() in VERBS:
             verb, args = match.group(1).upper(), match.group(2).strip()
+        else:
+            bare = _bare_opener(lines, index) if not match else None
+            if bare:
+                verb, args = bare
+        if verb:
             body = []
             index += 1
             while index < len(lines):
@@ -93,7 +207,7 @@ def parse_actions(text):
         else:
             prose.append(lines[index])
             index += 1
-    return "\n".join(prose).strip(), actions
+    return strip_markup("\n".join(prose)), actions
 
 
 def strip_fence(body):
@@ -217,6 +331,7 @@ You act by writing action blocks. A block looks like this:
 @@@ VERB arguments
 optional body
 @@@ END
+Use ONLY this @@@ block format. Never write <function=...>, <parameter=...>, <tool_call>, JSON tool calls or any other tag-based call; they are not executed. Every block starts with @@@ VERB and ends with @@@ END.
 Plain text outside blocks is your private running commentary; it appears in your own panel and is delivered to no one. To tell anyone anything, use SAY.
 
 Verbs available to every agent:
@@ -238,7 +353,7 @@ Your job:
 2. Split the work across specialised subagents (SPAWN) with a clear role, mission and file ownership: for example logic, UI, tester, debugger, reviewer. Spawn only what the work needs, at most {max_agents} at once.
 3. Coordinate: answer their questions, resolve conflicts, hand out new work (ASSIGN), retire agents that are no longer useful (RETIRE), and record shared decisions with NOTE.
 4. Never declare the project finished for good. When a milestone is complete, define the next improvement: more tests, bug hunting, polish, performance, docs. If the team has nothing useful left to do, WAIT.
-5. When the human messages you, reply with SAY user using real facts from the live team state (who is doing what, what finished, what is blocked, what comes next). Be concrete and brief. If the message contains an instruction, act on it and tell them what you changed.
+5. Do not SAY user on every team message. Message the human only when they asked something, when a real milestone is reached or when you are blocked, and never repeat a status you already gave. When the human messages you, reply with SAY user using real facts from the live team state (who is doing what, what finished, what is blocked, what comes next). Be concrete and brief. If the message contains an instruction, act on it and tell them what you changed.
 6. Do the work through the team, not alone. Use READ, LIST, SEARCH and RUN only to inspect and verify.
 
 Lead-only verbs:
@@ -309,6 +424,8 @@ class AgentSwarm:
         self.file_lock = threading.Lock()
         self.last_persist = 0.0
         self.started_at = time.time()
+        self.user_msg_count = 0
+        self.recent_user_posts = []
         self.lead = Agent("lead", "Lead orchestrator", lead=True)
         self.agents["lead"] = self.lead
         self.restored = bool(restore)
@@ -507,6 +624,8 @@ class AgentSwarm:
                 text = "(undeliverable: no active agent named '{}') {}".format(target, text)
                 lowered = "lead" if sender != "lead" else "all"
                 recipient = self._find(lowered) if lowered != "all" else None
+        if lowered == "user" and kind != "quick" and self._is_repeat_for_user(text):
+            return None
         message = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "from": sender, "to": lowered, "text": text, "kind": kind}
         with self.lock:
             self.channel.append(message)
@@ -523,6 +642,17 @@ class AgentSwarm:
             recipient.inbox.append(message)
             recipient.wake.set()
         return message
+
+    def _is_repeat_for_user(self, text):
+        norm = " ".join(re.sub(r"[^a-z0-9 ]+", " ", text.lower()).split())
+        with self.lock:
+            recent = [item for item in self.recent_user_posts if item[0] == self.user_msg_count][-4:]
+            for _count, earlier in recent:
+                if norm == earlier or difflib.SequenceMatcher(None, norm, earlier).ratio() >= 0.8:
+                    return True
+            self.recent_user_posts.append((self.user_msg_count, norm))
+            del self.recent_user_posts[:-12]
+        return False
 
     def _deliver_to_user(self, text, sender="lead"):
         chat = self.host.get_chat(self.chat_id)
@@ -550,6 +680,8 @@ class AgentSwarm:
             self.host.save_chats()
         if not self.goal:
             self.goal = clip(text, 4000)
+        with self.lock:
+            self.user_msg_count += 1
         message = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "from": "user", "to": "lead", "text": text, "kind": "user"}
         with self.lock:
             self.channel.append(message)
@@ -1096,14 +1228,37 @@ class AgentSwarm:
                 break
         return "[{} {}]\n{}".format(label, path, "\n".join(rows) or "(empty)")
 
+    def _status_report(self):
+        with self.lock:
+            members = [item for item in self.agents.values() if not item.lead and item.status != "retired"]
+            plan = self.plan.strip()
+            recent = [item for item in self.channel if item.get("from") not in ("user", "system")][-3:]
+        lines = []
+        if members:
+            lines.append("Team status:")
+            for member in members:
+                report = clip(member.summary, 220).replace("\n", " ") or "no report yet"
+                lines.append("- {} ({}): {}. Last report: {}".format(member.name, clip(member.role, 60), member.status, report))
+        else:
+            lines.append("No subagents are running yet.")
+        if plan:
+            lines.append("Plan:\n" + clip(plan, 700))
+        if recent:
+            lines.append("Latest updates:")
+            for item in recent:
+                lines.append("- {}: {}".format(item.get("from"), clip(item.get("text"), 200).replace("\n", " ")))
+        return "\n".join(lines)
+
     def _quick_reply(self, message):
         lead = self.lead
         try:
             state = "{}\n\nTHE HUMAN ASKED: {}".format(self.shared_context(lead), message["text"])
             messages = [{"role": "system", "content": QUICK_SYSTEM}, {"role": "user", "content": state}]
             _reasoning, answer = self._generate(lead, messages, max_tokens=QUICK_REPLY_TOKENS, entries=False)
-            _prose, _actions = parse_actions(answer)
-            answer = _prose.strip() or answer.strip()
+            prose, _actions = parse_actions(answer)
+            answer = prose.strip()
+            if not answer:
+                answer = self._status_report()
             if answer:
                 message["quick_reply"] = answer
                 self.post("lead", "user", answer, kind="quick")
