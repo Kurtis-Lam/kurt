@@ -37,6 +37,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 import kurt as K
 from kurt_sandbox import is_code_file, validate_content, run_workspace_command
 from kurt_integrations import (MCPError, call_mcp_tool, delete_skill, get_skill, list_mcp_tools, list_skills, save_skill, validate_mcp_config)
+from kurt_agent import AgentManager, ModelGate
 
 CONFIG_DIR = K.CONFIG_DIR
 WEB_SETTINGS_FILE = CONFIG_DIR / "web_settings.json"
@@ -1350,6 +1351,59 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 .agent-worker>summary{padding:7px 10px;color:var(--text);font-size:12px;font-weight:600;cursor:pointer}
 .agent-worker-detail{padding:0 10px 9px;color:var(--muted);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
 .agent-worker-detail p{margin:4px 0 0;white-space:pre-wrap}
+
+.mode-toggle{display:inline-flex;align-items:center;gap:2px;padding:2px;border:1px solid var(--line2);border-radius:999px;background:var(--bg);flex:none;margin-right:6px}
+.mode-toggle button{border:0;background:transparent;color:var(--muted);font:600 12px var(--sans);padding:5px 11px;border-radius:999px;cursor:pointer}
+.mode-toggle button.on{background:var(--green);color:var(--green-ink)}
+.mode-toggle button:not(.on):hover{color:var(--text)}
+.agent-panel{flex:0 0 auto;width:min(1040px,calc(100% - 28px));margin:0 auto 8px;border:1px solid var(--line2);border-radius:14px;background:var(--panel);display:flex;flex-direction:column;max-height:46%;min-height:0;overflow:hidden;font-family:var(--sans)}
+.agent-panel[hidden]{display:none}
+.agent-panel-head{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.agent-panel-head b{font-size:13px}
+.agent-run-status{font-size:12px;color:var(--muted);flex:1;min-width:120px}
+.agent-run-status.warn{color:var(--amber)}
+.agent-panel-head button,.ag-approval button{border:1px solid var(--line2);background:var(--bg);color:var(--text);border-radius:8px;padding:4px 10px;font:600 12px var(--sans);cursor:pointer}
+.agent-panel-head button:disabled{opacity:.45;cursor:default}
+.agent-panel-head button.danger{border-color:var(--danger);color:#fca5a5}
+.agent-tabs{display:flex;gap:4px;padding:6px 10px 0}
+.agent-tabs button{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:600 12px var(--sans);padding:5px 8px;cursor:pointer}
+.agent-tabs button.on{color:var(--text);border-bottom-color:var(--green)}
+.agent-body{overflow:auto;padding:10px 12px 12px;min-height:0;flex:1 1 auto}
+.agent-pane[hidden]{display:none}
+.ag-team{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+.ag-card{border:1px solid var(--line);border-radius:10px;background:var(--bg);min-width:0;display:flex;flex-direction:column}
+.ag-head{display:flex;align-items:center;gap:6px;padding:8px 10px;flex-wrap:wrap}
+.ag-name{font-weight:700;font-size:12.5px}
+.ag-role{color:var(--muted);font-size:11.5px;flex:1;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ag-status{font-size:10.5px;font-weight:700;border-radius:999px;padding:2px 8px;background:var(--raise);color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+.ag-s-working,.ag-s-orchestrating{background:var(--green-soft);color:var(--green)}
+.ag-s-retrying,.ag-s-waiting{background:rgba(226,183,71,.15);color:var(--amber)}
+.ag-s-retired,.ag-s-stopped{opacity:.6}
+.ag-task{padding:0 10px 6px;color:var(--muted);font-size:11.5px;line-height:1.45;overflow-wrap:anywhere;max-height:3.1em;overflow:hidden}
+.ag-list{padding:0 8px 8px;display:grid;gap:5px;max-height:230px;overflow:auto}
+.ag-entry{border-left:2px solid var(--line2);padding:2px 0 2px 8px;font-size:11.5px;line-height:1.45;min-width:0}
+.ag-entry summary{cursor:pointer;color:var(--muted);font-weight:600}
+.ag-k{font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.ag-text{margin:2px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:11.5px/1.45 var(--mono);color:var(--text)}
+.ag-entry.k-thinking{border-left-color:#7cc6ea}.ag-entry.k-thinking .ag-text{color:var(--muted)}
+.ag-entry.k-action{border-left-color:var(--green)}
+.ag-entry.k-result .ag-text{max-height:140px;overflow:auto}
+.ag-entry.k-error{border-left-color:var(--danger)}.ag-entry.k-error .ag-text{color:#fca5a5}
+.ag-feed{display:grid;gap:6px}
+.ag-msg{font-size:12.5px;line-height:1.5;border:1px solid var(--line);border-radius:9px;padding:6px 10px;background:var(--bg);overflow-wrap:anywhere}
+.ag-msg .ag-route{font-weight:700;font-size:11.5px;color:var(--green);margin-right:6px}
+.ag-msg.from-user .ag-route{color:var(--amber)}
+.ag-msg .ag-time{float:right;color:var(--muted);font-size:10.5px}
+.ag-msg p{margin:2px 0 0;white-space:pre-wrap}
+.ag-notes h4{margin:10px 0 4px;font-size:12px}.ag-notes pre{margin:0;white-space:pre-wrap;font:12px/1.5 var(--mono);color:var(--text);overflow-wrap:anywhere}
+.ag-note{border:1px solid var(--line);border-radius:9px;padding:6px 10px;margin-bottom:6px;background:var(--bg)}
+.ag-note b{font-size:12px}.ag-note small{color:var(--muted);margin-left:6px}
+.ag-approvals{display:grid;gap:6px;padding:8px 12px 0}
+.ag-approvals:empty{display:none}
+.ag-approval{border:1px solid var(--amber);border-radius:10px;padding:8px 10px;background:rgba(226,183,71,.08);font-size:12.5px}
+.ag-approval pre{margin:6px 0;max-height:150px;overflow:auto;white-space:pre-wrap;font:11.5px/1.45 var(--mono)}
+.ag-approval .row{display:flex;gap:6px;flex-wrap:wrap}
+.ag-empty{color:var(--muted);font-size:12.5px}
 .user-attachment-list{margin-top:7px;color:var(--muted);font:11px/1.45 var(--sans);overflow-wrap:anywhere}
 @media(max-width:820px) and (min-width:701px){.main.has-artifacts{grid-template-columns:minmax(0,1fr) minmax(300px,.92fr)}}
 
@@ -1627,6 +1681,16 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <section class="chat-area" id="chatArea">
 <div id="messages" class="messages"></div>
 <div class="chips" id="chips"></div>
+<section class="agent-panel" id="agentPanel" hidden aria-label="Agent team">
+<div class="agent-panel-head"><b>Agent team</b><span class="agent-run-status" id="agentRunStatus">Not running</span><button type="button" id="agentCollapse" title="Collapse or expand the agent team">Collapse</button><button type="button" id="agentStop" class="danger" disabled>Stop agent</button></div>
+<div class="ag-approvals" id="agentApprovals"></div>
+<div class="agent-tabs" id="agentTabs"><button type="button" data-tab="team" class="on">Team</button><button type="button" data-tab="channel">Coordination</button><button type="button" data-tab="notes">Plan &amp; notes</button></div>
+<div class="agent-body" id="agentBody">
+<div class="agent-pane" id="agentPaneTeam"><div class="ag-team" id="agentTeam"></div></div>
+<div class="agent-pane" id="agentPaneChannel" hidden><div class="ag-feed" id="agentChannel"></div></div>
+<div class="agent-pane ag-notes" id="agentPaneNotes" hidden><h4>Plan</h4><pre id="agentPlan"></pre><h4>Shared notes</h4><div id="agentNotes"></div></div>
+</div>
+</section>
 <div class="composer-wrap">
 <button class="to-bottom" id="toBottom" aria-label="Scroll to latest message" title="Scroll to latest"><svg class="ic"><use href="#i-down"/></svg></button>
 <div class="composer">
@@ -1636,6 +1700,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="compose-bottom">
 <button class="icon-btn" id="contextBtn" title="Upload files into this chat workspace" aria-label="Upload files"><svg class="ic"><use href="#i-plus"/></svg></button><button class="link-folder-btn" id="linkFolderBtn" type="button" title="Link this session to a folder on your computer">↗ <span>Link folder</span></button>
 <span class="spacer"></span>
+<div class="mode-toggle" id="modeToggle" role="group" aria-label="Chat mode"><button type="button" data-mode="normal" class="on" aria-pressed="true" title="Normal: one reply per message">Normal</button><button type="button" data-mode="agent" aria-pressed="false" title="Agent: a lead and subagents work continuously until stopped">Agent</button></div>
 <div class="route-picker" id="routePicker" aria-label="Choose model route"><button class="route-current" id="routeCurrent" type="button" aria-haspopup="true" aria-expanded="false">Choose model</button></div><select id="topModel" hidden aria-label="Selected model route"></select><input id="composerFiles" type="file" multiple hidden>
 <button class="send" id="sendBtn" title="Send message" aria-label="Send message" disabled><svg class="ic"><use href="#i-up"/></svg></button>
 </div>
@@ -2037,7 +2102,7 @@ function hint(){
  const count=state.contextCount?state.contextCount+' uploaded item(s). ':'';
  const linked=state.linkedFolder?'Linked folder: '+state.linkedFolder+'. ':'';
  const access=state.settings&&state.settings.always_allow?'Always allow is on: Kurt changes files and runs commands without asking.':'Kurt can read any file your account can access. File changes, deletions, and commands ask for approval.';
- $('composeHint').textContent=count+linked+access;
+ $('composeHint').textContent=(state.mode==='agent'?'Agent mode: Kurt runs a lead and subagents continuously until you stop them, and you can message the lead any time. ':'')+count+linked+access;
  $('linkFolderBtn').classList.toggle('linked',!!state.linkedFolder);
  $('linkFolderBtn').querySelector('span').textContent=state.linkedFolder?'Linked folder':'Link folder';
  const sources=document.querySelectorAll('#filesModal .file-source');if(sources[1])sources[1].hidden=true;
@@ -2942,8 +3007,8 @@ async function ensureChat(initialMessage){
  else if(initialMessage){await api('/api/chats/'+encodeURIComponent(state.chatId),{append_user_message:initialMessage})}
  return state.chatId;
 }
-async function newChat(){cancelRun();state.chatId=null;state.linkedFolder='';hint();state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.linkedFolder=data.linked_folder||'';if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null,attachments:message.attachments||[],media:message.media||[]}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||''].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
+async function newChat(){cancelRun();agentReset();state.chatId=null;state.linkedFolder='';hint();state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
+async function loadChat(id){cancelRun();agentReset();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.linkedFolder=data.linked_folder||'';if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null,attachments:message.attachments||[],media:message.media||[]}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();agentOnChatLoaded(data);setTitle(data.title||'Conversation',[data.model||''].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
 async function linkFolderFromMessage(text){
  const intent=/\b(?:link|connect)\s+(?:this\s+)?(?:session|chat|workspace)\s+to\b/i.test(text);
  if(!intent)return false;
@@ -2965,6 +3030,7 @@ async function send(){
  if(/^\/edit-system-prompt\s*$/i.test(text)){
   $('prompt').value='';autosize();hideSlashMenu();await openSettings();activateSettingsTab('general');$('systemPrompt').focus();toast('Edit Kurt’s system prompt in Settings, then save it');return;
  }
+ if(state.mode==='agent'){await sendAgent(text);return}
  const slash=parseSlashInvocation(text);if(slash?.kind==='mcp'){await sendMcpTool(text,slash.tool,slash.args);return}
  let requestText=text,skillId='';if(slash?.kind==='skill'){if(!slash.args){toast('Add a request after /'+slash.skill.id);return}requestText=slash.args;skillId=slash.skill.id}
  if(await linkFolderFromMessage(text)){return}
@@ -3013,6 +3079,33 @@ async function send(){
   if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent.includes('Generating…'))meta.textContent='Ready'}
  }
 }
+
+state.mode='normal';state.agent=null;state.agentSeen=new Set();state.agentTimer=null;
+function agentNow(){return Date.now()/1000}
+function agentSyncPanel(){const a=state.agent;const panel=$('agentPanel');if(!panel||!a)return;panel.hidden=!(a.exists&&(state.mode==='agent'||a.running));const body=$('agentBody'),tabs=$('agentTabs');body.hidden=tabs.hidden=!!a.collapsed;$('agentCollapse').textContent=a.collapsed?'Expand':'Collapse'}
+function setMode(mode,silent){state.mode=mode==='agent'?'agent':'normal';try{localStorage.setItem('kurt_mode',state.mode)}catch(error){}document.querySelectorAll('#modeToggle button').forEach(button=>{const on=button.dataset.mode===state.mode;button.classList.toggle('on',on);button.setAttribute('aria-pressed',on?'true':'false')});$('prompt').placeholder=state.mode==='agent'?'Message the lead agent · it keeps working while you chat':'Message Kurt · type / for tools and skills';hint();agentSyncPanel();if(!silent&&state.mode==='agent')toast('Agent mode: a lead and subagents work continuously until you stop them')}
+function agentReset(){if(state.agentTimer){clearInterval(state.agentTimer);state.agentTimer=null}const old=state.agent;state.agent={seq:-1,epoch:'',running:false,exists:false,cards:new Map(),notes:{},plan:'',approvals:new Map(),cooldown:0,reason:'',busyPoll:false,collapsed:old?old.collapsed:false,tab:old?old.tab:'team',channelCount:0};state.agentSeen=new Set();['agentTeam','agentChannel','agentApprovals','agentNotes'].forEach(id=>{const el=$(id);if(el)el.replaceChildren()});if($('agentPlan'))$('agentPlan').textContent='';agentSyncPanel();agentRenderStatus()}
+function ensureAgentTimer(){if(state.agentTimer||!state.chatId||!state.agent||!state.agent.exists)return;state.agentTimer=setInterval(agentPoll,1000)}
+function agentRenderStatus(){const a=state.agent;if(!a)return;const el=$('agentRunStatus');if(!el)return;const now=agentNow();const live=Array.from(a.cards.values()).filter(c=>!['retired'].includes(c.status));let text,warn=false;if(!a.exists){text='Not running'}else if(a.running){const wait=Math.ceil(a.cooldown-now);text='Running · '+Math.max(0,live.length-1)+' subagent(s)';if(wait>0){text+=' · '+(a.reason==='rate limit'?'rate limited':'request failed')+', retrying in '+wait+'s';warn=true}}else{text='Stopped · send a message in Agent mode to resume'}el.textContent=text;el.classList.toggle('warn',warn);$('agentStop').disabled=!a.running;a.cards.forEach(card=>{if(card.status==='retrying'&&card.retryAt){const left=Math.ceil(card.retryAt-now);card.pill.textContent=left>0?'retry '+left+'s':'retrying'}})}
+function agentCard(name){const a=state.agent;let card=a.cards.get(name);if(card)return card;const root=document.createElement('div');root.className='ag-card';const head=document.createElement('div');head.className='ag-head';const nameEl=document.createElement('span');nameEl.className='ag-name';nameEl.textContent=name;const role=document.createElement('span');role.className='ag-role';const pill=document.createElement('span');pill.className='ag-status';head.append(nameEl,role,pill);const task=document.createElement('div');task.className='ag-task';const list=document.createElement('div');list.className='ag-list';root.append(head,task,list);card={root,role,pill,task,list,entries:new Map(),status:'',retryAt:0};a.cards.set(name,card);const team=$('agentTeam');if(name==='lead')team.prepend(root);else team.appendChild(root);return card}
+function agentUpsertAgent(agent){if(!agent||!agent.name)return;const card=agentCard(agent.name);card.role.textContent=agent.role||'';card.role.title=agent.role||'';card.task.textContent=agent.task?'Task: '+agent.task:'';card.status=agent.status||'idle';card.retryAt=agent.retry_at||0;card.pill.textContent=card.status;card.pill.className='ag-status ag-s-'+card.status;if(card.status==='retired')card.root.style.opacity='.55'}
+function agentUpsertEntry(name,entry){if(!entry||!entry.id)return;const card=agentCard(name);let item=card.entries.get(entry.id);const near=card.list.scrollHeight-card.list.scrollTop-card.list.clientHeight<40;if(!item){const kind=entry.kind||'output';let root,body;if(kind==='thinking'){root=document.createElement('details');root.className='ag-entry k-thinking';const summary=document.createElement('summary');summary.textContent='Thinking';summary.addEventListener('click',()=>{root.dataset.touched='1'});root.appendChild(summary);if(!entry.done)root.open=true}else{root=document.createElement('div');root.className='ag-entry k-'+kind;const label=document.createElement('span');label.className='ag-k';label.textContent=kind==='output'?'Reply':kind;root.appendChild(label)}body=document.createElement('pre');body.className='ag-text';root.appendChild(body);card.list.appendChild(root);item={root,body,kind};card.entries.set(entry.id,item);while(card.list.children.length>60){const first=card.list.firstElementChild;for(const [key,value] of card.entries){if(value.root===first){card.entries.delete(key);break}}first.remove()}}if(item.body.textContent!==entry.text)item.body.textContent=entry.text||'';if(item.kind==='thinking'&&entry.done&&!item.root.dataset.touched)item.root.open=false;if(near)card.list.scrollTop=card.list.scrollHeight}
+function agentAppendChannel(message){if(!message)return;const feed=$('agentChannel');const near=feed.scrollHeight-feed.scrollTop-feed.clientHeight<60||true;const el=document.createElement('div');el.className='ag-msg from-'+(message.from==='user'?'user':'agent');const route=document.createElement('span');route.className='ag-route';route.textContent=message.from+' → '+message.to;const time=document.createElement('span');time.className='ag-time';time.textContent=new Date((message.ts||agentNow())*1000).toLocaleTimeString();const text=document.createElement('p');text.textContent=message.text||'';el.append(time,route,text);feed.appendChild(el);while(feed.children.length>300)feed.firstElementChild.remove();const body=$('agentBody');if(near&&state.agent.tab==='channel')body.scrollTop=body.scrollHeight}
+function agentRenderNotes(){const a=state.agent;$('agentPlan').textContent=a.plan||'(no plan yet)';const box=$('agentNotes');box.replaceChildren();const keys=Object.keys(a.notes||{});if(!keys.length){const empty=document.createElement('div');empty.className='ag-empty';empty.textContent='(no shared notes yet)';box.appendChild(empty);return}keys.forEach(key=>{const note=a.notes[key];const el=document.createElement('div');el.className='ag-note';const title=document.createElement('b');title.textContent=key;const by=document.createElement('small');by.textContent='by '+(note.by||'');const text=document.createElement('pre');text.textContent=note.value||'';el.append(title,by,text);box.appendChild(el)})}
+function agentRenderChat(message){if(!message||!message.message_id||state.agentSeen.has(message.message_id))return;state.agentSeen.add(message.message_id);if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}renderMessage(message.role,message.content,[],{model:message.model||null});follow=true;scrollEnd(true)}
+function agentShowApproval(approval){const a=state.agent;if(!approval||a.approvals.has(approval.id))return;const box=document.createElement('div');box.className='ag-approval';const title=document.createElement('b');title.textContent=approval.title||'Approval needed';box.appendChild(title);const detail=approval.command||approval.detail||approval.path||'';if(detail){const pre=document.createElement('pre');pre.textContent=detail;box.appendChild(pre)}const row=document.createElement('div');row.className='row';const decide=async(approved,always)=>{row.querySelectorAll('button').forEach(b=>b.disabled=true);try{await api('/api/approval/respond',{chat_id:state.chatId,approval_id:approval.id,approved,always:!!always});if(always){state.settings.always_allow=true;syncAlwaysAllow();hint()}}catch(error){toast(error.message)}};const approve=document.createElement('button');approve.type='button';approve.textContent='Approve';approve.onclick=()=>decide(true,false);const always=document.createElement('button');always.type='button';always.textContent='Always allow';always.onclick=()=>decide(true,true);const decline=document.createElement('button');decline.type='button';decline.textContent='Decline';decline.onclick=()=>decide(false,false);row.append(approve,always,decline);box.appendChild(row);$('agentApprovals').appendChild(box);a.approvals.set(approval.id,box)}
+function agentRemoveApproval(id){const a=state.agent;const box=a.approvals.get(id);if(box){box.remove();a.approvals.delete(id)}}
+function agentApplySnapshot(snapshot){const a=state.agent;a.exists=true;a.running=!!snapshot.running;a.cards.forEach(card=>card.root.remove());a.cards.clear();$('agentTeam').replaceChildren();(snapshot.agents||[]).forEach(agent=>{agentUpsertAgent(agent);(agent.entries||[]).forEach(entry=>agentUpsertEntry(agent.name,entry))});a.notes=snapshot.notes||{};a.plan=snapshot.plan||'';agentRenderNotes();$('agentChannel').replaceChildren();(snapshot.channel||[]).forEach(agentAppendChannel);a.approvals.forEach(box=>box.remove());a.approvals.clear();(snapshot.approvals||[]).forEach(agentShowApproval);a.cooldown=snapshot.cooldown_until||0;a.reason=snapshot.cooldown_reason||'';(snapshot.chat||[]).forEach(agentRenderChat);agentSyncPanel()}
+function agentApplyEvent(event){const a=state.agent;a.exists=true;switch(event.type){case 'entry':agentUpsertEntry(event.agent,event.entry);break;case 'agent':agentUpsertAgent(event.agent);break;case 'channel':agentAppendChannel(event.message);break;case 'note':a.notes[event.key]=event.note;agentRenderNotes();break;case 'plan':a.plan=event.plan||'';agentRenderNotes();break;case 'chat':agentRenderChat(event.message);break;case 'approval':agentShowApproval(event.approval);break;case 'approval_resolved':agentRemoveApproval(event.id);break;case 'state':a.running=!!event.running;if(event.cooldown_until!==undefined){a.cooldown=event.cooldown_until;a.reason=event.cooldown_reason||''}break}}
+async function agentPoll(){const a=state.agent;if(!state.chatId||!a||a.busyPoll)return;a.busyPoll=true;const chatId=state.chatId;try{const d=await api('/api/agent/poll?chat_id='+encodeURIComponent(chatId)+'&after='+a.seq+'&epoch='+encodeURIComponent(a.epoch));if(chatId!==state.chatId||a!==state.agent)return;a.epoch=d.epoch||'';if(d.snapshot){agentApplySnapshot(d.snapshot)}else if(d.snapshot===null){a.exists=false}(d.events||[]).forEach(agentApplyEvent);a.seq=d.seq||0;a.running=!!d.running;if(d.cooldown_until!==undefined){a.cooldown=d.cooldown_until||0;a.reason=d.cooldown_reason||''}agentSyncPanel();agentRenderStatus();if(a.exists)ensureAgentTimer();else if(state.agentTimer){clearInterval(state.agentTimer);state.agentTimer=null}}catch(error){}finally{a.busyPoll=false}}
+function agentOnChatLoaded(data){(data.messages||[]).forEach(message=>{if(message.message_id)state.agentSeen.add(message.message_id)});if(data.agent_mode)setMode('agent',true);agentPoll()}
+async function sendAgent(text){try{if(state.pendingUploads.length){const uploaded=await attachFiles();if(!uploaded)return}await ensureChat();const messageId=crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2);const route=$('topModel').value;$('prompt').value='';autosize();hint();updateSend();state.agentSeen.add(messageId);if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}renderMessage('user',text,null,{attachments:(state.uploadedFiles||[]).map(item=>item.path)});follow=true;scrollEnd(true);try{await api('/api/agent/send',{chat_id:state.chatId,text,route,message_id:messageId})}catch(error){$('prompt').value=text;autosize();updateSend();throw error}state.agent.exists=true;ensureAgentTimer();await agentPoll();refreshChats().catch(()=>{})}catch(error){toast(error.message)}}
+document.querySelectorAll('#modeToggle button').forEach(button=>{button.onclick=()=>setMode(button.dataset.mode)});
+$('agentStop').onclick=async()=>{try{await api('/api/agent/stop',{chat_id:state.chatId});toast('Agent stopped');agentPoll()}catch(error){toast(error.message)}};
+$('agentCollapse').onclick=()=>{state.agent.collapsed=!state.agent.collapsed;agentSyncPanel()};
+document.querySelectorAll('#agentTabs button').forEach(button=>{button.onclick=()=>{state.agent.tab=button.dataset.tab;document.querySelectorAll('#agentTabs button').forEach(b=>b.classList.toggle('on',b===button));$('agentPaneTeam').hidden=button.dataset.tab!=='team';$('agentPaneChannel').hidden=button.dataset.tab!=='channel';$('agentPaneNotes').hidden=button.dataset.tab!=='notes'}});
+agentReset();
+try{if(localStorage.getItem('kurt_mode')==='agent')setMode('agent',true)}catch(error){}
 $('messages').addEventListener('scroll',()=>{const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});$('toBottom').onclick=()=>{follow=true;scrollEnd(true);$('toBottom').classList.remove('show')};
 $('closeArtifactPane').onclick=closeArtifactPane;$('artifactPaneCopy').onclick=copyActiveArtifact;$('artifactPaneDownload').onclick=downloadActiveArtifact;$('applySystemPromptProposal').onclick=applySystemPromptProposal;$('linkFolderBtn').onclick=linkSessionFolder;
 $('sendBtn').onclick=()=>{if(state.busy){if(state.abort)state.abort.abort()}else send()};
@@ -3739,6 +3832,10 @@ class KurtWebApp:
         self.preview_caps = {}
         self.preview_lock = threading.Lock()
         self.pending_approvals = {}
+        self._agent_saved_keys = list(K.PROVIDER_KEYS)
+        self._agent_apply_lock = threading.Lock()
+        self.agent_gate = ModelGate(self.model_lock, on_acquire=self._agent_gate_acquire, on_release=self._agent_gate_release)
+        self.agent_manager = AgentManager(self)
         self._env_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="kurt-env")
         self._env_jobs = {}
         self._env_jobs_lock = threading.Lock()
@@ -5500,6 +5597,50 @@ class KurtWebApp:
             self.save_chats()
         return chat
 
+    def _agent_gate_acquire(self):
+        self._agent_saved_keys = list(K.PROVIDER_KEYS)
+
+    def _agent_gate_release(self):
+        K.PROVIDER_KEYS[:] = self._agent_saved_keys
+
+    def agent_apply_route(self, candidate):
+        model = candidate["model"]
+        original = self._agent_saved_keys
+        if K.MODEL != model:
+            self.set_model(model)
+        candidate_keys = candidate.get("provider_keys")
+        K.PROVIDER_KEYS[:] = original
+        if candidate_keys is not None:
+            K.PROVIDER_KEYS[:] = list(candidate_keys)
+        elif candidate.get("key_id"):
+            selected = next((item for item in original if str(item.get("id")) == str(candidate["key_id"])), None)
+            if selected is None:
+                raise ValueError("The selected API key is no longer available.")
+            K.PROVIDER_KEYS[:] = [selected]
+        return model
+
+    def agent_stream(self, candidate, messages, max_tokens=4096, think=True):
+        with self._agent_apply_lock:
+            model = self.agent_apply_route(candidate)
+            stream = K.stream_chat(
+                messages, model=model, think=think, temperature=0.3,
+                max_tokens=max_tokens, reasoning_effort="medium",
+            )
+        try:
+            for kind, chunk in stream:
+                kind_name = str(kind or "").strip().lower().replace("-", "_")
+                if kind_name in MODEL_RATIONALE_KINDS or kind_name in THINKING_KINDS:
+                    yield "reasoning", chunk
+                elif kind_name == "content":
+                    yield "content", chunk if isinstance(chunk, str) else str(chunk)
+        finally:
+            close = getattr(stream, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+
     def get_chat(self, chat_id):
         with self.lock:
             chat = next((item for item in self.chats if item.get("id") == chat_id), None)
@@ -5685,6 +5826,14 @@ class Handler(BaseHTTPRequestHandler):
                     "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""), "system_prompt": self.app.editable_system_prompt(), "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False)), "always_allow": bool(self.app.settings.get("always_allow", False))},
                     "project_root": str(self.app.workspace()),
                 })
+            elif parsed.path == "/api/agent/poll":
+                args = parse_qs(parsed.query)
+                try:
+                    after = int((args.get("after") or ["-1"])[0])
+                except ValueError:
+                    after = -1
+                self._json(self.app.agent_manager.poll(
+                    str((args.get("chat_id") or [""])[0]), after, str((args.get("epoch") or [""])[0])))
             elif parsed.path == "/api/chats":
                 with self.app.lock:
                     chats = [{
@@ -5702,6 +5851,7 @@ class Handler(BaseHTTPRequestHandler):
                         "id": chat["id"], "title": chat.get("title"), "model": chat.get("model"), "route": chat.get("route", ""),
                         "effort": "thinking" if chat.get("effort") == "flash" else chat.get("effort", "thinking"), "linked_folder": chat.get("linked_folder", ""),
                         "pinned": bool(chat.get("pinned", False)), "messages": chat.get("messages", []),
+                        "agent_mode": isinstance(chat.get("agent"), dict),
                     })
             elif parsed.path == "/api/usage":
                 self._json(self.app.usage_summary())
@@ -5955,6 +6105,8 @@ class Handler(BaseHTTPRequestHandler):
                 valid_ids = {str(value) for value in ids if re.fullmatch(r"[0-9a-fA-F]{32}", str(value))}
                 if not valid_ids:
                     raise ValueError("Select at least one conversation to delete.")
+                for stale_id in valid_ids:
+                    self.app.agent_manager.stop(stale_id)
                 with self.app.lock:
                     before = len(self.app.chats)
                     self.app.chats = [chat for chat in self.app.chats if chat.get("id") not in valid_ids]
@@ -5971,6 +6123,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": "Conversation not found."}, 404)
                     return
                 if data.get("delete"):
+                    self.app.agent_manager.stop(chat_id)
                     with self.app.lock:
                         self.app.chats = [item for item in self.app.chats if item.get("id") != chat_id]
                         self.app.save_chats()
@@ -6047,6 +6200,10 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/download":
                 job = self.app.start_download(data.get("model"), data.get("source"))
                 self._json({"job": job}, 202)
+            elif parsed.path == "/api/agent/send":
+                self._agent_send(data)
+            elif parsed.path == "/api/agent/stop":
+                self._json(self.app.agent_manager.stop(str(data.get("chat_id") or "")))
             elif parsed.path == "/api/chat":
                 self._chat(data)
             else:
@@ -6597,6 +6754,25 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         self._json({"ok": True, "message": "Wrote " + relative})
 
+    def _agent_send(self, data):
+        chat_id = str(data.get("chat_id") or "")
+        text = str(data.get("text") or "").strip()
+        if not text:
+            self._json({"error": "Message is empty."}, 400)
+            return
+        if len(text) > 100000:
+            self._json({"error": "Message is too long."}, 400)
+            return
+        chat = self.app.get_chat(chat_id)
+        if not chat:
+            self._json({"error": "Conversation not found."}, 404)
+            return
+        route_info = self.app.resolve_chat_route(str(data.get("route") or ""), None)
+        chat["route"] = route_info["route"]
+        chat["model"] = route_info["model"]
+        message_id = str(data.get("message_id") or "").strip()[:100]
+        self._json(self.app.agent_manager.send(chat_id, text, route_info, message_id))
+
     def _chat(self, data):
         chat_id = str(data.get("chat_id") or "")
         user_text = str(data.get("text") or "").strip()
@@ -6613,6 +6789,9 @@ class Handler(BaseHTTPRequestHandler):
         if not chat:
             chat = self.app.create_chat()
             chat_id = chat["id"]
+        if self.app.agent_manager.running_chat() == chat_id:
+            self._json({"error": "Agent mode is running in this chat. Message the lead in Agent mode, or stop the agent first."}, 409)
+            return
         message_id = str(data.get("message_id") or "").strip()
         already_saved = bool(message_id and any(item.get("message_id") == message_id for item in chat.get("messages", [])))
         try:
