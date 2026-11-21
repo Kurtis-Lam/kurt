@@ -15,4 +15,4 @@ dependencies = ["rich>=13"]
 kurt = "kurt:main"
 
 [tool.setuptools]
-py-modules = ["kurt", "providers", "kurt_web", "kurt_sandbox", "kurt_integrations"]
+py-modules = ["kurt", "providers", "kurt_web", "kurt_sandbox", "kurt_integrations", "kurt_agent"]
