@@ -41,6 +41,8 @@ from kurt_integrations import (MCPError, call_mcp_tool, delete_skill, get_skill,
 CONFIG_DIR = K.CONFIG_DIR
 WEB_SETTINGS_FILE = CONFIG_DIR / "web_settings.json"
 CHATS_FILE = CONFIG_DIR / "chats.json"
+USAGE_FILE = CONFIG_DIR / "web_usage.json"
+MAX_USAGE_RECORDS = 20000
 WEB_PORT = int(os.environ.get("KURT_WEB_PORT", "1277"))
 MAX_BODY = 32 * 1024 * 1024
 MAX_IMPORT_BYTES = 20 * 1024 * 1024
@@ -1341,6 +1343,20 @@ body.nav-open .scrim{opacity:1;visibility:visible;pointer-events:auto}
 .mcp-form h4{font-size:13px;margin:0 0 8px}
 .mcp-form textarea{min-height:76px}
 .skill-instructions{min-height:180px!important}
+.usage-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:0 0 16px}
+.usage-card{padding:12px;border:1px solid var(--line2);border-radius:11px;background:var(--bg)}
+.usage-card small{display:block;color:var(--muted);font-size:11.5px}
+.usage-card b{display:block;font-size:20px;margin:3px 0 2px;letter-spacing:-.01em}
+.usage-card span{color:var(--muted);font-size:11.5px}
+.usage-table{width:100%;border-collapse:collapse;font-size:12.5px;margin:6px 0 16px}
+.usage-table th,.usage-table td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right}
+.usage-table th:first-child,.usage-table td:first-child{text-align:left;overflow-wrap:anywhere}
+.usage-table th{color:var(--muted);font-weight:600}
+.usage-bars{display:grid;gap:5px;margin:6px 0 16px}
+.usage-bar-row{display:grid;grid-template-columns:78px minmax(0,1fr) 84px;gap:8px;align-items:center;font-size:12px;color:var(--muted)}
+.usage-bar-track{height:8px;border-radius:99px;background:var(--raise);overflow:hidden}
+.usage-bar-fill{height:100%;background:var(--green);border-radius:99px}
+.usage-heading{font-size:13px;font-weight:650;margin:10px 0 4px}
 @media(max-width:700px){.mcp-server-row,.skill-row{align-items:flex-start;flex-wrap:wrap}.mcp-server-actions{width:100%;justify-content:flex-start}}
 
 /* Settings performance: no full-screen blur, no hidden-panel layout, paused ambient animation. */
@@ -1670,6 +1686,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <button class="settings-nav-btn" type="button" data-settings-tab="groups">Groups</button>
 <button class="settings-nav-btn" type="button" data-settings-tab="mcp">MCP servers</button>
 <button class="settings-nav-btn" type="button" data-settings-tab="skills">Skills</button>
+<button class="settings-nav-btn" type="button" data-settings-tab="usage">Usage</button>
 </nav>
 <div class="settings-panel-area">
 <section class="settings-panel active" data-settings-panel="general">
@@ -1722,6 +1739,12 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="row"><button id="connectMcpServer" class="primary" type="button">Save and connect</button><button id="cancelMcpEdit" type="button" hidden>Cancel edit</button></div>
 </div>
 <div id="mcpServerList"></div>
+</section>
+<section class="settings-panel" data-settings-panel="usage">
+<h3>Token usage</h3>
+<div class="inline-note">Tokens used by chat responses in this Kurt instance. Counts come from the provider when it reports them; otherwise they are estimated from text length (about 4 characters per token) and marked with “~”. Open this view any time by typing <code>/usage</code> in the composer.</div>
+<div id="usageSummary"></div>
+<div class="row"><button id="refreshUsage" type="button">Refresh</button><button id="resetUsage" type="button" class="danger">Reset statistics</button></div>
 </section>
 <section class="settings-panel" data-settings-panel="skills">
 <h3>Skills</h3>
@@ -2683,7 +2706,9 @@ function closeSettings(){$('settingsModal').classList.remove('show')}
 
 function slashItems(){
  const tools=(state.mcpTools||[]).map(item=>({kind:'mcp',command:item.command,title:item.tool_name,description:item.server_name+' · '+(item.description||'MCP tool'),server:item.server_name,record:item}));
- const skills=(state.skills||[]).map(item=>({kind:'skill',command:item.id,title:item.name,description:item.description,record:item}));return [{label:'Skills',items:skills},{label:'MCP tools',items:tools}];
+ const skills=(state.skills||[]).map(item=>({kind:'skill',command:item.id,title:item.name,description:item.description,record:item}));
+ const commands=[{kind:'command',command:'usage',title:'Token usage',description:'View your token usage in Settings',record:null}];
+ return [{label:'Commands',items:commands},{label:'Skills',items:skills},{label:'MCP tools',items:tools}];
 }
 let slashActiveIndex=0,slashVisibleItems=[];
 function hideSlashMenu(){const menu=$('slashMenu');if(menu){menu.hidden=true;menu.replaceChildren()}slashVisibleItems=[]}
@@ -2978,6 +3003,9 @@ async function linkFolderFromMessage(text){
 }
 async function send(){
  const text=$('prompt').value.trim();if(!text||state.busy)return;
+ if(/^\/usage\s*$/i.test(text)){
+  $('prompt').value='';autosize();hideSlashMenu();updateSend();await openUsage();return;
+ }
  if(/^\/edit-system-prompt\s*$/i.test(text)){
   $('prompt').value='';autosize();hideSlashMenu();await openSettings();activateSettingsTab('general');$('systemPrompt').focus();toast('Edit Kurt’s system prompt in Settings, then save it');return;
  }
@@ -3051,10 +3079,58 @@ $('prompt').addEventListener('paste',event=>{
  if(pastedText.length>16000){event.preventDefault();const stamp=new Date().toISOString().replace(/[:.]/g,'-');const file=new File([pastedText],'pasted-text-'+stamp+'.txt',{type:'text/plain'});if(file.size>10*1024*1024){toast('This pasted text exceeds the 10 MB attachment limit. Split it into smaller parts.');return}stageUploadFiles([file]);$('prompt').value='I attached a large pasted text file. Please read it and help me with its contents.';autosize();updateSend();toast('Large paste attached as a .txt file');attachFiles()}
  });
 $('newChat').onclick=newChat;$('selectAllChats').onchange=()=>selectAllChats($('selectAllChats').checked);$('deleteSelectedChats').onclick=deleteSelectedChats;$('cancelChatSelect').onclick=()=>setChatSelectionMode(false);$('operationMode').onchange=async()=>{state.mode=validMode($('operationMode').value);state.effort=effortForMode(state.mode);hint();if(state.busy)cancelRun();if(state.chatId){try{await api('/api/chats/'+encodeURIComponent(state.chatId),{mode:state.mode});}catch(error){toast(error.message)}}hint()};
-function activateSettingsTab(tab){document.querySelectorAll('[data-settings-tab]').forEach(button=>button.classList.toggle('active',button.dataset.settingsTab===tab));document.querySelectorAll('[data-settings-panel]').forEach(panel=>panel.classList.toggle('active',panel.dataset.settingsPanel===tab));const area=document.querySelector('.settings-panel-area');if(area)area.scrollTop=0}
+function fmtTokens(value){const n=Number(value)||0;if(n>=1e6)return (n/1e6).toFixed(2)+'M';if(n>=1e4)return (n/1e3).toFixed(1)+'k';return n.toLocaleString()}
+function usageCard(title,bucket,note){
+ const card=document.createElement('div');card.className='usage-card';
+ const label=document.createElement('small');label.textContent=title;
+ const total=document.createElement('b');total.textContent=fmtTokens((bucket.input_tokens||0)+(bucket.output_tokens||0));
+ const detail=document.createElement('span');detail.textContent=fmtTokens(bucket.input_tokens)+' in · '+fmtTokens(bucket.output_tokens)+' out · '+(bucket.requests||0)+' req'+(note?' · '+note:'');
+ card.append(label,total,detail);return card;
+}
+function usageHeading(text){const h=document.createElement('div');h.className='usage-heading';h.textContent=text;return h}
+async function renderUsage(){
+ const root=$('usageSummary');if(!root)return;
+ let data;
+ try{data=await api('/api/usage')}catch(error){root.textContent='Could not load usage: '+error.message;return}
+ root.replaceChildren();
+ const totals=data.totals||{};
+ if(!totals.requests){const empty=document.createElement('div');empty.className='empty';empty.textContent='No usage recorded yet. Send a message and your token usage will appear here.';root.appendChild(empty);return}
+ const cards=document.createElement('div');cards.className='usage-cards';
+ cards.append(usageCard('Today',data.windows.today),usageCard('Last 7 days',data.windows.week),usageCard('Last 30 days',data.windows.month),usageCard('All time',totals,totals.estimated_requests?'~'+totals.estimated_requests+' estimated':''));
+ root.appendChild(cards);
+ if((data.days||[]).length){
+  root.appendChild(usageHeading('Daily tokens (last 30 days)'));
+  const bars=document.createElement('div');bars.className='usage-bars';
+  const peak=Math.max(1,...data.days.map(day=>(day.input_tokens||0)+(day.output_tokens||0)));
+  data.days.slice().reverse().forEach(day=>{
+   const sum=(day.input_tokens||0)+(day.output_tokens||0);
+   const row=document.createElement('div');row.className='usage-bar-row';
+   const name=document.createElement('span');name.textContent=day.day;
+   const track=document.createElement('div');track.className='usage-bar-track';
+   const fill=document.createElement('div');fill.className='usage-bar-fill';fill.style.width=Math.max(2,sum/peak*100)+'%';track.appendChild(fill);
+   const value=document.createElement('span');value.style.textAlign='right';value.textContent=fmtTokens(sum);
+   row.append(name,track,value);bars.appendChild(row);
+  });
+  root.appendChild(bars);
+ }
+ root.appendChild(usageHeading('By model'));
+ const table=document.createElement('table');table.className='usage-table';
+ const head=document.createElement('tr');['Model','Requests','Input','Output','Total'].forEach(text=>{const th=document.createElement('th');th.textContent=text;head.appendChild(th)});
+ const thead=document.createElement('thead');thead.appendChild(head);table.appendChild(thead);
+ const body=document.createElement('tbody');
+ (data.models||[]).forEach(model=>{
+  const tr=document.createElement('tr');
+  [model.label||model.model,model.requests,fmtTokens(model.input_tokens),fmtTokens(model.output_tokens),fmtTokens((model.input_tokens||0)+(model.output_tokens||0))].forEach(value=>{const td=document.createElement('td');td.textContent=String(value);tr.appendChild(td)});
+  body.appendChild(tr);
+ });
+ table.appendChild(body);root.appendChild(table);
+ if(data.first_ts){const since=document.createElement('div');since.className='inline-note';since.textContent='Tracking since '+new Date(Number(data.first_ts)*1000).toLocaleString()+' · '+data.records+' request record(s) stored.';root.appendChild(since)}
+}
+async function openUsage(){await openSettings();activateSettingsTab('usage')}
+function activateSettingsTab(tab){if(tab==='usage')renderUsage();document.querySelectorAll('[data-settings-tab]').forEach(button=>button.classList.toggle('active',button.dataset.settingsTab===tab));document.querySelectorAll('[data-settings-panel]').forEach(panel=>panel.classList.toggle('active',panel.dataset.settingsPanel===tab));const area=document.querySelector('.settings-panel-area');if(area)area.scrollTop=0}
 document.querySelectorAll('[data-settings-tab]').forEach(b=>b.onclick=()=>activateSettingsTab(b.dataset.settingsTab));
 async function openSettings(){activateSettingsTab('general');$('settingsModal').classList.add('show');try{await refreshBootstrap()}catch(error){toast('Settings could not be refreshed: '+error.message)}}
-$('connectMcpServer').onclick=saveMcpServer;$('cancelMcpEdit').onclick=resetMcpForm;$('mcpServerTransport').onchange=toggleMcpTransportFields;$('saveSkill').onclick=saveSkillForm;$('cancelSkillEdit').onclick=resetSkillForm;
+$('refreshUsage').onclick=renderUsage;$('resetUsage').onclick=async()=>{if(!await confirmInApp('Reset usage statistics','Delete all recorded token usage? This cannot be undone.','Reset',true))return;try{await api('/api/usage/reset',{approved:true});await renderUsage();toast('Usage statistics reset')}catch(error){toast(error.message)}};$('connectMcpServer').onclick=saveMcpServer;$('cancelMcpEdit').onclick=resetMcpForm;$('mcpServerTransport').onchange=toggleMcpTransportFields;$('saveSkill').onclick=saveSkillForm;$('cancelSkillEdit').onclick=resetSkillForm;
 async function saveSettings(){const payload={system_prompt:$('systemPrompt').value,default_route:$('settingsModel').value};const data=await api('/api/settings',payload);state.settings=data.settings||{};await refreshBootstrap(true);toast('Settings saved')}
 async function browseFiles(){if(state.mode!=='normal'&&state.mode!=='agent'){toast('Choose Normal or Agent mode.');return}await ensureChat();const path=$('fileFolder').value.trim();const d=await api('/api/files?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()};const remove=document.createElement('button');remove.type='button';remove.className='file-remove danger';remove.textContent='Delete';remove.title='Permanently delete this local file';remove.setAttribute('aria-label','Delete '+item.name);remove.onclick=()=>deleteLocalFile(item);row.appendChild(remove)}el.appendChild(row)})}
 async function deleteLocalFile(item){if(!item||item.directory||!item.path)return;try{const review=await api('/api/files/delete/prepare',{chat_id:state.chatId,path:item.path});const approved=await confirmInApp('Delete local file?',`Permanently delete this one file from your computer?\n\n${review.path}\n\nSize: ${formatFileSize(review.size)}\nThis cannot be undone. No other files or folders will be removed.`,'Delete file',true);if(!approved)return;const result=await api('/api/files/delete',{chat_id:state.chatId,path:review.path,approved:true,expected_sha256:review.sha256,linked_root:review.linked_root,device:review.device,inode:review.inode});state.selectedFiles=state.selectedFiles.filter(path=>path!==item.path);await browseFiles();renderPendingUploads();toast(result.message||'File deleted')}catch(error){toast(error.message)}}
@@ -3709,6 +3785,7 @@ class KurtWebApp:
         self.settings.setdefault("api_groups", [])
         self.settings.setdefault("mcp_servers", [])
         self.model_lock = threading.RLock()
+        self.usage_lock = threading.Lock()
         self.mcp_media_allowlist = {}
         self.preview_caps = {}
         self.preview_lock = threading.Lock()
@@ -4165,6 +4242,78 @@ class KurtWebApp:
             reverse=True,
         )[:MAX_CHATS]
         _atomic_json(CHATS_FILE, self.chats)
+
+    def record_usage(self, chat_id, model, route, input_tokens, output_tokens, estimated, seconds):
+        input_tokens = max(0, int(input_tokens or 0))
+        output_tokens = max(0, int(output_tokens or 0))
+        if input_tokens + output_tokens <= 0:
+            return
+        entry = {
+            "ts": time.time(), "chat_id": str(chat_id or ""), "model": str(model or "unknown"),
+            "route": str(route or ""), "input_tokens": input_tokens, "output_tokens": output_tokens,
+            "estimated": bool(estimated), "seconds": round(float(seconds or 0), 2),
+        }
+        with self.usage_lock:
+            records = _load_json(USAGE_FILE, [])
+            records.append(entry)
+            _atomic_json(USAGE_FILE, records[-MAX_USAGE_RECORDS:])
+
+    def usage_summary(self):
+        with self.usage_lock:
+            records = _load_json(USAGE_FILE, [])
+        now = time.time()
+        midnight = time.mktime(time.localtime(now)[:3] + (0, 0, 0, 0, 0, -1))
+        totals = {"requests": 0, "input_tokens": 0, "output_tokens": 0, "estimated_requests": 0}
+        windows = {
+            "today": midnight, "week": midnight - 6 * 86400, "month": midnight - 29 * 86400,
+        }
+        by_window = {name: {"requests": 0, "input_tokens": 0, "output_tokens": 0} for name in windows}
+        by_model = {}
+        by_day = {}
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            ts = float(item.get("ts") or 0)
+            tin = int(item.get("input_tokens") or 0)
+            tout = int(item.get("output_tokens") or 0)
+            totals["requests"] += 1
+            totals["input_tokens"] += tin
+            totals["output_tokens"] += tout
+            if item.get("estimated"):
+                totals["estimated_requests"] += 1
+            for name, start in windows.items():
+                if ts >= start:
+                    bucket = by_window[name]
+                    bucket["requests"] += 1
+                    bucket["input_tokens"] += tin
+                    bucket["output_tokens"] += tout
+            model = str(item.get("model") or "unknown")
+            row = by_model.setdefault(model, {"model": model, "requests": 0, "input_tokens": 0, "output_tokens": 0})
+            row["requests"] += 1
+            row["input_tokens"] += tin
+            row["output_tokens"] += tout
+            if ts >= windows["month"]:
+                day = time.strftime("%Y-%m-%d", time.localtime(ts))
+                drow = by_day.setdefault(day, {"day": day, "requests": 0, "input_tokens": 0, "output_tokens": 0})
+                drow["requests"] += 1
+                drow["input_tokens"] += tin
+                drow["output_tokens"] += tout
+        models = []
+        for row in sorted(by_model.values(), key=lambda r: r["input_tokens"] + r["output_tokens"], reverse=True)[:25]:
+            label = row["model"]
+            remote = K.get_remote_model(label)
+            if remote:
+                label = str(remote.get("label") or remote.get("model") or label)
+            models.append({**row, "label": label})
+        days = [by_day[key] for key in sorted(by_day)][-30:]
+        return {
+            "totals": totals, "windows": by_window, "models": models, "days": days,
+            "records": len(records), "first_ts": records[0].get("ts") if records and isinstance(records[0], dict) else None,
+        }
+
+    def reset_usage(self):
+        with self.usage_lock:
+            _atomic_json(USAGE_FILE, [])
 
     def workspace(self):
         root = Path(self.settings.get("project_root") or Path.cwd()).expanduser().resolve()
@@ -5604,6 +5753,8 @@ class Handler(BaseHTTPRequestHandler):
                         "effort": "thinking" if chat.get("effort") == "flash" else chat.get("effort", "thinking"), "mode": valid_mode_value(chat.get("mode", "normal")), "linked_folder": chat.get("linked_folder", ""),
                         "pinned": bool(chat.get("pinned", False)), "messages": chat.get("messages", []),
                     })
+            elif parsed.path == "/api/usage":
+                self._json(self.app.usage_summary())
             elif parsed.path == "/api/download/status":
                 with self.app.lock:
                     self._json({"job": dict(self.app.download_job) if self.app.download_job else None})
@@ -5748,6 +5899,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "skill": skill})
             elif parsed.path == "/api/skills/delete":
                 delete_skill(self.app.skills_directory, str(data.get("id") or ""))
+                self._json({"ok": True})
+            elif parsed.path == "/api/usage/reset":
+                if data.get("approved") is not True:
+                    raise ValueError("Resetting usage statistics requires explicit confirmation.")
+                self.app.reset_usage()
                 self._json({"ok": True})
             elif parsed.path == "/api/models/delete":
                 self._delete_model(data)
@@ -6715,6 +6871,10 @@ class Handler(BaseHTTPRequestHandler):
         usage_calls = 0
         provider_output_tokens = 0
         output_chars = 0
+        provider_input_tokens = 0
+        input_usage_calls = 0
+        input_chars = 0
+        usage_recorded = False
         model_rationale_chunks = []
         last_round_reasoning = {"text": ""}
 
@@ -6729,6 +6889,7 @@ class Handler(BaseHTTPRequestHandler):
         def generate_response():
             nonlocal generation_seconds, generation_calls, usage_calls, thinking_seconds
             nonlocal provider_output_tokens, output_chars, active_candidate_index, model
+            nonlocal provider_input_tokens, input_usage_calls, input_chars
             available = [index for index in range(len(route_candidates)) if index not in failed_candidate_indices]
             if active_candidate_index in available:
                 available.remove(active_candidate_index)
@@ -6748,6 +6909,7 @@ class Handler(BaseHTTPRequestHandler):
                 thinking_ended_at = None
                 think_tail = ""
                 usage_tokens_this_call = None
+                input_tokens_this_call = None
                 started_at = time.monotonic()
                 generation_calls += 1
                 stream = None
@@ -6759,6 +6921,12 @@ class Handler(BaseHTTPRequestHandler):
                             "role": "system",
                             "content": "Your previous reply was empty. Reply now with visible text or one complete action block (@@@ RUN ... @@@ END). Do not answer with reasoning only.",
                         }]
+                    for sent in call_messages:
+                        sent_content = sent.get("content") if isinstance(sent, dict) else ""
+                        if isinstance(sent_content, str):
+                            input_chars += len(sent_content)
+                        elif isinstance(sent_content, list):
+                            input_chars += sum(len(str(part.get("text") or "")) for part in sent_content if isinstance(part, dict) and part.get("type") == "text")
                     stream = K.stream_chat(
                         call_messages,
                         model=model,
@@ -6837,6 +7005,12 @@ class Handler(BaseHTTPRequestHandler):
                                     usage_tokens_this_call = max(int(token_value), usage_tokens_this_call or 0)
                             except (TypeError, ValueError):
                                 pass
+                            prompt_value = next((usage.get(key) for key in ("prompt_tokens", "input_tokens", "promptTokens", "inputTokens", "prompt_eval_count") if usage.get(key) is not None), None)
+                            try:
+                                if prompt_value is not None:
+                                    input_tokens_this_call = max(int(prompt_value), input_tokens_this_call or 0)
+                            except (TypeError, ValueError):
+                                pass
                             continue
                         if kind_name == "content":
                             route_text(chunk if isinstance(chunk, str) else str(chunk))
@@ -6851,7 +7025,7 @@ class Handler(BaseHTTPRequestHandler):
                     if rationale_chunks:
                         thinking_seconds += max(0.0, (thinking_ended_at or time.monotonic()) - started_at)
                         model_rationale_chunks.extend(rationale_chunks)
-                    output_chars += sum(len(chunk) for chunk in chunks)
+                    output_chars += sum(len(chunk) for chunk in chunks) + sum(len(chunk) for chunk in rationale_chunks)
                     return raw_response
                 except (BrokenPipeError, ConnectionResetError):
                     raise
@@ -6889,6 +7063,9 @@ class Handler(BaseHTTPRequestHandler):
                     if usage_tokens_this_call is not None:
                         usage_calls += 1
                         provider_output_tokens += usage_tokens_this_call
+                    if input_tokens_this_call is not None:
+                        input_usage_calls += 1
+                        provider_input_tokens += input_tokens_this_call
                     close = getattr(stream, "close", None)
                     if callable(close):
                         try:
@@ -6907,11 +7084,19 @@ class Handler(BaseHTTPRequestHandler):
                 token_count = max(1, round(output_chars / 4)) if output_chars else 0
                 estimated = True
             rate = token_count / seconds if seconds > 0 and token_count > 0 else 0.0
+            if generation_calls > 0 and input_usage_calls == generation_calls:
+                prompt_count = provider_input_tokens
+                prompt_estimated = False
+            else:
+                prompt_count = round(input_chars / 4) if input_chars else 0
+                prompt_estimated = True
             return {
                 "thought_seconds": round(seconds, 1),
                 "output_tokens": int(token_count),
+                "input_tokens": int(prompt_count),
                 "tokens_per_second": round(rate, 1),
                 "tokens_estimated": estimated,
+                "input_estimated": prompt_estimated,
             }
 
         def search_result_text(query, result):
@@ -7372,6 +7557,18 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
         finally:
+            if generation_calls > 0 and not usage_recorded:
+                usage_recorded = True
+                try:
+                    usage_stats = response_stats()
+                    self.app.record_usage(
+                        chat_id, model, route_info.get("route"),
+                        usage_stats["input_tokens"], usage_stats["output_tokens"],
+                        usage_stats["tokens_estimated"] or usage_stats["input_estimated"],
+                        usage_stats["thought_seconds"],
+                    )
+                except Exception:
+                    pass
             K.PROVIDER_KEYS[:] = original_provider_keys
             self.app.model_lock.release()
             if not disconnected:
