@@ -114,29 +114,32 @@ def preview_is_text(path):
 
 WEB_INSTRUCTIONS = r"""
 KURT WEB INTERFACE RULES:
-- You are Kurt, the local assistant in this application. Speak as Kurt.
-- There are exactly two modes: Normal and Agent. Both can read/list local files that the
-  current OS account is permitted to access. The server enforces this permission boundary.
-- Every file creation/modification, file deletion, and state-changing command is paused for explicit
-  user approval in the chat activity timeline. Read-only inspection commands (grep, rg, ls, cat, head,
-  tail, find, tree, wc, git status/log/diff/show/grep, version checks) run automatically inside the
-  session workspace and their output appears in the timeline. Never treat a proposal as executed,
-  saved, or deleted.
-- Each conversation has a private workspace and private Python environment. Work there by
-  default. User uploads are copied into that chat workspace and never modify originals.
+- You are Kurt, the local assistant in this application. Speak as Kurt. There are no modes: you are
+  one unified assistant for everyday questions, file work, and multi-step computer tasks.
+- You can read and list any local file or folder that the current OS account is permitted to
+  access, anywhere on this computer, not only inside the chat workspace. The server enforces this
+  permission boundary.
+- You can propose to create, modify, or delete any local file the OS account may change, including
+  absolute paths outside the chat workspace, and to run terminal commands. By default every file
+  creation/modification, file deletion, and state-changing command is paused for explicit user
+  approval in the chat activity timeline. If the user has turned on Always allow, those actions are
+  approved automatically and their results still appear in the timeline. Read-only inspection
+  commands (grep, rg, ls, cat, head, tail, find, tree, wc, git status/log/diff/show/grep, version
+  checks) always run automatically and their output appears in the timeline. Never treat a proposal
+  as executed, saved, or deleted until the application reports the result.
+- Each conversation has a private workspace and private Python environment. Relative paths resolve
+  there by default. User uploads are copied into that chat workspace and never modify originals.
 - A session may be explicitly linked to one user-selected folder. When linked, relative file
-  changes target that folder; every file write, deletion, and command still requires exact approval.
+  changes target that folder. Use an absolute path to read or change anything else on the computer.
 - The current OS account's permissions are the maximum boundary. Never use sudo, su, doas,
   pkexec, root escalation, another account, or credential harvesting.
-- Use READ/LIST (or AGENT_READ/AGENT_LIST for compatibility) for read-only local access.
-  Use WRITE/EDIT (or AGENT_WRITE for compatibility) to propose a file change. Use DELETE to
+- Use READ/LIST for read-only local access. Use WRITE/EDIT to propose a file change. Use DELETE to
   propose deleting one regular local file, including an absolute path outside the chat workspace,
-  when the current OS account has permission. Use RUN (or AGENT_RUN for compatibility) to propose
-  one terminal command.
+  when the current OS account has permission. Use RUN to propose one terminal command.
 - Act only on what the user's latest message asks for. Do not start unrelated work, create
   projects or folders, or run commands the user did not request.
-- A pending action must stop the current response until the user approves or declines it.
-  Do not claim a command, file change, or deletion succeeded before the approval result confirms it.
+- When an action needs approval, stop the current response until the user approves or declines it.
+  Do not claim a command, file change, or deletion succeeded before the result confirms it.
 - Before file changes or deletions, provide a concise Change summary naming each target and why it changes.
 - SEARCH may request external web research when needed. Do not invent search results.
 - Uploaded ZIP archives and folders are unpacked into the conversation workspace. Images are
@@ -183,7 +186,8 @@ KURT ACTION BLOCK SYNTAX:
 FILE_ACTION_INSTRUCTIONS = r"""
 KURT FILE ACTION SYNTAX (fixed application rule; always applies, even if the editable prompt omits it):
 - To create a new file or fully overwrite an existing one, output exactly this shape, with the
-  relative path on the SAME line as WRITE, the complete file contents on the following lines, and
+  relative path (or an absolute path to change a file elsewhere on the computer) on the SAME line
+  as WRITE, the complete file contents on the following lines, and
   @@@ END alone on its own final line:
 @@@ WRITE <relative/path/to/file.ext>
 <complete file contents>
@@ -328,9 +332,11 @@ CLI-FIRST WORKFLOW:
   rg, find, tree, file, stat, du, diff, sort, uniq, cut, and git status/log/diff/show/grep/blame/
   ls-files/branch, plus version checks such as python --version and pip list. Pipes between these are
   allowed. Redirects, ;, &&, ||, $, backticks, and sudo are not, so a command using them is sent for
-  approval instead. Paths must be relative or inside the session workspace.
+  approval instead. Paths may be relative or absolute anywhere on the computer; ~ and .. are not
+  accepted, so write out the absolute path.
 - Anything that creates, changes, deletes, installs, runs a script or tests, or uses the network pauses
-  for approval. Emit that RUN block directly; do not ask in chat first.
+  for approval unless the user has turned on Always allow. Emit that RUN block directly; do not ask in
+  chat first.
 - Work in a loop: inspect with a command, make the change, run or check it, then report the real
   result. After changing code, verify it (python -m py_compile, the project's own tests if they
   exist, or run the script). Check that tests exist with ls or find before running them, and install
@@ -380,33 +386,25 @@ EFFORT_INSTRUCTIONS = {
     "expert": "EXPERT EFFORT: use high/deep reasoning where the provider supports effort controls and verify important details carefully. Keep all reasoning out of the reply body. For substantive requests only, add a detailed RATIONALE block (consequential decisions, trade-offs, alternatives, checks); simple requests get no rationale. Be precise about uncertainty and never expose private chain-of-thought or internal monologue.",
 }
 
-NORMAL_MODE_INSTRUCTIONS = r"""
-NORMAL MODE — EVERYDAY USE:
-- Handle everyday questions, uploaded files, and straightforward local-file tasks.
-- You may read/list local paths using READ/LIST or AGENT_READ/AGENT_LIST. Paths are limited
-  only by the current OS account's existing permissions and the application's safety checks.
-- You may propose file changes, file deletions, and terminal commands, but every WRITE/EDIT/
-  AGENT_WRITE, DELETE, and any RUN/AGENT_RUN command that is not a read-only inspection command
-  must pause for individual user approval in the activity timeline.
-- Work in this chat's private isolated workspace unless the user explicitly links a folder.
-- For a complex, multi-step coding or computer workflow, the interface may ask the user to
-  switch to Agent mode. Never switch silently. Ordinary explanations, short snippets, and
-  straightforward file reads remain in Normal mode.
-"""
+UNIFIED_EFFORT = "expert"
 
-AGENT_MODE_INSTRUCTIONS = r"""
-AGENT MODE — MULTI-STEP COMPUTER WORK:
-- You have the same local read access as Normal mode, within the current OS account's
-  permissions. Use READ/LIST or AGENT_READ/AGENT_LIST to inspect relevant files and folders.
-- You may plan and carry out multi-step tasks, but each individual state-changing command, file
-  creation/modification, and file deletion pauses for explicit approval. Read-only inspection
-  commands run automatically, so use them freely to look things up before and after changes. Wait for the user's
-  decision before continuing to the next step.
-- Use the private per-chat workspace by default. If a folder is linked to this session, use
-  that folder as the working root for relative paths. Never silently link or unlink folders.
-- Use RUN/AGENT_RUN for one command at a time. Use WRITE/EDIT/AGENT_WRITE for file changes.
-- Use DELETE for one regular file at a time; directories, wildcards, and recursive deletion are
-  not accepted by DELETE.
+UNIFIED_INSTRUCTIONS = r"""
+CAPABILITIES AND ACCESS (single unified assistant; there is nothing to switch):
+- Handle everyday questions, uploaded files, local-file tasks, and multi-step coding or computer
+  workflows in one continuous session.
+- You may read/list any local path using READ/LIST. Paths are limited only by the current OS
+  account's existing permissions and the application's safety checks.
+- You may propose file changes (relative or absolute paths), file deletions, and terminal commands.
+  Every WRITE/EDIT, DELETE, and any RUN command that is not a read-only inspection command pauses for
+  individual user approval in the activity timeline, unless the user has turned on Always allow, in
+  which case it is approved automatically. Wait for the decision before the next step.
+- Read-only inspection commands run automatically, so use them freely to look things up before and
+  after changes.
+- Relative paths resolve inside this chat's private isolated workspace, or inside the folder the user
+  linked to this session. Use absolute paths for anything else on the computer. Never silently link
+  or unlink folders.
+- Use RUN for one command at a time. Use WRITE/EDIT for file changes. Use DELETE for one regular file
+  at a time; directories, wildcards, and recursive deletion are not accepted by DELETE.
 - Never run shell privilege escalation or attempt to bypass OS file permissions.
 - Delegate bounded analysis only when it materially helps; child agents cannot read local
   files, run commands, write files, or approve actions.
@@ -414,11 +412,6 @@ AGENT MODE — MULTI-STEP COMPUTER WORK:
 
 
 
-
-def valid_mode_value(value, fallback="normal"):
-    raw = str(value or fallback)
-    if raw == "code": return "agent"
-    return raw if raw in ("normal", "agent") else (fallback if fallback in ("normal", "agent") else "normal")
 
 ACTION_MARKER_RE = r"@\s*@\s*@"
 def _tolerant_action_re(name):
@@ -480,8 +473,8 @@ _RO_GIT_RESTRICTED = {"branch": {"-a", "-r", "-v", "-vv", "--list", "--show-curr
 _RO_VERSION_FLAGS = {"--version", "-V", "-v", "version"}
 
 
-def readonly_command_ok(command, roots):
-    """True only for a simple pipeline of known read-only commands confined to the given roots."""
+def readonly_command_ok(command, roots=None):
+    """True only for a simple pipeline of known read-only commands. Reads are allowed anywhere the OS account can read."""
     text = str(command or "").strip()
     if not text or len(text) > 2000 or any(ch in text for ch in "$`\n\r\\"):
         return False
@@ -491,10 +484,6 @@ def readonly_command_ok(command, roots):
         tokens = list(lexer)
     except ValueError:
         return False
-    resolved_roots = []
-    for root in roots:
-        try: resolved_roots.append(Path(root).resolve())
-        except OSError: pass
     segments, current = [], []
     for tok in tokens:
         if tok == "|":
@@ -510,12 +499,7 @@ def readonly_command_ok(command, roots):
 
     def path_ok(value):
         value = str(value)
-        if value.startswith("~") or ".." in value.split("/"): return False
-        if value.startswith("/"):
-            try: target = Path(value).resolve()
-            except OSError: return False
-            return any(target == root or root in target.parents for root in resolved_roots)
-        return True
+        return not (value.startswith("~") or ".." in value.split("/"))
 
     for seg in segments:
         name, args = seg[0], seg[1:]
@@ -559,15 +543,6 @@ IMAGE_GENERATION_TOOL_RE = re.compile(
     re.I,
 )
 
-NORMAL_MODE_LOCAL_ACCESS_RE = re.compile(
-    r"(?:\b(?:my\s+(?:mac(?:book)?|computer|desktop|downloads?|documents?|pictures|movies|music|home folder|home directory|external drive|mounted drive|local files?|local folders?|project folder|project directory)|(?:whole|entire)\s+(?:my\s+)?(?:computer|mac|filesystem|file system|drive)|project\s+(?:files?|folder|directory)|codebase|repository|repo|terminal|local machine)\b"
-    r"|~\/|\/users\/|\/volumes\/|\/applications\/|\/library\/|\/system\/|\/private\/|\/etc\/|\/var\/|\/opt\/)",
-    re.I,
-)
-AGENT_SCOPE_REQUEST_RE = re.compile(
-    r"(?:\b(?:my\s+)?(?:mac(?:book)?|computer|desktop|downloads?|documents?|pictures|movies|music|home folder|home directory|external drive|mounted drive)\b|~\/|\/users\/|\/volumes\/|\/applications\/|\/library\/|\/system\/|\/private\/|\/etc\/|\/var\/|\/opt\/)",
-    re.I,
-)
 DESKTOP_VISUAL_REQUEST_RE = re.compile(
     r"\b(?:see|view|look\s+at|show|watch|inspect)\b.{0,90}\b(?:desktop|screen|display|monitor|gui)\b|\b(?:desktop|screen|display|monitor|gui)\b.{0,90}\b(?:see|view|look\s+at|show|watch|inspect)\b",
     re.I,
@@ -739,9 +714,6 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .model-pill{max-width:230px;min-width:0;background:transparent;border:0;color:var(--muted);border-radius:9px;padding:6px 8px;font-size:13px;text-overflow:ellipsis;cursor:pointer;outline-offset:0}
 .model-pill:hover{color:var(--text);background:var(--raise)}
 .model-pill option{background:var(--panel);color:var(--text)}
-.mode-pill{max-width:112px;min-width:84px;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:9px;padding:5px 7px;font-size:12px}
-.mode-pill:hover{color:var(--text);border-color:var(--green)}
-.mode-pill option{background:var(--panel);color:var(--text)}
 .work-log{margin:0 0 12px;border:1px solid var(--line);border-radius:9px;background:var(--bg);overflow:visible}
 .work-log[hidden]{display:none}
 .work-log-head{display:flex;align-items:center;gap:7px;width:100%;padding:7px 10px;border:0;border-radius:0;background:transparent;color:var(--muted);text-align:left;font-size:12.5px}
@@ -811,7 +783,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .failover-member-row{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) auto;gap:8px;align-items:center;padding:9px 10px;border:1px solid var(--line);border-radius:10px;margin:7px 0;background:var(--bg)}
 .failover-member-row select{width:100%;min-width:0;max-width:100%;padding:8px 9px;border:1px solid var(--line2);border-radius:8px;background:var(--panel);color:var(--text);font-size:12.5px;text-overflow:ellipsis}
 .failover-member-row .remove-member{width:32px;height:32px;padding:0}
-@media(max-width:700px){.failover-member-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}.route-picker{gap:0}.route-category{padding:4px 3px;font-size:10px}.custom-select.mode-pill{max-width:20vw;min-width:0}}
+@media(max-width:700px){.failover-member-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}.route-picker{gap:0}.route-category{padding:4px 3px;font-size:10px}}
 .key-row .grow,.model-row .grow{flex:1;min-width:0}
 .key-row small,.model-row small{display:block;color:var(--muted)}
 .pool-card{border:1px solid var(--line2);border-radius:11px;padding:10px 12px;margin:9px 0;background:var(--bg)}
@@ -854,7 +826,6 @@ body.nav-open .scrim{display:block;position:fixed;inset:0;background:rgba(4,10,7
 .menu-btn{display:inline-grid}
 .topbar{padding:8px 10px}
 .model-pill{max-width:42vw}
-.mode-pill{max-width:19vw;min-width:0;padding:5px 3px;font-size:10.5px}
 .model-pill{max-width:28vw}
 .messages{padding:18px 14px 8px}
 .composer-wrap{padding:6px 10px 10px}
@@ -977,8 +948,6 @@ body.compact-scroll .artifact-pane{top:54px;bottom:0;height:auto;min-height:0;ov
 .custom-select.model-pill{max-width:260px;min-width:0}
 .custom-select.model-pill .custom-select-trigger{border:0;background:transparent;color:var(--muted);padding:6px 8px}
 .custom-select.model-pill .custom-select-trigger:hover{background:var(--raise);color:var(--text)}
-.custom-select.mode-pill{max-width:140px;min-width:86px;border:0!important;background:transparent!important;box-shadow:none!important}
-.custom-select.mode-pill .custom-select-trigger{min-width:0;padding:5px 8px;border:1px solid var(--line)!important;background:transparent;color:var(--muted);font-size:12px;box-shadow:none!important}
 .custom-select.chat-sort{max-width:112px;min-width:0}
 .custom-select.chat-sort .custom-select-menu{min-width:120px;left:auto;right:0}
 .field>.custom-select{width:100%}
@@ -996,7 +965,7 @@ body.compact-scroll .artifact-pane{top:54px;bottom:0;height:auto;min-height:0;ov
 .dialog-field input:focus,.dialog-field textarea:focus{border-color:var(--green)}
 .dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
 .dialog-actions .danger{background:var(--danger);border-color:var(--danger);color:#fff}.dialog-actions .danger:hover{background:var(--danger);border-color:var(--danger);filter:brightness(1.06)}.dialog-actions .danger:active{background:var(--danger);border-color:var(--danger);filter:none;transform:none}
-@media(max-width:700px){.custom-select.model-pill{max-width:42vw}.custom-select.mode-pill{max-width:22vw;min-width:0}.custom-select-trigger{font-size:12px}.chat-more{opacity:1}}
+@media(max-width:700px){.custom-select.model-pill{max-width:42vw}.custom-select-trigger{font-size:12px}.chat-more{opacity:1}}
 @media(prefers-reduced-motion:reduce){.custom-select-menu,.app-dialog,.modal,.modal-backdrop,.artifact-body,.think-body,.settings-panel{transition:none!important;animation:none!important}}
 
 
@@ -1504,6 +1473,12 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 .approval-pause .approval-allow{background:var(--green);border-color:var(--green);color:var(--green-ink);font-weight:650}
 .approval-pause .approval-allow:hover{filter:brightness(1.08)}
 .approval-pause .approval-deny{background:transparent;border-color:var(--line2);color:var(--text)}
+.approval-pause .approval-always{background:transparent;border-color:var(--green);color:var(--green);font-weight:650}
+.approval-pause .approval-always:hover{background:var(--green-soft)}
+.always-allow-row{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin:12px 0}
+.always-allow-row input{margin-top:4px;accent-color:var(--green);flex:none}
+.always-allow-row label{display:grid;gap:2px;cursor:pointer}
+.always-allow-row small{color:var(--muted)}
 .approval-pause .approval-result{margin-left:auto;color:var(--muted);font-size:12px}
 .work-log.open .work-log-body:has(.approval-pause.waiting){max-height:min(70vh,640px)}
 
@@ -1661,12 +1636,11 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="compose-bottom">
 <button class="icon-btn" id="contextBtn" title="Upload files into this chat workspace" aria-label="Upload files"><svg class="ic"><use href="#i-plus"/></svg></button><button class="link-folder-btn" id="linkFolderBtn" type="button" title="Link this session to a folder on your computer">↗ <span>Link folder</span></button>
 <span class="spacer"></span>
-<select id="operationMode" class="mode-pill" title="Normal: everyday use · Agent: multi-step computer tasks; both have approval-gated local actions" aria-label="Operating mode"><option value="normal" selected>Normal</option><option value="agent">Agent</option></select>
 <div class="route-picker" id="routePicker" aria-label="Choose model route"><button class="route-current" id="routeCurrent" type="button" aria-haspopup="true" aria-expanded="false">Choose model</button></div><select id="topModel" hidden aria-label="Selected model route"></select><input id="composerFiles" type="file" multiple hidden>
 <button class="send" id="sendBtn" title="Send message" aria-label="Send message" disabled><svg class="ic"><use href="#i-up"/></svg></button>
 </div>
 </div>
-<div class="compose-hint" id="composeHint">Normal is for everyday tasks. Both modes can read local files; every command and file change pauses for your approval. Link a folder to work directly in it.</div>
+<div class="compose-hint" id="composeHint">Kurt can read any file your account can access. File changes, deletions, and commands ask for approval. Link a folder to work directly in it.</div>
 </div>
 </section>
 <aside class="artifact-pane" id="artifactPane" aria-label="Selected file preview">
@@ -1690,7 +1664,8 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 </nav>
 <div class="settings-panel-area">
 <section class="settings-panel active" data-settings-panel="general">
-<h3>General</h3><div class="inline-note">Each conversation gets a private workspace. Both modes can read files accessible to your macOS account. Use Link folder in the composer to make a chosen folder this session’s working root; every change still needs approval.</div>
+<h3>General</h3><div class="inline-note">Each conversation gets a private workspace. Kurt can read any file accessible to your macOS account and can propose changes to any of them. Use Link folder in the composer to make a chosen folder this session’s working root. File changes, deletions, and commands ask for approval unless Always allow is on.</div>
+<div class="always-allow-row"><input type="checkbox" id="alwaysAllow"><label for="alwaysAllow"><b>Always allow</b><small>Kurt writes, modifies, and deletes files and runs commands anywhere your account can, without asking each time. Turn this off to be asked again.</small></label></div>
 <div class="settings-grid"><div class="field"><label>Default chat route</label><select id="settingsModel"></select></div><div class="field"><label>Default working environment</label><input value="Private isolated workspace per chat" disabled><div class="inline-note">Link a folder from the bottom of the composer to work directly in that folder. Unlinking returns this chat to its private workspace.</div></div></div>
 <div class="field"><label>System prompt</label><textarea id="systemPrompt" style="min-height:180px"></textarea><div class="inline-note">Edit the prompt here and select Save settings, or ask Kurt to revise it in chat. Kurt can prepare a complete replacement prompt and show an Apply prompt to Kurt review action. Type /system-prompt to inspect the active prompt or /edit-system-prompt to open this editor.</div></div>
 <div class="row"><button class="primary" id="saveSettings">Save settings</button><button id="reloadSettings">Reload from disk</button></div>
@@ -1765,9 +1740,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="chat-context-menu" id="chatContextMenu" role="menu"></div>
 <div class="dialog-backdrop" id="appDialogBackdrop"><form class="app-dialog" id="appDialogForm"><h2 id="appDialogTitle"></h2><p class="dialog-message" id="appDialogMessage"></p><div class="dialog-fields" id="appDialogFields"></div><div class="dialog-actions"><button type="button" id="appDialogCancel">Cancel</button><button type="submit" class="primary" id="appDialogConfirm">Save</button></div></form></div>
 <script>
-const TOKEN='__TOKEN__';const HINT='Normal and Agent can read files available to your OS account. Every command, file change, and deletion pauses for approval. Link a folder to work directly in it.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],mcpServers:[],mcpTools:[],skills:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],uploadPromise:null,contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',effort:'thinking',mode:'normal',editingGroup:null,selectingChats:false,selectedChatIds:[],linkedFolder:'',activeArtifactContent:'',activeArtifact:null};
-function effortForMode(mode){return mode==='normal'?'thinking':'expert'}
-function validMode(mode){const value=String(mode||'normal');return value==='agent'||value==='code'?'agent':'normal'}
+const TOKEN='__TOKEN__';const HINT='Kurt can read any file your account can access. File changes, deletions, and commands ask for approval. Link a folder to work directly in it.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],mcpServers:[],mcpTools:[],skills:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],uploadPromise:null,contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',editingGroup:null,selectingChats:false,selectedChatIds:[],linkedFolder:'',activeArtifactContent:'',activeArtifact:null};
 const $=id=>document.getElementById(id);const api=async(path,body)=>{const res=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:body?JSON.stringify(body):undefined});const data=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(data.error||res.statusText);return data};
 function toast(msg){const el=$('toast');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600)}
 
@@ -2015,13 +1988,14 @@ function createApprovalRow(node,item){
   const yes=document.createElement('button');yes.type='button';yes.className='approval-allow';yes.textContent='Approve';
   const no=document.createElement('button');no.type='button';no.className='approval-deny';no.textContent='Decline';
   const result=document.createElement('span');result.className='approval-result';result.textContent='Waiting for your decision…';
-  const decide=async approved=>{
-   yes.disabled=true;no.disabled=true;result.textContent=approved?'Sending approval…':'Sending decline…';
-   try{await api('/api/approval/respond',{chat_id:state.chatId,approval_id:approval.id,approved});item.approved=approved;item.ok=approved;setThink(node,node.__worklog||[])}
-   catch(error){yes.disabled=false;no.disabled=false;result.textContent='Could not submit decision: '+error.message;toast(error.message)}
+  const always=document.createElement('button');always.type='button';always.className='approval-always';always.textContent='Always allow';always.title='Approve this and stop asking. Kurt will write, modify, and delete files and run commands without approval until you turn this off in Settings.';
+  const decide=async(approved,alwaysAllow)=>{
+   yes.disabled=true;no.disabled=true;always.disabled=true;result.textContent=approved?'Sending approval…':'Sending decline…';
+   try{await api('/api/approval/respond',{chat_id:state.chatId,approval_id:approval.id,approved,always:!!alwaysAllow});if(alwaysAllow){state.settings.always_allow=true;syncAlwaysAllow();hint()}item.approved=approved;item.ok=approved;setThink(node,node.__worklog||[])}
+   catch(error){yes.disabled=false;no.disabled=false;always.disabled=false;result.textContent='Could not submit decision: '+error.message;toast(error.message)}
   };
-  yes.onclick=()=>decide(true);no.onclick=()=>decide(false);
-  actions.append(yes,no);
+  yes.onclick=()=>decide(true);no.onclick=()=>decide(false);always.onclick=()=>decide(true,true);
+  actions.append(yes,always,no);
   if(approval.artifactPath){const open=document.createElement('button');open.type='button';open.className='ghost';open.textContent='Open file preview';open.onclick=()=>{const t=Array.from(document.querySelectorAll('.artifact-trigger')).find(b=>b.dataset.path===approval.artifactPath);if(t)t.click()};actions.appendChild(open)}
   actions.appendChild(result);box.appendChild(actions);
  }
@@ -2058,11 +2032,12 @@ function setEmpty(on){$('main').classList.toggle('empty',on);if(on)$('toBottom')
 function setTitle(title,meta){$('chatTitle').textContent=title||'New chat';$('chatMeta').textContent=meta||''}
 function autosize(){const t=$('prompt');t.style.height='auto';t.style.height=Math.min(t.scrollHeight,220)+'px'}
 function updateSend(){$('sendBtn').disabled=!state.busy&&!$('prompt').value.trim()}
+function syncAlwaysAllow(){const box=$('alwaysAllow');if(box)box.checked=!!(state.settings&&state.settings.always_allow)}
 function hint(){
  const count=state.contextCount?state.contextCount+' uploaded item(s). ':'';
  const linked=state.linkedFolder?'Linked folder: '+state.linkedFolder+'. ':'';
- const modeText=state.mode==='agent'?'Agent handles multi-step computer tasks.':'Normal handles everyday tasks and straightforward file work.';
- $('composeHint').textContent=count+linked+modeText+' Both modes can read files allowed to your account; every command and file change pauses for approval.';
+ const access=state.settings&&state.settings.always_allow?'Always allow is on: Kurt changes files and runs commands without asking.':'Kurt can read any file your account can access. File changes, deletions, and commands ask for approval.';
+ $('composeHint').textContent=count+linked+access;
  $('linkFolderBtn').classList.toggle('linked',!!state.linkedFolder);
  $('linkFolderBtn').querySelector('span').textContent=state.linkedFolder?'Linked folder':'Link folder';
  const sources=document.querySelectorAll('#filesModal .file-source');if(sources[1])sources[1].hidden=true;
@@ -2133,7 +2108,7 @@ function renderArtifactTriggers(container,artifacts){
   button.dataset.path=String(a.target_path||a.path||'');button.setAttribute('aria-controls','artifactPane');button.setAttribute('aria-expanded','false');
   button.innerHTML='<span class="artifact-trigger-icon"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span><span class="artifact-trigger-text"><span class="artifact-trigger-name"></span><span class="artifact-trigger-status"></span></span><span class="artifact-trigger-open" aria-hidden="true"><svg class="ic"><use href="#i-chev"/></svg></span>';
   button.querySelector('.artifact-trigger-name').textContent=promptCard?'System prompt proposal':commandCard?'Code command approval':agentCommandCard?'Agent command approval':agentFileCard?'Agent file change':terminalCard?'Terminal output':String(a.path||'Generated file');
-  button.querySelector('.artifact-trigger-status').textContent=artifactLang(a)+' · '+(a.workspace_written?(a.kind==='linked_file'?'Saved in linked folder after approval':'Saved to private workspace after approval'):(a.validation?.message||(a.approval_required?'Ready for approval · not saved':'Preview')));
+  button.querySelector('.artifact-trigger-status').textContent=artifactLang(a)+' · '+(a.workspace_written?(a.kind==='linked_file'?'Saved in linked folder after approval':a.kind==='local_file'?'Saved after approval':'Saved to private workspace after approval'):(a.validation?.message||(a.approval_required?'Ready for approval · not saved':'Preview')));
   button.setAttribute('aria-label','Review '+(a.path||'generated file'));button.onclick=()=>openArtifactPreview(a,button);container.appendChild(button);
  });
  if(selectedPath){const selected=Array.from(container.querySelectorAll('.artifact-trigger')).find(button=>button.dataset.path===selectedPath);if(selected)selected.click()}
@@ -2656,7 +2631,7 @@ async function renameChat(id,current){const result=await inAppDialog({title:'Ren
 async function togglePinChat(id,pinned){try{await api('/api/chats/'+encodeURIComponent(id),{pin:!!pinned});await refreshChats()}catch(error){toast(error.message)}}
 async function deleteChat(id){const chat=state.chats.find(item=>item.id===id);if(!await confirmInApp('Delete conversation',`Delete “${chat?.title||'this chat'}” and its temporary workspace? This cannot be undone.`,'Delete chat',true))return;if(state.chatId===id)cancelRun();try{await api('/api/chats/'+encodeURIComponent(id),{delete:true});if(state.chatId===id){state.chatId=null;resetComposer();showWelcome();setTitle('New chat','')}await refreshChats();toast('Chat deleted')}catch(error){toast(error.message)}}
 let bootstrapSig='';
-async function refreshBootstrap(force){const data=await api('/api/bootstrap');const sig=JSON.stringify(data);if(force===true){delete $('systemPrompt').dataset.dirty}else if(sig===bootstrapSig)return false;bootstrapSig=sig;state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.mcpServers=data.mcp_servers||[];state.mcpTools=data.mcp_tools||[];state.skills=data.skills||[];state.settings=data.settings||{};state.projectRoot=data.project_root||'';if(!$('systemPrompt').dataset.dirty)$('systemPrompt').value=state.settings.system_prompt||'';fillProviders();fillModels();renderKeys();renderApiKeyChecks(currentApiKeySelection());renderApiModels();renderApiGroups();renderMcpServers();renderSkills();refreshFailoverMemberOptions();enhanceAllSelects();return true}
+async function refreshBootstrap(force){const data=await api('/api/bootstrap');const sig=JSON.stringify(data);if(force===true){delete $('systemPrompt').dataset.dirty}else if(sig===bootstrapSig)return false;bootstrapSig=sig;state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.mcpServers=data.mcp_servers||[];state.mcpTools=data.mcp_tools||[];state.skills=data.skills||[];state.settings=data.settings||{};syncAlwaysAllow();state.projectRoot=data.project_root||'';if(!$('systemPrompt').dataset.dirty)$('systemPrompt').value=state.settings.system_prompt||'';fillProviders();fillModels();renderKeys();renderApiKeyChecks(currentApiKeySelection());renderApiModels();renderApiGroups();renderMcpServers();renderSkills();refreshFailoverMemberOptions();enhanceAllSelects();return true}
 function renderMcpServers(){
  const root=$('mcpServerList');if(!root)return;root.replaceChildren();
  if(!state.mcpServers.length){const empty=document.createElement('div');empty.className='empty';empty.textContent='No MCP servers connected yet.';root.append(empty);return}
@@ -2734,8 +2709,8 @@ function mcpToolArguments(tool,raw){
 function renderMcpMedia(container,items){if(!container||!Array.isArray(items)||!items.length)return;const wrap=document.createElement('div');wrap.className='mcp-media';items.forEach(item=>{if(!item||!item.path)return;const src='/api/mcp/media?'+new URLSearchParams({token:TOKEN,path:item.path}).toString();if(String(item.kind)==='video'){const video=document.createElement('video');video.controls=true;video.preload='metadata';video.src=src;video.setAttribute('playsinline','');wrap.append(video)}else if(String(item.kind)==='image'){const image=document.createElement('img');image.src=src;image.alt=item.name||'Generated image';image.loading='lazy';wrap.append(image)}const caption=document.createElement('a');caption.href=src;caption.target='_blank';caption.rel='noopener';caption.textContent=item.name||'Open generated media';wrap.append(caption)});container.append(wrap)}
 async function sendMcpTool(originalText,tool,rawArgs){
  let args;try{args=mcpToolArguments(tool,rawArgs)}catch(error){toast(error.message);return}
- const run=++state.run,messageId=crypto.randomUUID?crypto.randomUUID():Date.now().toString(36);state.mode=validMode($('operationMode').value);state.effort=effortForMode(state.mode);setBusy(true);
- try{if(state.pendingUploads.length){const uploaded=await attachFiles();if(!uploaded){setBusy(false);return}}await ensureChat({id:messageId,content:originalText,mode:state.mode,route:$('topModel').value})}catch(error){setBusy(false);toast(error.message);return}
+ const run=++state.run,messageId=crypto.randomUUID?crypto.randomUUID():Date.now().toString(36);setBusy(true);
+ try{if(state.pendingUploads.length){const uploaded=await attachFiles();if(!uploaded){setBusy(false);return}}await ensureChat({id:messageId,content:originalText,route:$('topModel').value})}catch(error){setBusy(false);toast(error.message);return}
  $('prompt').value='';autosize();hideSlashMenu();hint();if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()};follow=true;renderMessage('user',originalText,null,{attachments:(state.uploadedFiles||[]).map(item=>item.path)});const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Calling '+tool.server_name+'…';$('chatMeta').textContent='MCP · Running…';scrollEnd(true);
  try{const response=await api('/api/mcp/call',{chat_id:state.chatId,server_id:tool.server_id,tool_name:tool.tool_name,arguments:args});if(run!==state.run)return;const content=node.querySelector('.content');content.innerHTML=response.content?renderMarkdown(response.content):'';renderMcpMedia(content,response.media||[]);bindCopy(node);node.dataset.raw=response.content||'';node.querySelector('.assistant-status').textContent='Completed · '+response.server+' / '+response.tool_name;setTitle($('chatTitle').textContent||'Conversation','MCP · '+response.server);await refreshChats().catch(()=>{});scrollEnd(true)}catch(error){if(run===state.run){node.querySelector('.content').classList.add('err');node.querySelector('.content').textContent='MCP error: '+error.message;node.querySelector('.assistant-status').textContent='MCP call failed';toast(error.message)}}finally{node.classList.remove('live');if(run===state.run){setBusy(false);const meta=$('chatMeta');if(meta.textContent.includes('Running…'))meta.textContent='MCP · Ready'}}
 }
@@ -2963,31 +2938,12 @@ async function saveFailoverGroup(){
 async function refreshChats(){const d=await api('/api/chats');state.chats=d.chats||[];renderChats()}
 function resetComposer(){$('prompt').value='';autosize();state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.uploadedFiles=[];state.contextCount=0;renderPendingUploads();hint();updateSend()}
 async function ensureChat(initialMessage){
- if(!state.chatId){const body={create:true,mode:state.mode};if(initialMessage)body.initial_message=initialMessage;const d=await api('/api/chats',body);state.chatId=d.id}
+ if(!state.chatId){const body={create:true};if(initialMessage)body.initial_message=initialMessage;const d=await api('/api/chats',body);state.chatId=d.id}
  else if(initialMessage){await api('/api/chats/'+encodeURIComponent(state.chatId),{append_user_message:initialMessage})}
- else{await api('/api/chats/'+encodeURIComponent(state.chatId),{mode:state.mode,effort:state.effort})}
  return state.chatId;
 }
 async function newChat(){cancelRun();state.chatId=null;state.linkedFolder='';hint();state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.linkedFolder=data.linked_folder||'';state.mode=validMode(data.mode);state.effort=effortForMode(state.mode);$('operationMode').value=state.mode;syncSelect($('operationMode'));if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null,attachments:message.attachments||[],media:message.media||[]}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||'',state.mode].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
-function modeNeededForRequest(text,currentMode){
- const value=String(text||'').toLowerCase();
- if(currentMode==='normal'){
-  const complex=/\b(?:implement|refactor|debug|build|migrate|rewrite|integrate|multi[- ]file|codebase|repository|repo|architecture|unit tests|test suite|deploy)\b/i.test(value);
-  if(complex)return 'agent';
- }
- return null;
-}
-async function confirmModeSwitch(target,text){
- const detail='Agent mode is better suited to multi-step computer work. Both modes can read local files under your current OS-account permissions, and every command or file modification still requires your individual approval. Your chat remains in its own isolated workspace unless you link a folder.';
- const approved=await confirmInApp('Switch to Agent mode?',detail+'\n\nSwitch modes and continue with your original request?','Switch & continue',false);
- if(!approved)return false;
- state.mode='agent';state.effort=effortForMode('agent');$('operationMode').value='agent';syncSelect($('operationMode'));hint();
- if(state.chatId){try{await api('/api/chats/'+encodeURIComponent(state.chatId),{mode:'agent',effort:state.effort})}catch(error){toast('Could not switch modes: '+error.message);return false}}
- return true;
-}
-
-
+async function loadChat(id){cancelRun();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.linkedFolder=data.linked_folder||'';if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null,attachments:message.attachments||[],media:message.media||[]}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();setTitle(data.title||'Conversation',[data.model||''].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
 async function linkFolderFromMessage(text){
  const intent=/\b(?:link|connect)\s+(?:this\s+)?(?:session|chat|workspace)\s+to\b/i.test(text);
  if(!intent)return false;
@@ -2996,7 +2952,7 @@ async function linkFolderFromMessage(text){
  const absolute=text.match(/(?:~\/|\/Users\/|\/Volumes\/|\/tmp\/)[^\s,;]+/);
  let chosen=(quoted&&quoted[1])||(absolute&&absolute[0])||'';
  if(!chosen){const values=await inAppDialog({title:'Link a folder to this session',message:'Enter the absolute folder path to use as this session’s working root. The folder will not be linked until you approve the next confirmation.',confirmText:'Continue',fields:[{name:'path',label:'Absolute folder path',placeholder:'/Users/you/Projects/my-project',required:true}]});if(!values)return true;chosen=String(values.path||'').trim()}
- const approved=await confirmInApp('Approve linked folder',`Link this session to:\n\n${chosen}\n\nNormal and Agent can read files allowed to your account. File changes and commands still require individual approval.`,'Link folder',true);
+ const approved=await confirmInApp('Approve linked folder',`Link this session to:\n\n${chosen}\n\nKurt can read files your OS account can access. File changes and commands still follow your approval settings.`,'Link folder',true);
  if(!approved)return true;
  try{const result=await api('/api/workspace/link-folder',{chat_id:state.chatId,path:chosen,approved:true});state.linkedFolder=result.linked_folder||'';hint();toast('Session linked to '+state.linkedFolder);return false}
  catch(error){toast(error.message);return true}
@@ -3012,25 +2968,23 @@ async function send(){
  const slash=parseSlashInvocation(text);if(slash?.kind==='mcp'){await sendMcpTool(text,slash.tool,slash.args);return}
  let requestText=text,skillId='';if(slash?.kind==='skill'){if(!slash.args){toast('Add a request after /'+slash.skill.id);return}requestText=slash.args;skillId=slash.skill.id}
  if(await linkFolderFromMessage(text)){return}
- const currentMode=validMode($('operationMode').value);const requiredMode=modeNeededForRequest(requestText,currentMode);
- if(requiredMode&&requiredMode!==currentMode){const switched=await confirmModeSwitch(requiredMode,text);if(!switched)return}
- const retryExisting=!!state.retryExistingTurn;state.retryExistingTurn=false;
- const run=++state.run;state.mode=validMode($('operationMode').value);state.effort=effortForMode(state.mode);const route=$('topModel').value;
+  const retryExisting=!!state.retryExistingTurn;state.retryExistingTurn=false;
+ const run=++state.run;const route=$('topModel').value;
  const messageId=state.retryMessageId||(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2));state.retryMessageId=null;
  setBusy(true);
- try{if(state.pendingUploads.length){const uploaded=await attachFiles();if(!uploaded){setBusy(false);return}}await ensureChat({id:messageId,content:text,mode:state.mode,route})}catch(error){if(run===state.run)setBusy(false);toast(error.message);return}
+ try{if(state.pendingUploads.length){const uploaded=await attachFiles();if(!uploaded){setBusy(false);return}}await ensureChat({id:messageId,content:text,route})}catch(error){if(run===state.run)setBusy(false);toast(error.message);return}
  if(run!==state.run)return;
  $('prompt').value='';autosize();hint();
  if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
  follow=true;if(!retryExisting)renderMessage('user',text,null,{attachments:(state.uploadedFiles||[]).map(item=>item.path)});const node=renderMessage('assistant','');node.classList.add('live');node.__t0=performance.now();node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
- $('chatMeta').textContent=state.mode+' · Generating…';
+ $('chatMeta').textContent='Generating…';
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
- const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',blockRationale='',pending=false,thinkStart=0,retryMode=null;node.__artifacts=[];const showReasoning=live=>{reasoning=[modelRationale,blockRationale].filter(Boolean).join('\n\n');setReasoning(node,reasoning,live)};
+ const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',blockRationale='',pending=false,thinkStart=0;node.__artifacts=[];const showReasoning=live=>{reasoning=[modelRationale,blockRationale].filter(Boolean).join('\n\n');setReasoning(node,reasoning,live)};
  const controller=new AbortController();state.abort=controller;
  const paint=()=>{pending=false;if(run!==state.run)return;const hasAction=ACTION_START_RE.test(raw);const parsed=splitResponseRationale(safeLiveDraft(raw),true);let rationale=parsed.rationale,answer=parsed.answer;if(hasAction){const narration=stripUnsupportedActions(parsed.answer);rationale=[parsed.rationale,narration].filter(Boolean).join('\n\n');answer=''}if(rationale){if(!thinkStart)thinkStart=performance.now();blockRationale=rationale;showReasoning(true)}const safe=stripUnsupportedActions(answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
  try{
-  const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text:requestText,skill_id:skillId,route,effort:state.effort,mode:state.mode,message_id:messageId}),signal:controller.signal});
+  const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text:requestText,skill_id:skillId,route,message_id:messageId}),signal:controller.signal});
   if(!response.ok){const result=await response.json().catch(()=>({}));throw new Error(result.error||response.statusText)}
   node.querySelector('.assistant-status').textContent='Thinking…';const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
   while(true){const packet=await reader.read();if(packet.done)break;if(run!==state.run)return;buffer+=decoder.decode(packet.value,{stream:true});let separator;
@@ -3048,7 +3002,7 @@ async function send(){
     else if(event.type==='draft'){raw+=event.text||'';if(!node.__live||!Object.keys(node.__live).length)node.querySelector('.assistant-status').textContent='Writing…';queue()}
     else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();modelRationale+=event.text||'';node.querySelector('.assistant-status').textContent='Thinking…';showReasoning(true)}
     else if(event.type==='reasoning_reset'){const entries=node.__worklog||[];const entry=node.__thinkingEntry;if(entry){const at=entries.indexOf(entry);if(at>=0)entries.splice(at,1);node.__thinkingEntry=null;setThink(node,entries)}modelRationale='';blockRationale=''}
-    else if(event.type==='done'){pending=false;retryMode=event.mode_switch_required||null;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);bindFileLinks(contentEl);node.dataset.raw=safe;node.__worklog=Array.isArray(event.worklog)?event.worklog.slice():(node.__worklog||[]);node.__thinkingEntry=null;setThink(node,node.__worklog);node.__thinkSeconds=Number(event.thinking_seconds)||Number(event.stats&&event.stats.thought_seconds)||0;setResponseMeta(node,event.stats,event.model);node.__live={};node.__artifacts=event.artifacts||node.__artifacts||[];renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);setTitle(event.title||'Conversation',[event.model||'',event.mode||state.mode].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='done'){pending=false;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);bindFileLinks(contentEl);node.dataset.raw=safe;node.__worklog=Array.isArray(event.worklog)?event.worklog.slice():(node.__worklog||[]);node.__thinkingEntry=null;setThink(node,node.__worklog);node.__thinkSeconds=Number(event.thinking_seconds)||Number(event.stats&&event.stats.thought_seconds)||0;setResponseMeta(node,event.stats,event.model);node.__live={};node.__artifacts=event.artifacts||node.__artifacts||[];renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);setTitle(event.title||'Conversation',[event.model||''].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
     else if(event.type==='error')throw new Error(event.message||'The model request failed');
    }
   }
@@ -3056,12 +3010,7 @@ async function send(){
   if(run===state.run){if(error.name==='AbortError'){paint();refreshChats().catch(()=>{})}else{contentEl.classList.add('err');contentEl.textContent='Error: '+error.message;toast(error.message)}}
  }finally{
   node.classList.remove('live');endThink(node);
-  if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent.includes('Generating…'))meta.textContent=[state.mode,'Ready'].join(' · ')}
- }
- if(retryMode&&run===state.run){
-  const switched=await confirmModeSwitch(retryMode,text);
-  if(switched){$('prompt').value=text;autosize();updateSend();state.retryExistingTurn=true;state.retryMessageId=messageId;await send()}
-  else{$('prompt').value=text;autosize();updateSend()}
+  if(run===state.run){setBusy(false);state.abort=null;const meta=$('chatMeta');if(meta.textContent.includes('Generating…'))meta.textContent='Ready'}
  }
 }
 $('messages').addEventListener('scroll',()=>{const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});$('toBottom').onclick=()=>{follow=true;scrollEnd(true);$('toBottom').classList.remove('show')};
@@ -3078,7 +3027,7 @@ $('prompt').addEventListener('paste',event=>{
  const pastedText=event.clipboardData?.getData('text/plain')||'';
  if(pastedText.length>16000){event.preventDefault();const stamp=new Date().toISOString().replace(/[:.]/g,'-');const file=new File([pastedText],'pasted-text-'+stamp+'.txt',{type:'text/plain'});if(file.size>10*1024*1024){toast('This pasted text exceeds the 10 MB attachment limit. Split it into smaller parts.');return}stageUploadFiles([file]);$('prompt').value='I attached a large pasted text file. Please read it and help me with its contents.';autosize();updateSend();toast('Large paste attached as a .txt file');attachFiles()}
  });
-$('newChat').onclick=newChat;$('selectAllChats').onchange=()=>selectAllChats($('selectAllChats').checked);$('deleteSelectedChats').onclick=deleteSelectedChats;$('cancelChatSelect').onclick=()=>setChatSelectionMode(false);$('operationMode').onchange=async()=>{state.mode=validMode($('operationMode').value);state.effort=effortForMode(state.mode);hint();if(state.busy)cancelRun();if(state.chatId){try{await api('/api/chats/'+encodeURIComponent(state.chatId),{mode:state.mode});}catch(error){toast(error.message)}}hint()};
+$('newChat').onclick=newChat;$('selectAllChats').onchange=()=>selectAllChats($('selectAllChats').checked);$('deleteSelectedChats').onclick=deleteSelectedChats;$('cancelChatSelect').onclick=()=>setChatSelectionMode(false);
 function fmtTokens(value){const n=Number(value)||0;if(n>=1e6)return (n/1e6).toFixed(2)+'M';if(n>=1e4)return (n/1e3).toFixed(1)+'k';return n.toLocaleString()}
 function usageCard(title,bucket,note){
  const card=document.createElement('div');card.className='usage-card';
@@ -3132,7 +3081,7 @@ document.querySelectorAll('[data-settings-tab]').forEach(b=>b.onclick=()=>activa
 async function openSettings(){activateSettingsTab('general');$('settingsModal').classList.add('show');try{await refreshBootstrap()}catch(error){toast('Settings could not be refreshed: '+error.message)}}
 $('refreshUsage').onclick=renderUsage;$('resetUsage').onclick=async()=>{if(!await confirmInApp('Reset usage statistics','Delete all recorded token usage? This cannot be undone.','Reset',true))return;try{await api('/api/usage/reset',{approved:true});await renderUsage();toast('Usage statistics reset')}catch(error){toast(error.message)}};$('connectMcpServer').onclick=saveMcpServer;$('cancelMcpEdit').onclick=resetMcpForm;$('mcpServerTransport').onchange=toggleMcpTransportFields;$('saveSkill').onclick=saveSkillForm;$('cancelSkillEdit').onclick=resetSkillForm;
 async function saveSettings(){const payload={system_prompt:$('systemPrompt').value,default_route:$('settingsModel').value};const data=await api('/api/settings',payload);state.settings=data.settings||{};await refreshBootstrap(true);toast('Settings saved')}
-async function browseFiles(){if(state.mode!=='normal'&&state.mode!=='agent'){toast('Choose Normal or Agent mode.');return}await ensureChat();const path=$('fileFolder').value.trim();const d=await api('/api/files?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()};const remove=document.createElement('button');remove.type='button';remove.className='file-remove danger';remove.textContent='Delete';remove.title='Permanently delete this local file';remove.setAttribute('aria-label','Delete '+item.name);remove.onclick=()=>deleteLocalFile(item);row.appendChild(remove)}el.appendChild(row)})}
+async function browseFiles(){await ensureChat();const path=$('fileFolder').value.trim();const d=await api('/api/files?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()};const remove=document.createElement('button');remove.type='button';remove.className='file-remove danger';remove.textContent='Delete';remove.title='Permanently delete this local file';remove.setAttribute('aria-label','Delete '+item.name);remove.onclick=()=>deleteLocalFile(item);row.appendChild(remove)}el.appendChild(row)})}
 async function deleteLocalFile(item){if(!item||item.directory||!item.path)return;try{const review=await api('/api/files/delete/prepare',{chat_id:state.chatId,path:item.path});const approved=await confirmInApp('Delete local file?',`Permanently delete this one file from your computer?\n\n${review.path}\n\nSize: ${formatFileSize(review.size)}\nThis cannot be undone. No other files or folders will be removed.`,'Delete file',true);if(!approved)return;const result=await api('/api/files/delete',{chat_id:state.chatId,path:review.path,approved:true,expected_sha256:review.sha256,linked_root:review.linked_root,device:review.device,inode:review.inode});state.selectedFiles=state.selectedFiles.filter(path=>path!==item.path);await browseFiles();renderPendingUploads();toast(result.message||'File deleted')}catch(error){toast(error.message)}}
 function formatFileSize(value){const bytes=Math.max(0,Number(value)||0);if(bytes<1024)return bytes+' B';if(bytes<1024*1024)return (bytes/1024).toFixed(1)+' KB';return (bytes/1024/1024).toFixed(1)+' MB'}
 function fileIconNode(item){if(item.previewUrl&&String(item.type||item.mime||'').startsWith('image/')){const image=document.createElement('img');image.className='attachment-thumb';image.src=item.previewUrl;image.alt=item.name||'Uploaded image';return image}const icon=document.createElement('span');icon.className='attachment-file-icon';icon.innerHTML='<svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>';return icon}
@@ -3181,7 +3130,7 @@ function openComposerFilePicker(){const picker=$('composerFiles');if(!picker)ret
 async function handleComposerFiles(){const picker=$('composerFiles');if(!picker.files||!picker.files.length)return;stageLocalFiles(picker);await attachFiles()}
 async function startDownload(){const model=$('downloadModel').value.trim();if(!model){toast('Enter a model ID, repository or URL');return}try{const d=await api('/api/download',{model,source:$('downloadSource').value});$('downloadCaption').textContent='Queued: '+model;$('localDownloadStatus').textContent='Download queued: '+model;$('downloadModel').value='';toast('Download started in background');pollDownload()}catch(e){toast(e.message)}}
 async function pollDownload(){try{const d=await api('/api/download/status');const job=d.job;if(!job)return;const percent=job.total?job.completed/job.total*100:0;$('downloadFill').style.width=(job.state==='done'?100:percent)+'%';$('downloadCaption').textContent=job.state==='running'?`${job.model} · ${percent.toFixed(1)}% · ${job.human}`:`${job.model} · ${job.state}${job.error?' · '+job.error:''}`;if(job.state==='done'){await refreshBootstrap();$('localDownloadStatus').textContent=job.model+' installed successfully.';toast('Model download complete')}else if(job.state==='error'){$('localDownloadStatus').textContent=job.error||'Download failed';toast(job.error||'Download failed')}else{$('localDownloadStatus').textContent=job.model+' · '+percent.toFixed(1)+'% · '+job.human;setTimeout(pollDownload,1000)}}catch(e){console.error(e)}}
-$('sidebarSettings').onclick=openSettings;$('contextBtn').onclick=openComposerFilePicker;$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('reloadSettings').onclick=()=>refreshBootstrap(true).then(()=>toast('Settings reloaded')).catch(error=>toast(error.message));$('systemPrompt').addEventListener('input',()=>{$('systemPrompt').dataset.dirty='1'});$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:'default',label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout()}});
+$('sidebarSettings').onclick=openSettings;$('contextBtn').onclick=openComposerFilePicker;$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('alwaysAllow').onchange=async()=>{const box=$('alwaysAllow'),value=box.checked;if(value&&!await confirmInApp('Turn on Always allow?','Kurt will write, modify, and delete files and run commands without asking you first, anywhere your account has permission. You can turn this off at any time.','Always allow',true)){box.checked=false;return}try{await api('/api/settings',{always_allow:value});state.settings.always_allow=value;hint();toast(value?'Always allow is on':'Always allow is off')}catch(error){box.checked=!value;toast(error.message)}};$('reloadSettings').onclick=()=>refreshBootstrap(true).then(()=>toast('Settings reloaded')).catch(error=>toast(error.message));$('systemPrompt').addEventListener('input',()=>{$('systemPrompt').dataset.dirty='1'});$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:'default',label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout()}});
 $('menuBtn').onclick=()=>{if(matchMedia('(max-width:700px)').matches){document.body.classList.toggle('nav-open')}else{const collapsed=document.documentElement.classList.toggle('side-collapsed');try{localStorage.setItem('kurt-side-collapsed',collapsed?'1':'0')}catch(error){}}};$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',event=>{if(event.target.closest('.chat-item,#newChat,#sidebarSettings'))document.body.classList.remove('nav-open')});$('themeBtn').onclick=()=>{const root=document.documentElement;root.classList.add('theme-fade');setTimeout(()=>root.classList.remove('theme-fade'),420);const theme=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=theme;try{localStorage.setItem('kurt-theme',theme)}catch(error){}};enhanceAllSelects();
 (()=>{const sync=()=>document.body.classList.toggle('modal-open',!!document.querySelector('.modal-backdrop.show,.dialog-backdrop.show'));const observer=new MutationObserver(sync);document.querySelectorAll('.modal-backdrop,.dialog-backdrop').forEach(node=>observer.observe(node,{attributes:true,attributeFilter:['class']}));sync()})();
 document.body.classList.add('compact-scroll');
@@ -3780,8 +3729,8 @@ class KurtWebApp:
         if self.settings.get("default_effort") == "flash":
             self.settings["default_effort"] = "thinking"
             self.save_settings()
-        self.settings.setdefault("default_mode", "normal")
-        self.settings["default_mode"] = valid_mode_value(self.settings.get("default_mode"))
+        self.settings.pop("default_mode", None)
+        self.settings.setdefault("always_allow", False)
         self.settings.setdefault("api_groups", [])
         self.settings.setdefault("mcp_servers", [])
         self.model_lock = threading.RLock()
@@ -3807,8 +3756,7 @@ class KurtWebApp:
                     media_path = media_item.get("path") if isinstance(media_item, dict) else None
                     if media_path:
                         self.register_mcp_media(media_path)
-            if saved_chat.get('mode') == 'code': saved_chat['mode'] = 'agent'
-            elif saved_chat.get('mode') not in ('normal', 'agent'): saved_chat['mode'] = 'normal'
+            saved_chat.pop('mode', None)
             saved_chat.setdefault('linked_folder', '')
         self.save_chats()
         self.download_job = None
@@ -4507,7 +4455,9 @@ class KurtWebApp:
             try:
                 relative = lexical.relative_to(root)
             except ValueError:
-                raise ValueError("That write target is outside this session's working folder. Link the target folder to this session first, then use a relative path inside it.")
+                if lexical.is_symlink():
+                    raise ValueError("Symbolic-link paths cannot be modified.")
+                return lexical.resolve(strict=not allow_missing)
             current = root
             for part in relative.parts:
                 current = current / part
@@ -4516,7 +4466,7 @@ class KurtWebApp:
             resolved = lexical.resolve(strict=not allow_missing)
             resolved.relative_to(root)
             return resolved
-        rel = self._safe_context_relative(raw)
+        rel = self._safe_write_relative(raw)
         current = root
         for part in rel.split("/"):
             current = current / part
@@ -4548,9 +4498,6 @@ class KurtWebApp:
             active_link = str(chat.get("linked_folder") or "")
             if not active_link or Path(active_link).resolve() != Path(linked_root).resolve():
                 raise ValueError("The linked folder changed after this proposal was prepared. Ask Kurt to prepare it again.")
-            path.relative_to(Path(linked_root).resolve())
-        else:
-            path.relative_to(self.chat_workspace(chat_id).resolve())
         if path.exists() and (path.is_symlink() or not path.is_file()):
             raise ValueError("The approved target is no longer a regular file.")
         current_hash = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
@@ -4568,9 +4515,6 @@ class KurtWebApp:
             active_link = str(chat.get("linked_folder") or "")
             if not active_link or Path(active_link).resolve() != Path(linked_root).resolve():
                 raise ValueError("The linked folder changed after this proposal was prepared. Ask Kurt to prepare it again.")
-            path.relative_to(Path(linked_root).resolve())
-        else:
-            path.relative_to(self.chat_workspace(chat_id).resolve())
         if path.exists() and (path.is_symlink() or not path.is_file()):
             raise ValueError("The approved target is no longer a regular file.")
         current_hash = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
@@ -4684,6 +4628,16 @@ class KurtWebApp:
             raise ValueError('Context path contains an invalid directory traversal.')
         if any(part.lower() in ({'.git', '.kurt', '.kurt_inputs', '__pycache__', 'node_modules', '.venv', 'venv', '.ssh', '.aws', '.azure', '.gnupg', '.kube', 'credentials', 'secrets', 'dist', 'build'} | {str(item).lower() for item in K.IGNORE_DIRS}) for part in parts):
             raise ValueError('This system or dependency directory is not imported into the chat workspace.')
+        return '/'.join(parts)
+
+    @staticmethod
+    def _safe_write_relative(value):
+        raw = str(value or '').replace('\\', '/').strip()
+        if re.match(r'^[A-Za-z]:', raw):
+            raise ValueError('Use an absolute path for files outside the working folder.')
+        parts = [part for part in raw.split('/') if part not in ('', '.')]
+        if not parts or any(part == '..' for part in parts):
+            raise ValueError('Relative paths cannot move above the working folder; use an absolute path instead.')
         return '/'.join(parts)
 
     @staticmethod
@@ -4950,7 +4904,7 @@ class KurtWebApp:
             intro += '\nOnly make visual claims when the active model/provider has actual vision input or an available image-reading tool.'
         return intro + ('\n' + ''.join(chunks) if chunks else '\n(No readable text files attached yet.)')
 
-    def chat_system_prompt(self, chat_id, mode="normal", effort="thinking"):
+    def chat_system_prompt(self, chat_id, effort=UNIFIED_EFFORT):
         chat = self.get_chat(chat_id) or {}
         root = self.chat_work_root(chat_id, create=False)
         custom = str(self.settings.get("system_prompt") or "").strip()
@@ -4960,15 +4914,16 @@ class KurtWebApp:
             base += "\n" + WEB_INSTRUCTIONS
         if "KURT ACTION BLOCK SYNTAX:" not in base:
             base += "\n" + ACTION_SYNTAX_INSTRUCTIONS
-        mode_rules = NORMAL_MODE_INSTRUCTIONS if mode == "normal" else AGENT_MODE_INSTRUCTIONS
+        mode_rules = UNIFIED_INSTRUCTIONS
+        always_allow = bool(self.settings.get("always_allow"))
         effort_rules = EFFORT_INSTRUCTIONS.get(effort, EFFORT_INSTRUCTIONS["thinking"])
         linked = str(chat.get("linked_folder") or "").strip()
         prompt = (base + "\n" + KURT_IDENTITY_INSTRUCTIONS + "\n" + WORKING_PRINCIPLES_INSTRUCTIONS + "\n" + FILE_ACTION_INSTRUCTIONS + "\n" + COMPLETION_SUMMARY_INSTRUCTIONS + "\n" + CLI_WORKFLOW_INSTRUCTIONS + "\n" + mode_rules + "\n" + effort_rules + "\n" + RESPONSE_FORMAT_INSTRUCTIONS)
         prompt += "\nCurrent session working root: " + str(root)
-        prompt += "\nWorking root type: " + ("USER-LINKED FOLDER; every change still needs approval." if linked else "PRIVATE PER-CHAT ISOLATED WORKSPACE; every change still needs approval.")
+        prompt += "\nWorking root type: " + ("USER-LINKED FOLDER" if linked else "PRIVATE PER-CHAT ISOLATED WORKSPACE") + " (relative paths resolve here; absolute paths reach anywhere on this computer). " + ("Always allow is ON: file changes, deletions, and commands are approved automatically." if always_allow else "Every file change, deletion, and state-changing command needs the user's approval.")
         prompt += "\nUser home for absolute/relative local read paths: " + str(Path.home())
         prompt += "\nSession workspace tree:\n" + self.tree(root)
-        prompt += "\nUse READ/LIST or read-only shell commands (grep, ls, cat, find, git status/log/diff) for inspection. File changes, deletions, and state-changing commands pause for user approval."
+        prompt += "\nUse READ/LIST or read-only shell commands (grep, ls, cat, find, git status/log/diff) for inspection anywhere on this computer. " + ("File changes, deletions, and commands run without a pause because Always allow is on." if always_allow else "File changes, deletions, and state-changing commands pause for user approval.")
         image_tools = self.image_generation_mcp_tools()
         if image_tools:
             prompt += "\n\nCONNECTED IMAGE-GENERATION MCP TOOLS (available in the slash picker):\n"
@@ -5054,11 +5009,7 @@ class KurtWebApp:
         return path, items
 
     def is_readonly_command(self, chat_id, command):
-        try:
-            roots = [self.chat_workspace(chat_id), self.chat_work_root(chat_id, create=False)]
-        except Exception:
-            return False
-        return readonly_command_ok(command, roots)
+        return readonly_command_ok(command)
 
     def run_agent_command(self, chat_id, command, timeout=120):
         """Compatibility wrapper; all commands now use the session sandbox."""
@@ -5163,7 +5114,7 @@ class KurtWebApp:
             private_workspace, env_root, command, timeout=timeout,
             working_directory=active_root,
             writable_roots=[private_workspace, active_root, env_root,
-                            private_workspace / ".tmp", private_workspace / ".home"],
+                            private_workspace / ".tmp", private_workspace / ".home", Path.home()],
         )
 
 
@@ -5385,7 +5336,7 @@ class KurtWebApp:
                 content = body
                 if kind == "EDIT":
                     if not existed:
-                        raise ValueError("EDIT target does not exist in this session's working folder. Read the correct file first.")
+                        raise ValueError("EDIT target does not exist. Read the correct file first.")
                     old = path.read_text(encoding="utf-8")
                     pairs = K.PAIR_RE.findall(body)
                     if not pairs:
@@ -5403,12 +5354,14 @@ class KurtWebApp:
                 linked = str((self.get_chat(chat_id) or {}).get("linked_folder") or "").strip()
                 working_root = str(self.chat_work_root(chat_id).resolve())
                 expected_hash = hashlib.sha256(path.read_bytes()).hexdigest() if existed else None
+                outside_working_root = False
                 try:
                     relative_display = str(path.relative_to(Path(working_root).resolve())).replace("\\", "/")
                 except ValueError:
-                    raise ValueError("The target is outside this session's working folder. Link its parent folder first, then propose a relative path inside it.")
+                    outside_working_root = True
+                    relative_display = str(path)
                 artifact = {
-                    "kind": "linked_file" if linked else "workspace_file",
+                    "kind": "local_file" if outside_working_root else ("linked_file" if linked else "workspace_file"),
                     "path": relative_display,
                     "target_path": str(path),
                     "linked_root": linked,
@@ -5529,7 +5482,6 @@ class KurtWebApp:
         chat = {
             "id": uuid.uuid4().hex, "title": "New conversation", "model": K.MODEL,
             "effort": "thinking" if self.settings.get("default_effort") == "flash" else self.settings.get("default_effort", "thinking"),
-            "mode": valid_mode_value(self.settings.get("default_mode", "normal")),
             "linked_folder": "",
             "route": self.settings.get("default_route", ""),
             "pinned": False, "created": now, "updated": now, "messages": [],
@@ -5540,7 +5492,6 @@ class KurtWebApp:
             if content and message_id:
                 chat["messages"].append({"role": "user", "content": content, "message_id": message_id})
                 chat["effort"] = initial_message.get("effort") if initial_message.get("effort") in EFFORT_INSTRUCTIONS else chat["effort"]
-                chat["mode"] = valid_mode_value(initial_message.get("mode"), chat["mode"])
                 if initial_message.get("route"):
                     chat["route"] = str(initial_message.get("route"))
                 chat["updated"] = now
@@ -5553,7 +5504,6 @@ class KurtWebApp:
         with self.lock:
             chat = next((item for item in self.chats if item.get("id") == chat_id), None)
             if chat:
-                chat["mode"] = valid_mode_value(chat.get("mode"))
                 chat.setdefault("linked_folder", "")
             return chat
 
@@ -5732,7 +5682,7 @@ class Handler(BaseHTTPRequestHandler):
                     "keys": self.app.sanitized_keys(), "api_groups": self.app.api_groups_view(),
                     "mcp_servers": self.app.mcp_server_summaries(), "mcp_tools": self.app.mcp_tools_view(),
                     "skills": list_skills(self.app.skills_directory),
-                    "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""), "system_prompt": self.app.editable_system_prompt(), "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False))},
+                    "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""), "system_prompt": self.app.editable_system_prompt(), "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False)), "always_allow": bool(self.app.settings.get("always_allow", False))},
                     "project_root": str(self.app.workspace()),
                 })
             elif parsed.path == "/api/chats":
@@ -5750,7 +5700,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._json({
                         "id": chat["id"], "title": chat.get("title"), "model": chat.get("model"), "route": chat.get("route", ""),
-                        "effort": "thinking" if chat.get("effort") == "flash" else chat.get("effort", "thinking"), "mode": valid_mode_value(chat.get("mode", "normal")), "linked_folder": chat.get("linked_folder", ""),
+                        "effort": "thinking" if chat.get("effort") == "flash" else chat.get("effort", "thinking"), "linked_folder": chat.get("linked_folder", ""),
                         "pinned": bool(chat.get("pinned", False)), "messages": chat.get("messages", []),
                     })
             elif parsed.path == "/api/usage":
@@ -5933,6 +5883,9 @@ class Handler(BaseHTTPRequestHandler):
                     if pending.get("approved") is not None:
                         raise ValueError("A decision has already been submitted for this action.")
                     approved = data.get("approved") is True
+                    if approved and data.get("always") is True:
+                        self.app.settings["always_allow"] = True
+                        self.app.save_settings()
                     pending["approved"] = approved
                     pending["event"].set()
                 self._json({"ok": True, "approved": approved})
@@ -5993,8 +5946,6 @@ class Handler(BaseHTTPRequestHandler):
                     if not message_id or len(message_id) > 100 or not content or len(content) > 100000:
                         raise ValueError("Enter a valid user message before sending.")
                 chat = self.app.create_chat(initial_message=initial if isinstance(initial, dict) else None)
-                if data.get("mode") in ("normal", "agent", "code"):
-                    chat["mode"] = valid_mode_value(data["mode"])
                 if data.get("effort") in EFFORT_INSTRUCTIONS:
                     chat["effort"] = data["effort"]
                 self.app.save_chats()
@@ -6046,22 +5997,11 @@ class Handler(BaseHTTPRequestHandler):
                         if not any(item.get("message_id") == message_id for item in chat.get("messages", [])):
                             chat.setdefault("messages", []).append({"role": "user", "content": content, "message_id": message_id})
                             chat["effort"] = incoming.get("effort") if incoming.get("effort") in EFFORT_INSTRUCTIONS else chat.get("effort", "thinking")
-                            chat["mode"] = valid_mode_value(incoming.get("mode"), chat.get("mode", "normal"))
                             if incoming.get("route"):
                                 chat["route"] = str(incoming.get("route"))
                             chat["updated"] = time.time()
                             self.app.save_chats()
                     self._json({"ok": True, "message_id": message_id})
-                elif "mode" in data:
-                    value = valid_mode_value(data.get("mode"))
-                    if value not in ("normal", "agent"):
-                        raise ValueError("Choose Normal or Agent mode.")
-                    chat["mode"] = value
-                    if data.get("effort") in EFFORT_INSTRUCTIONS:
-                        chat["effort"] = data["effort"]
-                    chat["updated"] = time.time()
-                    self.app.save_chats()
-                    self._json({"ok": True, "mode": value})
                 elif "pin" in data:
                     chat["pinned"] = bool(data.get("pin"))
                     chat["updated"] = time.time()
@@ -6401,9 +6341,8 @@ class Handler(BaseHTTPRequestHandler):
             if value not in EFFORT_INSTRUCTIONS:
                 raise ValueError("Choose Thinking or Expert effort.")
             self.app.settings["default_effort"] = value
-        if "default_mode" in data:
-            value = valid_mode_value(data.get("default_mode"))
-            self.app.settings["default_mode"] = value
+        if "always_allow" in data:
+            self.app.settings["always_allow"] = bool(data.get("always_allow"))
 
         key_action = data.get("key_action")
         keys_changed = False
@@ -6589,7 +6528,8 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": True, "model": K.MODEL, "project_root": str(self.app.workspace()),
                     "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""),
                                  "system_prompt": self.app.editable_system_prompt(),
-                                 "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False))}})
+                                 "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False)),
+                                 "always_allow": bool(self.app.settings.get("always_allow", False))}})
 
     def _record_agent_audit(self, chat_id, title, detail, ok=True):
         chat = self.app.get_chat(str(chat_id or ""))
@@ -6662,16 +6602,12 @@ class Handler(BaseHTTPRequestHandler):
         user_text = str(data.get("text") or "").strip()
         requested_route = str(data.get("route") or "")
         legacy_model = str(data.get("model") or "")
-        mode = str(data.get("mode") or "normal").lower()
-        effort = "thinking" if mode == "normal" else "expert"
+        effort = UNIFIED_EFFORT
         if not user_text:
             self._json({"error": "Message is empty."}, 400)
             return
         if len(user_text) > 100000:
             self._json({"error": "Message is too long."}, 400)
-            return
-        if mode not in ("normal", "agent"):
-            self._json({"error": "Choose Normal or Agent mode."}, 400)
             return
         chat = self.app.get_chat(chat_id)
         if not chat:
@@ -6707,7 +6643,7 @@ class Handler(BaseHTTPRequestHandler):
             workspace_context = self.app.context_contents(chat_id)
             image_parts, image_note = [], "0 uploaded image(s) sent to this model as visual input."
         messages = [
-            {"role": "system", "content": self.app.chat_system_prompt(chat_id, mode=mode, effort=effort)},
+            {"role": "system", "content": self.app.chat_system_prompt(chat_id, effort=effort)},
             {"role": "system", "content": workspace_context + "\n" + image_note + "\nUploaded files are copied into this chat's private workspace. Separately, READ/LIST may inspect local paths that the current OS account can access; uploads do not alter the originals."},
         ]
         skill_id = str(data.get("skill_id") or "").strip()
@@ -6743,7 +6679,6 @@ class Handler(BaseHTTPRequestHandler):
         chat["model"] = model
         chat["route"] = route_info["route"]
         chat["effort"] = effort
-        chat["mode"] = mode
         self.app.save_chats()
 
         if IMAGE_GENERATION_INTENT_RE.search(user_text):
@@ -6757,7 +6692,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 chat["messages"].append({
                     "role": "assistant", "content": setup_reply, "model": "Kurt MCP setup",
-                    "mode": mode, "effort": effort, "route": route_info["route"],
+                    "effort": effort, "route": route_info["route"],
                 })
                 chat["updated"] = time.time()
                 self.app.save_chats()
@@ -6774,7 +6709,7 @@ class Handler(BaseHTTPRequestHandler):
                                      "detail": "No image-generation MCP tool is currently connected. No model or MCP generation request was made."}],
                         "reasoning": "", "thinking_seconds": 0, "chat_id": chat_id,
                         "title": chat.get("title") or "Conversation", "route": route_info["route"],
-                        "model": "Kurt MCP setup", "effort": effort, "mode": mode, "stats": {},
+                        "model": "Kurt MCP setup", "effort": effort, "stats": {},
                     }
                     self.wfile.write(b"data: " + json.dumps(event, ensure_ascii=False).encode("utf-8") + b"\n\n")
                     self.wfile.flush()
@@ -6836,6 +6771,9 @@ class Handler(BaseHTTPRequestHandler):
 
         def wait_for_user_approval(kind, title, detail="", command="", path="", artifact_path=""):
             approval_id = uuid.uuid4().hex
+            auto_approve = bool(self.app.settings.get("always_allow"))
+            if auto_approve:
+                detail = (str(detail or "") + "\n\nApproved automatically because Always allow is on.").strip()
             gate = threading.Event()
             pending = {"event": gate, "approved": None, "chat_id": chat_id, "created": time.time()}
             with self.app.lock:
@@ -6847,7 +6785,11 @@ class Handler(BaseHTTPRequestHandler):
                              "approval": payload, "approved": None}
             worklog.append(approval_item)
             emit({"type": "approval_required", "approval": payload})
-            decided = gate.wait(timeout=1800)
+            if auto_approve:
+                pending["approved"] = True
+                decided = True
+            else:
+                decided = gate.wait(timeout=1800)
             with self.app.lock:
                 self.app.pending_approvals.pop(approval_id, None)
             approved = bool(decided and pending.get("approved") is True)
@@ -6858,7 +6800,6 @@ class Handler(BaseHTTPRequestHandler):
 
         worklog = []
         artifacts_by_path = {}
-        mode_switch_required = None
         finished = False
         disconnected = False
         temperature = {"thinking": 0.2, "expert": 0.15}[effort]
@@ -7118,26 +7059,16 @@ class Handler(BaseHTTPRequestHandler):
             work_recap = []
             for round_index in range(max_rounds):
                 if round_index == 0 and DESKTOP_VISUAL_REQUEST_RE.search(user_text):
-                    if mode == "normal":
-                        final_raw = (
-                            "Normal mode can read local files permitted to your OS account, but it cannot view your live desktop or screen. "
-                            "Both Normal and Agent can read files permitted to your current OS account. Neither mode provides live screen capture "
-                            "or GUI control; attach a screenshot for visual inspection. Writes and commands still require approval."
-                        )
-                    else:
-                        final_raw = (
-                            "I can't capture or view your live desktop, screen, or GUI. Both Normal and Agent can read files permitted to the current OS account. "
-                            "Attach a screenshot to show me what is on screen. File changes and commands still require your approval."
-                        )
-                    log_step("Explained the desktop and mode access boundary.", True, status="Mode guidance ready…", detail="No live screen capture or unauthorized local access was attempted.")
+                    final_raw = (
+                        "I can't capture or view your live desktop, screen, or GUI. I can read any file your current OS account is permitted to access. "
+                        "Attach a screenshot to show me what is on screen. File changes and commands still follow your approval settings."
+                    )
+                    log_step("Explained the desktop access boundary.", True, status="Guidance ready…", detail="No live screen capture or unauthorized local access was attempted.")
                     break
-                if round_index == 0 and mode == "normal" and NORMAL_MODE_LOCAL_ACCESS_RE.search(user_text):
-                    log_step("Local access is available in Normal mode too.", True, status="Inspecting local files…",
-                             detail="Reads/listings use the current OS account's permissions. Any command or file modification will pause for separate approval.")
 
 
                 if round_index == 0 and SYSTEM_PROMPT_REQUEST_RE.fullmatch(user_text):
-                    active_prompt = self.app.chat_system_prompt(chat_id, mode=mode, effort=effort)
+                    active_prompt = self.app.chat_system_prompt(chat_id, effort=effort)
                     for key_entry in K.PROVIDER_KEYS:
                         secret = str(key_entry.get("value") or "")
                         if len(secret) >= 8:
@@ -7156,7 +7087,7 @@ class Handler(BaseHTTPRequestHandler):
                     log_step(
                         "Retrieved the exact active Kurt system prompt.", True,
                         status="Prompt ready…",
-                        detail="The prompt below is the first system message assembled by Kurt for this chat, including the selected mode and effort rules. API-key values are redacted. Conversation history and attached-file context are separate messages and are not included.",
+                        detail="The prompt below is the first system message assembled by Kurt for this chat, including the effort rules. API-key values are redacted. Conversation history and attached-file context are separate messages and are not included.",
                     )
                     final_raw = raw
                     break
@@ -7207,7 +7138,7 @@ class Handler(BaseHTTPRequestHandler):
                         results = []
                         subagent_actions = [(position, argument[0].strip()[:48] or "Subagent", argument[1].strip())
                                             for position, action, argument in tool_actions if action == "SUBAGENT"]
-                        if subagent_actions and mode == "agent":
+                        if subagent_actions:
                             subagent_actions = subagent_actions[:3]
                             agent_records = [{"id": uuid.uuid4().hex[:8], "name": name, "task": task, "status": "Running"}
                                              for _position, name, task in subagent_actions]
@@ -7269,7 +7200,7 @@ class Handler(BaseHTTPRequestHandler):
                                         approved, approval_item = True, {"approval": {"id": ""}}
                                     else:
                                         approved, approval_item = wait_for_user_approval("command", "Run terminal command", command=argument,
-                                            detail="This exact command will run in the session's isolated workspace" + (" / linked folder" if chat.get("linked_folder") else "") + ".")
+                                            detail="This exact command will run with your account's permissions, starting in the session's " + ("linked folder" if chat.get("linked_folder") else "private workspace") + ".")
                                     if not approved:
                                         results.append("[Command declined] The user declined this command. It was not executed: " + argument)
                                     else:
@@ -7529,14 +7460,13 @@ class Handler(BaseHTTPRequestHandler):
                     "role": "assistant", "content": visible, "artifacts": artifacts,
                     "worklog": worklog, "reasoning": response_rationale,
                     "thinking_seconds": round(thinking_seconds, 1),
-                    "effort": effort, "mode": valid_mode_value(mode), "route": route_info["route"],
+                    "effort": effort, "route": route_info["route"],
                     "model": model, "stats": stats,
                 }
                 chat["messages"].append(record)
                 chat["updated"] = time.time()
                 chat["model"] = model
                 chat["effort"] = effort
-                chat["mode"] = valid_mode_value(mode)
                 self.app.save_chats()
 
             finished = True
@@ -7545,8 +7475,7 @@ class Handler(BaseHTTPRequestHandler):
                 "worklog": worklog, "reasoning": response_rationale,
                 "thinking_seconds": round(thinking_seconds, 1),
                 "chat_id": chat_id, "title": chat["title"], "route": route_info["route"],
-                "model": model, "effort": effort, "mode": mode, "stats": stats,
-                "mode_switch_required": mode_switch_required,
+                "model": model, "effort": effort, "stats": stats,
             })
         except (BrokenPipeError, ConnectionResetError):
             disconnected = True
