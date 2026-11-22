@@ -38,6 +38,12 @@ import uuid
 from collections import deque, namedtuple
 from pathlib import Path
 
+try:
+    from kurt_sandbox import parse_tty_keys
+except ImportError:
+    def parse_tty_keys(text):
+        return list(str(text or "").replace(" ", ""))
+
 RETRY_SECONDS = 60
 MAX_SUBAGENTS = 8
 MAX_EVENTS = 4000
@@ -73,6 +79,7 @@ IDLE_REVIEW_LIMIT = 3
 FILE_SCAN_LIMIT = 400
 FILE_LIST_LIMIT = 60
 SCAN_DEPTH = 5
+TTY_TIMEOUT = 10
 DEFAULT_TEMPERATURE = 0.2
 RETRY_TEMPERATURE = 0.55
 
@@ -600,7 +607,8 @@ Verbs available to every agent:
 - LIST <path>    List a folder. An empty path lists the project workspace.
 - SEARCH <query> Search the web.
 - WRITE <path>   Body is the complete new content of the file. Paths are relative to the project workspace. An existing file must be READ by you first.
-- RUN            Body is one shell command, run in the project workspace.
+- RUN            Body is one shell command, run in the project workspace. It runs without a terminal: no keyboard, no screen, and the command must finish by itself.
+- RUN tty        For anything that needs a terminal (curses, input(), games, TUIs). Body is the command; optional extra line "KEYS: w a s d ENTER SPACE UP q" types those keys one by one. The program runs in a real 80x24 pseudo terminal and is stopped after about 10 seconds, and you get the final screen back. A game still running when it is stopped is normal: judge it by the screen. Typical test: RUN tty with "python3 game.py" and "KEYS: d d s q".
 
 GROUND RULES (the system checks these and refuses or cuts off violations)
 - The WORKSPACE FILES list in the shared context is the live truth about what exists. Only read, edit or mention files that are listed there or that you have just written. Never invent file names, APIs, command output, test results or progress.
@@ -608,6 +616,7 @@ GROUND RULES (the system checks these and refuses or cuts off violations)
 - After your action blocks, stop and wait for the results. Send at most {max_actions} action blocks per reply, and do not repeat an action that already returned a result: use it or change approach.
 - Stay inside the project workspace. Do not search the rest of the computer for files.
 - If you do not know something, find out with READ, LIST or RUN. If you cannot find out, say so plainly instead of guessing.
+- You DO have a terminal: RUN for normal commands, RUN tty for interactive programs. "No terminal", "cannot run interactively" or "needs a real terminal" is never a valid reason to be blocked. Use RUN tty, or test the logic headlessly (import the module and call its functions, simulate input).
 """
 
 MODE_FINITE = """8. FINISHING. This is a normal run: the team stops when the work is done. When the goal is met and verified (every deliverable is listed in WORKSPACE FILES, a teammate other than the author tested or reviewed the final state and reported RESULT: PASS, no open blockers) write FINISH with the final report. Do not invent extra work afterwards, and do not FINISH while any teammate is still working. The system checks these conditions and refuses an early FINISH; the FINISH CHECK line in the shared context shows whether you are ready."""
@@ -624,7 +633,7 @@ How you run the team:
 3. Sequence dependent work. Do not start a tester or reviewer before there is something to test: spawn or ASSIGN them after the builder reports DONE, and give them the exact file names.
 4. React to reports. DONE reports start with RESULT: PASS, FAIL or PARTIAL and give evidence. Accept PASS only when the evidence is concrete (files written, command output, specific lines checked). A BLOCKED agent needs a decision from you: unblock it, reassign it or RETIRE it. Send failures back to the owner with ASSIGN.
 5. Verify with your own tools when it matters: LIST the workspace, READ the key files, RUN a check. Do not repeat a teammate's claim as fact until the live state (WORKSPACE FILES, team reports) supports it.
-6. Message the human (SAY user) only when they asked something, at a real milestone, or when you are blocked and need them. Answer with real facts from the live team state, briefly, and never repeat a status you already gave. If their message contains an instruction, act on it and say what you changed.
+6. Message the human (SAY user) only when they asked something, at a real milestone, or when you are blocked on something only a human can give (a decision about what they want, credentials, files you cannot create). Never ask the human to advise on technical obstacles: pick a way around it yourself (for example have the tester use RUN tty, or test the logic headlessly) and ASSIGN it. Answer with real facts from the live team state, briefly, and never repeat a status you already gave. If their message contains an instruction, act on it and say what you changed.
 7. Do the work through the team, not alone. Use READ, LIST, SEARCH and RUN only to inspect and verify.
 {mode_block}
 
@@ -1981,6 +1990,7 @@ class AgentSwarm:
         self._set_status(agent, "done", current="Finished: waiting for the lead")
         self._activity(agent, "done", "Reported done" + (" ({})".format(agent.last_result) if agent.last_result else ""), detail=text, ok=not problems and agent.last_result != "FAIL")
         self.post(agent.name, "lead", "[DONE] " + text)
+        self._deliver_to_user(clip(text, 1200), sender=agent.name)
         return ""
 
     def _block(self, agent, reason, auto=False):
@@ -1992,6 +2002,7 @@ class AgentSwarm:
         self._set_status(agent, "blocked", current="Blocked: " + clip(reason, 100))
         self._activity(agent, "blocked", "Blocked" + (" (stopped automatically)" if auto else ""), detail=reason, ok=False)
         self.post(agent.name, "lead", "[BLOCKED] " + reason)
+        self._deliver_to_user("Blocked: " + clip(reason, 1000), sender=agent.name)
 
     def _spawn(self, agent, args, body):
         name_part, _sep, role_part = args.partition("|")
@@ -2158,6 +2169,18 @@ class AgentSwarm:
             return "[WRITE succeeded] {}".format(outcome.get("message") or resolved)
         if verb == "RUN":
             command = (body.strip() or args.strip())
+            tty = None
+            first_word = args.strip().split(None, 1)
+            if first_word and first_word[0].lower() == "tty":
+                inline = first_word[1].strip() if len(first_word) > 1 else ""
+                command_lines, key_lines = [], []
+                for line in (body.strip() or inline).splitlines():
+                    if line.strip().upper().startswith("KEYS:"):
+                        key_lines.append(line.split(":", 1)[1])
+                    else:
+                        command_lines.append(line)
+                command = "\n".join(command_lines).strip()
+                tty = {"keys": parse_tty_keys(" ".join(key_lines)), "timeout": TTY_TIMEOUT}
             if not command:
                 return "[RUN rejected] No command was given."
             self._set_current(agent, "Running: " + clip(command.split("\n")[0], 80), force=True)
@@ -2175,7 +2198,13 @@ class AgentSwarm:
             except Exception:
                 pass
             before = self._signature()
-            outcome = host.run_command(self.chat_id, command)
+            if tty is not None:
+                try:
+                    outcome = host.run_command(self.chat_id, command, tty=tty)
+                except TypeError:
+                    outcome = host.run_command(self.chat_id, command)
+            else:
+                outcome = host.run_command(self.chat_id, command)
             if self._signature() != before:
                 self._mark_change(agent)
             agent.evidence += 1
