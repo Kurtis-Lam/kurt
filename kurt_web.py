@@ -1356,54 +1356,171 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 .mode-toggle button{border:0;background:transparent;color:var(--muted);font:600 12px var(--sans);padding:5px 11px;border-radius:999px;cursor:pointer}
 .mode-toggle button.on{background:var(--green);color:var(--green-ink)}
 .mode-toggle button:not(.on):hover{color:var(--text)}
-.agent-panel{flex:0 0 auto;width:min(1040px,calc(100% - 28px));margin:0 auto 8px;border:1px solid var(--line2);border-radius:14px;background:var(--panel);display:flex;flex-direction:column;max-height:46%;min-height:0;overflow:hidden;font-family:var(--sans)}
-.agent-panel[hidden]{display:none}
-.agent-panel-head{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
-.agent-panel-head b{font-size:13px}
-.agent-run-status{font-size:12px;color:var(--muted);flex:1;min-width:120px}
-.agent-run-status.warn{color:var(--amber)}
-.agent-panel-head button,.ag-approval button{border:1px solid var(--line2);background:var(--bg);color:var(--text);border-radius:8px;padding:4px 10px;font:600 12px var(--sans);cursor:pointer}
-.agent-panel-head button:disabled{opacity:.45;cursor:default}
-.agent-panel-head button.danger{border-color:var(--danger);color:#fca5a5}
-.agent-tabs{display:flex;gap:4px;padding:6px 10px 0}
-.agent-tabs button{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:600 12px var(--sans);padding:5px 8px;cursor:pointer}
-.agent-tabs button.on{color:var(--text);border-bottom-color:var(--green)}
-.agent-body{overflow:auto;padding:10px 12px 12px;min-height:0;flex:1 1 auto}
-.agent-pane[hidden]{display:none}
-.ag-team{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
-.ag-card{border:1px solid var(--line);border-radius:10px;background:var(--bg);min-width:0;display:flex;flex-direction:column}
-.ag-head{display:flex;align-items:center;gap:6px;padding:8px 10px;flex-wrap:wrap}
-.ag-name{font-weight:700;font-size:12.5px}
-.ag-role{color:var(--muted);font-size:11.5px;flex:1;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ag-status{font-size:10.5px;font-weight:700;border-radius:999px;padding:2px 8px;background:var(--raise);color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
-.ag-s-working,.ag-s-orchestrating{background:var(--green-soft);color:var(--green)}
-.ag-s-retrying,.ag-s-waiting{background:rgba(226,183,71,.15);color:var(--amber)}
-.ag-s-retired,.ag-s-stopped{opacity:.6}
-.ag-task{padding:0 10px 6px;color:var(--muted);font-size:11.5px;line-height:1.45;overflow-wrap:anywhere;max-height:3.1em;overflow:hidden}
-.ag-list{padding:0 8px 8px;display:grid;gap:5px;max-height:230px;overflow:auto}
-.ag-entry{border-left:2px solid var(--line2);padding:2px 0 2px 8px;font-size:11.5px;line-height:1.45;min-width:0}
-.ag-entry summary{cursor:pointer;color:var(--muted);font-weight:600}
-.ag-k{font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
-.ag-text{margin:2px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:11.5px/1.45 var(--mono);color:var(--text)}
-.ag-entry.k-thinking{border-left-color:#7cc6ea}.ag-entry.k-thinking .ag-text{color:var(--muted)}
-.ag-entry.k-action{border-left-color:var(--green)}
-.ag-entry.k-result .ag-text{max-height:140px;overflow:auto}
-.ag-entry.k-error{border-left-color:var(--danger)}.ag-entry.k-error .ag-text{color:#fca5a5}
-.ag-feed{display:grid;gap:6px}
-.ag-msg{font-size:12.5px;line-height:1.5;border:1px solid var(--line);border-radius:9px;padding:6px 10px;background:var(--bg);overflow-wrap:anywhere}
-.ag-msg .ag-route{font-weight:700;font-size:11.5px;color:var(--green);margin-right:6px}
-.ag-msg.from-user .ag-route{color:var(--amber)}
-.ag-msg .ag-time{float:right;color:var(--muted);font-size:10.5px}
-.ag-msg p{margin:2px 0 0;white-space:pre-wrap}
-.ag-notes h4{margin:10px 0 4px;font-size:12px}.ag-notes pre{margin:0;white-space:pre-wrap;font:12px/1.5 var(--mono);color:var(--text);overflow-wrap:anywhere}
-.ag-note{border:1px solid var(--line);border-radius:9px;padding:6px 10px;margin-bottom:6px;background:var(--bg)}
-.ag-note b{font-size:12px}.ag-note small{color:var(--muted);margin-left:6px}
-.ag-approvals{display:grid;gap:6px;padding:8px 12px 0}
-.ag-approvals:empty{display:none}
-.ag-approval{border:1px solid var(--amber);border-radius:10px;padding:8px 10px;background:rgba(226,183,71,.08);font-size:12.5px}
-.ag-approval pre{margin:6px 0;max-height:150px;overflow:auto;white-space:pre-wrap;font:11.5px/1.45 var(--mono)}
-.ag-approval .row{display:flex;gap:6px;flex-wrap:wrap}
-.ag-empty{color:var(--muted);font-size:12.5px}
+.agent-dock{--ag-l:66%;--ag-ok:var(--green);--ag-bad:#ef6b6b;--ag-info:#5db4ea;--ag-soft:rgba(128,150,138,.13);flex:0 0 clamp(430px,46%,720px);min-width:0;height:100%;min-height:0;display:flex;flex-direction:column;background:var(--side);border-left:1px solid var(--line);font-family:var(--sans);color:var(--text)}
+:root[data-theme=light] .agent-dock{--ag-l:34%;--ag-bad:#c4262b;--ag-info:#0b6a99;--ag-soft:rgba(60,90,70,.08)}
+.agent-dock[hidden]{display:none}
+.main.has-artifacts .agent-dock{display:none}
+.ad-head{flex:none;display:grid;gap:11px;padding:14px 16px 13px;border-bottom:1px solid var(--line)}
+.ad-top{display:flex;align-items:center;gap:11px;min-width:0}
+.ad-pulse{position:relative;flex:none;width:10px;height:10px;border-radius:50%;background:var(--line2)}
+.ad-pulse.live,.ad-pulse.done{background:var(--ag-ok)}
+.ad-pulse.warn{background:var(--amber)}
+.ad-pulse.info{background:var(--ag-info)}
+.ad-pulse.live::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid var(--ag-ok);opacity:0;animation:adPulse 1.9s ease-out infinite}
+@keyframes adPulse{0%{transform:scale(.55);opacity:.8}100%{transform:scale(1.5);opacity:0}}
+.ad-titles{flex:1;min-width:0}
+.ad-titles strong{display:block;font-size:14.5px;font-weight:650;letter-spacing:-.005em}
+.ad-titles span{display:block;margin-top:1px;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ad-btn{flex:none;border:1px solid var(--line2);background:var(--panel);color:var(--text);border-radius:9px;padding:6px 13px;font:600 12.5px var(--sans);cursor:pointer;transition:background .12s,border-color .12s}
+.ad-btn:hover:not(:disabled){background:var(--raise)}
+.ad-btn:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.ad-btn:disabled{opacity:.4;cursor:default}
+.ad-btn.danger{border-color:var(--ag-bad);color:var(--ag-bad)}
+.ad-btn.small{padding:4px 10px;font-size:12px}
+.ad-close{display:none}
+.ad-mode{position:relative;display:flex;align-items:center;gap:11px;padding:2px 0;cursor:pointer}
+.ad-mode input{position:absolute;opacity:0;pointer-events:none}
+.ad-track{flex:none;position:relative;width:34px;height:19px;margin-top:1px;border-radius:999px;background:var(--line2);transition:background .15s}
+.ad-track::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s}
+.ad-mode input:checked+.ad-track{background:var(--green)}
+.ad-mode input:checked+.ad-track::after{transform:translateX(15px)}
+.ad-mode input:focus-visible+.ad-track{outline:2px solid var(--green);outline-offset:2px}
+.ad-mode b{display:block;font-size:12.5px;font-weight:650}
+.ad-mode small{display:block;margin-top:2px;color:var(--muted);font-size:11.5px;line-height:1.45}
+.ad-goal{display:flex;gap:9px;font-size:12.5px;line-height:1.5;color:var(--muted);cursor:pointer}
+.ad-goal[hidden]{display:none}
+.ad-goal b{flex:none;color:var(--text);font-weight:650}
+.ad-goal span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.ad-goal.open span{-webkit-line-clamp:unset}
+.ad-progress{display:grid;gap:7px}
+.ad-progress[hidden]{display:none}
+.ad-bar{display:flex;gap:2px;height:6px;border-radius:999px;overflow:hidden;background:var(--line)}
+.ad-bar i{display:block;height:100%;min-width:0;transition:flex-grow .35s ease}
+.ad-bar .s-done{background:var(--ag-ok)}
+.ad-bar .s-work{background:var(--ag-info)}
+.ad-bar .s-block{background:var(--ag-bad)}
+.ad-bar .s-idle{background:var(--line2)}
+.ad-legend{display:flex;flex-wrap:wrap;gap:3px 14px;font-size:11.5px;color:var(--muted)}
+.ad-legend span::before{content:"";display:inline-block;width:7px;height:7px;margin-right:5px;border-radius:50%;background:currentColor;vertical-align:1px}
+.ad-legend .l-done{color:var(--ag-ok)}.ad-legend .l-work{color:var(--ag-info)}.ad-legend .l-block{color:var(--ag-bad)}.ad-legend .l-idle{color:var(--muted)}
+.ad-banners{flex:none;display:grid;gap:8px;padding:12px 16px 0;max-height:46%;overflow:auto}
+.ad-banners:empty{display:none}
+.ad-banner{border:1px solid var(--line2);border-radius:11px;padding:10px 12px;font-size:12.5px;line-height:1.5;overflow-wrap:anywhere}
+.ad-banner.warn{border-color:var(--amber);background:rgba(226,183,71,.1)}
+.ad-banner.info{border-color:var(--ag-info);background:rgba(93,180,234,.1)}
+.ad-banner.ok{border-color:var(--ag-ok);background:var(--green-soft)}
+.ad-banner.off{background:var(--panel)}
+.ad-banner b{display:block;margin-bottom:2px;font-size:12.5px}
+.ad-banner p{margin:3px 0 0;color:var(--muted);white-space:pre-wrap}
+.ad-banner pre{margin:7px 0 0;max-height:130px;overflow:auto;white-space:pre-wrap;font:11.5px/1.5 var(--mono)}
+.ad-banner .row{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.ad-roster{flex:0 1 auto;max-height:46%;min-height:0;overflow:auto;display:grid;gap:6px;align-content:start;padding:10px 12px}
+.ad-roster:empty{display:none}
+.ag-row{display:grid;grid-template-columns:36px minmax(0,1fr) auto;column-gap:11px;row-gap:1px;align-items:center;width:100%;min-width:0;padding:8px 12px;border:1px solid var(--line);border-radius:13px;background:var(--panel);color:var(--text);font:inherit;text-align:left;cursor:pointer;transition:border-color .12s,background .12s}
+.ag-row:hover{border-color:var(--line2)}
+.ag-row:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.ag-row.sel{border-color:hsl(var(--h) 55% var(--ag-l));box-shadow:0 0 0 1px hsl(var(--h) 55% var(--ag-l))}
+.ag-av{position:relative;grid-row:1/span 3;display:grid;place-items:center;width:36px;height:36px;border-radius:50%;font-size:13.5px;font-weight:700;text-transform:uppercase;color:hsl(var(--h) 62% var(--ag-l));background:hsl(var(--h) 55% 50%/.17)}
+.ag-row.st-working .ag-av::after,.ag-row.st-orchestrating .ag-av::after,.ag-row.st-retrying .ag-av::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:2px solid transparent;border-top-color:hsl(var(--h) 60% var(--ag-l));animation:adSpin 1s linear infinite}
+@keyframes adSpin{to{transform:rotate(360deg)}}
+.ag-line{display:flex;align-items:baseline;gap:8px;min-width:0}
+.ag-name{font-size:13.5px;font-weight:650}
+.ag-role{min-width:0;color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ag-pill{align-self:start;padding:2px 9px;border-radius:999px;background:var(--ag-soft);color:var(--muted);font-size:11px;font-weight:650;white-space:nowrap}
+.st-working .ag-pill,.st-orchestrating .ag-pill{background:rgba(93,180,234,.16);color:var(--ag-info)}
+.st-done .ag-pill,.st-finished .ag-pill{background:var(--green-soft);color:var(--ag-ok)}
+.st-blocked .ag-pill{background:rgba(239,107,107,.15);color:var(--ag-bad)}
+.st-waiting .ag-pill,.st-retrying .ag-pill{background:rgba(226,183,71,.17);color:var(--amber)}
+.ag-row.st-retired,.ag-row.st-stopped{opacity:.68}
+.ag-now[hidden]{display:none}
+.ag-now{grid-column:2/4;min-width:0;font-size:12.5px;line-height:1.4;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ag-now.quiet{color:var(--muted)}
+.ag-meta[hidden]{display:none}
+.ag-meta{grid-column:2/4;display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px;min-width:0;font-size:11.5px;color:var(--muted)}
+.ag-res{padding:0 7px;border-radius:6px;font-size:10.5px;font-weight:700;letter-spacing:.03em}
+.ag-res.PASS{background:var(--green-soft);color:var(--ag-ok)}
+.ag-res.FAIL{background:rgba(239,107,107,.15);color:var(--ag-bad)}
+.ag-res.PARTIAL{background:rgba(226,183,71,.17);color:var(--amber)}
+.ad-tabs{flex:none;display:flex;gap:2px;padding:0 12px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.ad-tabs button{display:flex;align-items:center;gap:6px;margin:0;padding:10px 11px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:600 12.5px var(--sans);cursor:pointer}
+.ad-tabs button:hover{color:var(--text)}
+.ad-tabs button.on{color:var(--text);border-bottom-color:var(--green)}
+.ad-tabs button:focus-visible{outline:2px solid var(--green);outline-offset:-2px;border-radius:6px}
+.ad-tabs .n{padding:1px 7px;border-radius:999px;background:var(--raise);color:var(--muted);font-size:10.5px}
+.ad-body{position:relative;flex:1 1 0;min-height:0;overflow:auto;padding:12px 14px 18px;overscroll-behavior:contain}
+.ad-pane[hidden]{display:none}
+.ad-feed{display:grid;gap:1px}
+.ad-item{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:2px 10px;align-items:start;padding:7px 8px;border-radius:10px;font-size:12.5px;line-height:1.5}
+.ad-item.has-detail{cursor:pointer}
+.ad-item.has-detail:hover{background:var(--ag-soft)}
+.ad-ic{display:grid;place-items:center;width:24px;height:24px;border-radius:8px;background:var(--ag-soft);color:var(--muted)}
+.ad-ic .ic{width:13px;height:13px;stroke-width:2.2}
+.k-write .ad-ic,.k-done .ad-ic,.k-finish .ad-ic{background:var(--green-soft);color:var(--ag-ok)}
+.k-run .ad-ic,.k-read .ad-ic,.k-list .ad-ic,.k-search .ad-ic{background:rgba(93,180,234,.15);color:var(--ag-info)}
+.k-alert .ad-ic,.k-mode .ad-ic{background:rgba(226,183,71,.17);color:var(--amber)}
+.ad-item.bad .ad-ic,.k-blocked .ad-ic{background:rgba(239,107,107,.15);color:var(--ag-bad)}
+.ad-text{min-width:0;overflow-wrap:anywhere}
+.ad-who{font-weight:650;color:hsl(var(--h) 60% var(--ag-l))}
+.ad-to{color:var(--muted)}
+.ad-time{padding-top:2px;color:var(--muted);font-size:11px;white-space:nowrap}
+.ad-detail{display:none;grid-column:2/4;max-height:230px;overflow:auto;margin:5px 0 2px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--code);white-space:pre-wrap;overflow-wrap:anywhere;font:11.5px/1.55 var(--mono);color:var(--text)}
+.ad-item.open .ad-detail{display:block}
+.ad-msgtext{white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;color:var(--text)}
+.ad-item.open .ad-msgtext{-webkit-line-clamp:unset}
+.k-msg.from-user .ad-who{color:var(--amber)}
+.ad-day{margin:10px 0 4px;padding:0 8px;color:var(--muted);font-size:11px;font-weight:650;letter-spacing:.04em;text-transform:uppercase}
+.ad-empty{display:grid;justify-items:center;gap:6px;padding:34px 14px;text-align:center;color:var(--muted);font-size:12.5px;line-height:1.5}
+.ad-empty b{color:var(--text);font-size:13px}
+#adFocus:not(:empty){margin:0 0 12px}
+.ad-focus{display:grid;gap:8px;margin:0;padding:12px 13px;border:1px solid var(--line);border-radius:13px;background:var(--panel)}
+.ad-focus-head{display:flex;align-items:center;gap:9px;min-width:0}
+.ad-focus-head strong{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ad-focus dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:5px 12px;margin:0;font-size:12.5px;line-height:1.5}
+.ad-focus dt{color:var(--muted);font-weight:600}
+.ad-focus dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ad-focus dd.one{-webkit-line-clamp:1}
+.ad-focus summary{cursor:pointer;color:var(--muted);font-size:12px;font-weight:600}
+.ad-raw{display:grid;gap:7px;max-height:200px;overflow:auto;margin-top:8px}
+.ad-raw>div{padding:8px 10px;border-left:2px solid var(--line2);font:11.5px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.ad-raw .k-thinking{border-left-color:var(--ag-info);color:var(--muted)}
+.ad-raw .k-output{border-left-color:var(--ag-ok)}
+.ad-raw .k-error{border-left-color:var(--ag-bad);color:var(--ag-bad)}
+.ad-raw small{display:block;margin-bottom:2px;color:var(--muted);font:700 10px var(--sans);letter-spacing:.05em;text-transform:uppercase}
+.ad-plan{display:grid;gap:5px;margin:0 0 4px;padding:0;list-style:none}
+.ad-plan li{display:grid;grid-template-columns:18px minmax(0,1fr);gap:9px;align-items:start;font-size:12.5px;line-height:1.5}
+.ad-plan li i{display:grid;place-items:center;width:16px;height:16px;margin-top:2px;border:1.5px solid var(--line2);border-radius:5px;font-style:normal;font-size:10px;font-weight:800;color:transparent}
+.ad-plan li.done i{border-color:var(--ag-ok);background:var(--ag-ok);color:var(--green-ink)}
+.ad-plan li.done span{color:var(--muted);text-decoration:line-through}
+.ad-h{margin:16px 0 8px;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.ad-h:first-child{margin-top:2px}
+.ad-note{margin:0 0 8px;padding:9px 11px;border:1px solid var(--line);border-radius:11px;background:var(--panel);font-size:12.5px;line-height:1.5}
+.ad-note b{font-size:12.5px}
+.ad-note small{margin-left:7px;color:var(--muted)}
+.ad-note p{margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text)}
+.ad-file{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 9px;border-radius:10px;font-size:12.5px}
+.ad-file:hover{background:var(--ag-soft)}
+.ad-file strong{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.ad-file small{color:var(--muted);font-size:11.5px}
+.ad-file .sz{color:var(--muted);font-size:11.5px;white-space:nowrap}
+.ad-jump{position:sticky;bottom:4px;display:none;margin:8px auto 0;padding:5px 13px;border:1px solid var(--line2);border-radius:999px;background:var(--panel);color:var(--text);font:600 12px var(--sans);box-shadow:var(--shadow);cursor:pointer}
+.ad-jump.show{display:block}
+.ag-strip{display:none}
+@media(max-width:1020px){
+.agent-dock{position:fixed;top:54px;left:0;right:0;bottom:0;z-index:17;width:auto;flex:none;height:auto;border-left:0;display:none}
+.main.agents-open .agent-dock{display:flex}
+.ad-close{display:inline-block}
+.main.has-agents .ag-strip{display:flex;align-items:center;gap:10px;width:min(1040px,calc(100% - 28px));margin:0 auto 8px;padding:9px 12px;border:1px solid var(--line2);border-radius:13px;background:var(--panel);color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.ag-strip .dots{display:flex;flex:none}
+.ag-strip .dots i{display:block;width:22px;height:22px;margin-left:-6px;border:2px solid var(--panel);border-radius:50%;background:hsl(var(--h) 55% 50%/.9)}
+.ag-strip .dots i:first-child{margin-left:0}
+.ag-strip .dots i.working{box-shadow:0 0 0 2px var(--ag-info)}
+.ag-strip span.t{flex:1;min-width:0;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ag-strip span.t b{font-weight:650}
+.ag-strip span.t em{color:var(--muted);font-style:normal}
+.ag-strip .go{flex:none;color:var(--muted);font-size:12px;font-weight:600}
+.ag-strip.attn{border-color:var(--amber)}
+}
+@media(prefers-reduced-motion:reduce){.ad-pulse.live::after,.ag-row .ag-av::after{animation:none}.ad-bar i,.ad-track,.ad-track::after{transition:none}}
 .user-attachment-list{margin-top:7px;color:var(--muted);font:11px/1.45 var(--sans);overflow-wrap:anywhere}
 @media(max-width:820px) and (min-width:701px){.main.has-artifacts{grid-template-columns:minmax(0,1fr) minmax(300px,.92fr)}}
 
@@ -1681,16 +1798,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <section class="chat-area" id="chatArea">
 <div id="messages" class="messages"></div>
 <div class="chips" id="chips"></div>
-<section class="agent-panel" id="agentPanel" hidden aria-label="Agent team">
-<div class="agent-panel-head"><b>Agent team</b><span class="agent-run-status" id="agentRunStatus">Not running</span><button type="button" id="agentCollapse" title="Collapse or expand the agent team">Collapse</button><button type="button" id="agentStop" class="danger" disabled>Stop agent</button></div>
-<div class="ag-approvals" id="agentApprovals"></div>
-<div class="agent-tabs" id="agentTabs"><button type="button" data-tab="team" class="on">Team</button><button type="button" data-tab="channel">Coordination</button><button type="button" data-tab="notes">Plan &amp; notes</button></div>
-<div class="agent-body" id="agentBody">
-<div class="agent-pane" id="agentPaneTeam"><div class="ag-team" id="agentTeam"></div></div>
-<div class="agent-pane" id="agentPaneChannel" hidden><div class="ag-feed" id="agentChannel"></div></div>
-<div class="agent-pane ag-notes" id="agentPaneNotes" hidden><h4>Plan</h4><pre id="agentPlan"></pre><h4>Shared notes</h4><div id="agentNotes"></div></div>
-</div>
-</section>
+<button type="button" class="ag-strip" id="agentStrip" aria-label="Open the agent team view"><span class="dots" id="agentStripDots"></span><span class="t" id="agentStripText"></span><span class="go">Open team &rsaquo;</span></button>
 <div class="composer-wrap">
 <button class="to-bottom" id="toBottom" aria-label="Scroll to latest message" title="Scroll to latest"><svg class="ic"><use href="#i-down"/></svg></button>
 <div class="composer">
@@ -1708,6 +1816,23 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="compose-hint" id="composeHint">Kurt can read any file your account can access. File changes, deletions, and commands ask for approval. Link a folder to work directly in it.</div>
 </div>
 </section>
+<aside class="agent-dock" id="agentDock" hidden aria-label="Agent team">
+<header class="ad-head">
+<div class="ad-top"><span class="ad-pulse" id="adPulse"></span><div class="ad-titles"><strong>Agent team</strong><span id="adStatus" aria-live="polite">Not running</span></div><button type="button" class="ad-btn danger" id="agentStop" disabled>Stop</button><button type="button" class="ad-btn ad-close" id="adClose">Close</button></div>
+<label class="ad-mode" id="adModeBox"><input type="checkbox" id="adContinuous"><span class="ad-track"></span><span><b>Run continuously</b><small id="adModeHelp"></small></span></label>
+<div class="ad-goal" id="adGoal" hidden title="Click to expand"><b>Goal</b><span id="adGoalText"></span></div>
+<div class="ad-progress" id="adProgress" hidden><div class="ad-bar" id="adBar"></div><div class="ad-legend" id="adLegend"></div></div>
+</header>
+<div class="ad-banners" id="adBanners"></div>
+<section class="ad-roster" id="adRoster" aria-label="Agents"></section>
+<nav class="ad-tabs" id="adTabs" role="tablist" aria-label="Team details"><button type="button" role="tab" data-tab="activity" class="on">Activity</button><button type="button" role="tab" data-tab="messages">Messages <span class="n" id="adNMsg">0</span></button><button type="button" role="tab" data-tab="plan">Plan &amp; notes</button><button type="button" role="tab" data-tab="files">Files <span class="n" id="adNFiles">0</span></button></nav>
+<div class="ad-body" id="adBody">
+<div class="ad-pane" id="adPaneActivity"><div id="adFocus"></div><div class="ad-feed" id="adFeed"></div><button type="button" class="ad-jump" id="adJump">Jump to latest</button></div>
+<div class="ad-pane" id="adPaneMessages" hidden><div class="ad-feed" id="adMsgs"></div></div>
+<div class="ad-pane" id="adPanePlan" hidden><div id="adPlan"></div><div id="adNotes"></div></div>
+<div class="ad-pane" id="adPaneFiles" hidden><div id="adFiles"></div></div>
+</div>
+</aside>
 <aside class="artifact-pane" id="artifactPane" aria-label="Selected file preview">
 <div class="artifact-pane-head"><div class="ap-title"><span class="ap-icon"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span><div class="ap-titles"><strong id="artifactPaneTitle">File preview</strong><span class="artifact-pane-count" id="artifactCount">Select a file card to preview</span></div></div><div class="ap-actions"><button class="ap-btn" id="artifactPaneCopy" type="button" title="Copy file contents"><svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg><span>Copy</span></button><button class="ap-btn icon-only" id="artifactPaneDownload" type="button" title="Download file" aria-label="Download file"><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg></button><button class="icon-btn artifact-pane-close" id="closeArtifactPane" type="button" title="Close file preview" aria-label="Close file preview">×</button></div></div>
 <div class="artifact-pane-content" id="artifactPaneContent"></div>
@@ -2102,7 +2227,7 @@ function hint(){
  const count=state.contextCount?state.contextCount+' uploaded item(s). ':'';
  const linked=state.linkedFolder?'Linked folder: '+state.linkedFolder+'. ':'';
  const access=state.settings&&state.settings.always_allow?'Always allow is on: Kurt changes files and runs commands without asking.':'Kurt can read any file your account can access. File changes, deletions, and commands ask for approval.';
- $('composeHint').textContent=(state.mode==='agent'?'Agent mode: Kurt runs a lead and subagents continuously until you stop them, and you can message the lead any time. ':'')+count+linked+access;
+ $('composeHint').textContent=(state.mode==='agent'?'Agent mode: a lead and subagents work until the lead finishes the project (turn on Run continuously to keep going), and you can message the lead any time. ':'')+count+linked+access;
  $('linkFolderBtn').classList.toggle('linked',!!state.linkedFolder);
  $('linkFolderBtn').querySelector('span').textContent=state.linkedFolder?'Linked folder':'Link folder';
  const sources=document.querySelectorAll('#filesModal .file-source');if(sources[1])sources[1].hidden=true;
@@ -3080,30 +3205,401 @@ async function send(){
  }
 }
 
-state.mode='normal';state.agent=null;state.agentSeen=new Set();state.agentTimer=null;
-function agentNow(){return Date.now()/1000}
-function agentSyncPanel(){const a=state.agent;const panel=$('agentPanel');if(!panel||!a)return;panel.hidden=!(a.exists&&(state.mode==='agent'||a.running));const body=$('agentBody'),tabs=$('agentTabs');body.hidden=tabs.hidden=!!a.collapsed;$('agentCollapse').textContent=a.collapsed?'Expand':'Collapse'}
-function setMode(mode,silent){state.mode=mode==='agent'?'agent':'normal';try{localStorage.setItem('kurt_mode',state.mode)}catch(error){}document.querySelectorAll('#modeToggle button').forEach(button=>{const on=button.dataset.mode===state.mode;button.classList.toggle('on',on);button.setAttribute('aria-pressed',on?'true':'false')});$('prompt').placeholder=state.mode==='agent'?'Message the lead agent · it keeps working while you chat':'Message Kurt · type / for tools and skills';hint();agentSyncPanel();if(!silent&&state.mode==='agent')toast('Agent mode: a lead and subagents work continuously until you stop them')}
-function agentReset(){if(state.agentTimer){clearInterval(state.agentTimer);state.agentTimer=null}const old=state.agent;state.agent={seq:-1,epoch:'',running:false,exists:false,cards:new Map(),notes:{},plan:'',approvals:new Map(),cooldown:0,reason:'',busyPoll:false,collapsed:old?old.collapsed:false,tab:old?old.tab:'team',channelCount:0};state.agentSeen=new Set();['agentTeam','agentChannel','agentApprovals','agentNotes'].forEach(id=>{const el=$(id);if(el)el.replaceChildren()});if($('agentPlan'))$('agentPlan').textContent='';agentSyncPanel();agentRenderStatus()}
-function ensureAgentTimer(){if(state.agentTimer||!state.chatId||!state.agent||!state.agent.exists)return;state.agentTimer=setInterval(agentPoll,1000)}
-function agentRenderStatus(){const a=state.agent;if(!a)return;const el=$('agentRunStatus');if(!el)return;const now=agentNow();const live=Array.from(a.cards.values()).filter(c=>!['retired'].includes(c.status));let text,warn=false;if(!a.exists){text='Not running'}else if(a.running){const wait=Math.ceil(a.cooldown-now);text='Running · '+Math.max(0,live.length-1)+' subagent(s)';if(wait>0){text+=' · '+(a.reason==='rate limit'?'rate limited':'request failed')+', retrying in '+wait+'s';warn=true}}else{text='Stopped · send a message in Agent mode to resume'}el.textContent=text;el.classList.toggle('warn',warn);$('agentStop').disabled=!a.running;a.cards.forEach(card=>{if(card.status==='retrying'&&card.retryAt){const left=Math.ceil(card.retryAt-now);card.pill.textContent=left>0?'retry '+left+'s':'retrying'}})}
-function agentCard(name){const a=state.agent;let card=a.cards.get(name);if(card)return card;const root=document.createElement('div');root.className='ag-card';const head=document.createElement('div');head.className='ag-head';const nameEl=document.createElement('span');nameEl.className='ag-name';nameEl.textContent=name;const role=document.createElement('span');role.className='ag-role';const pill=document.createElement('span');pill.className='ag-status';head.append(nameEl,role,pill);const task=document.createElement('div');task.className='ag-task';const list=document.createElement('div');list.className='ag-list';root.append(head,task,list);card={root,role,pill,task,list,entries:new Map(),status:'',retryAt:0};a.cards.set(name,card);const team=$('agentTeam');if(name==='lead')team.prepend(root);else team.appendChild(root);return card}
-function agentUpsertAgent(agent){if(!agent||!agent.name)return;const card=agentCard(agent.name);card.role.textContent=agent.role||'';card.role.title=agent.role||'';card.task.textContent=agent.task?'Task: '+agent.task:'';card.status=agent.status||'idle';card.retryAt=agent.retry_at||0;card.pill.textContent=card.status;card.pill.className='ag-status ag-s-'+card.status;if(card.status==='retired')card.root.style.opacity='.55'}
-function agentUpsertEntry(name,entry){if(!entry||!entry.id)return;const card=agentCard(name);let item=card.entries.get(entry.id);const near=card.list.scrollHeight-card.list.scrollTop-card.list.clientHeight<40;if(!item){const kind=entry.kind||'output';let root,body;if(kind==='thinking'){root=document.createElement('details');root.className='ag-entry k-thinking';const summary=document.createElement('summary');summary.textContent='Thinking';summary.addEventListener('click',()=>{root.dataset.touched='1'});root.appendChild(summary);if(!entry.done)root.open=true}else{root=document.createElement('div');root.className='ag-entry k-'+kind;const label=document.createElement('span');label.className='ag-k';label.textContent=kind==='output'?'Reply':kind;root.appendChild(label)}body=document.createElement('pre');body.className='ag-text';root.appendChild(body);card.list.appendChild(root);item={root,body,kind};card.entries.set(entry.id,item);while(card.list.children.length>60){const first=card.list.firstElementChild;for(const [key,value] of card.entries){if(value.root===first){card.entries.delete(key);break}}first.remove()}}if(item.body.textContent!==entry.text)item.body.textContent=entry.text||'';if(item.kind==='thinking'&&entry.done&&!item.root.dataset.touched)item.root.open=false;if(near)card.list.scrollTop=card.list.scrollHeight}
-function agentAppendChannel(message){if(!message)return;const feed=$('agentChannel');const near=feed.scrollHeight-feed.scrollTop-feed.clientHeight<60||true;const el=document.createElement('div');el.className='ag-msg from-'+(message.from==='user'?'user':'agent');const route=document.createElement('span');route.className='ag-route';route.textContent=message.from+' → '+message.to;const time=document.createElement('span');time.className='ag-time';time.textContent=new Date((message.ts||agentNow())*1000).toLocaleTimeString();const text=document.createElement('p');text.textContent=message.text||'';el.append(time,route,text);feed.appendChild(el);while(feed.children.length>300)feed.firstElementChild.remove();const body=$('agentBody');if(near&&state.agent.tab==='channel')body.scrollTop=body.scrollHeight}
-function agentRenderNotes(){const a=state.agent;$('agentPlan').textContent=a.plan||'(no plan yet)';const box=$('agentNotes');box.replaceChildren();const keys=Object.keys(a.notes||{});if(!keys.length){const empty=document.createElement('div');empty.className='ag-empty';empty.textContent='(no shared notes yet)';box.appendChild(empty);return}keys.forEach(key=>{const note=a.notes[key];const el=document.createElement('div');el.className='ag-note';const title=document.createElement('b');title.textContent=key;const by=document.createElement('small');by.textContent='by '+(note.by||'');const text=document.createElement('pre');text.textContent=note.value||'';el.append(title,by,text);box.appendChild(el)})}
-function agentRenderChat(message){if(!message||!message.message_id||state.agentSeen.has(message.message_id))return;state.agentSeen.add(message.message_id);if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}renderMessage(message.role,message.content,[],{model:message.model||null});follow=true;scrollEnd(true)}
-function agentShowApproval(approval){const a=state.agent;if(!approval||a.approvals.has(approval.id))return;const box=document.createElement('div');box.className='ag-approval';const title=document.createElement('b');title.textContent=approval.title||'Approval needed';box.appendChild(title);const detail=approval.command||approval.detail||approval.path||'';if(detail){const pre=document.createElement('pre');pre.textContent=detail;box.appendChild(pre)}const row=document.createElement('div');row.className='row';const decide=async(approved,always)=>{row.querySelectorAll('button').forEach(b=>b.disabled=true);try{await api('/api/approval/respond',{chat_id:state.chatId,approval_id:approval.id,approved,always:!!always});if(always){state.settings.always_allow=true;syncAlwaysAllow();hint()}}catch(error){toast(error.message)}};const approve=document.createElement('button');approve.type='button';approve.textContent='Approve';approve.onclick=()=>decide(true,false);const always=document.createElement('button');always.type='button';always.textContent='Always allow';always.onclick=()=>decide(true,true);const decline=document.createElement('button');decline.type='button';decline.textContent='Decline';decline.onclick=()=>decide(false,false);row.append(approve,always,decline);box.appendChild(row);$('agentApprovals').appendChild(box);a.approvals.set(approval.id,box)}
-function agentRemoveApproval(id){const a=state.agent;const box=a.approvals.get(id);if(box){box.remove();a.approvals.delete(id)}}
-function agentApplySnapshot(snapshot){const a=state.agent;a.exists=true;a.running=!!snapshot.running;a.cards.forEach(card=>card.root.remove());a.cards.clear();$('agentTeam').replaceChildren();(snapshot.agents||[]).forEach(agent=>{agentUpsertAgent(agent);(agent.entries||[]).forEach(entry=>agentUpsertEntry(agent.name,entry))});a.notes=snapshot.notes||{};a.plan=snapshot.plan||'';agentRenderNotes();$('agentChannel').replaceChildren();(snapshot.channel||[]).forEach(agentAppendChannel);a.approvals.forEach(box=>box.remove());a.approvals.clear();(snapshot.approvals||[]).forEach(agentShowApproval);a.cooldown=snapshot.cooldown_until||0;a.reason=snapshot.cooldown_reason||'';(snapshot.chat||[]).forEach(agentRenderChat);agentSyncPanel()}
-function agentApplyEvent(event){const a=state.agent;a.exists=true;switch(event.type){case 'entry':agentUpsertEntry(event.agent,event.entry);break;case 'agent':agentUpsertAgent(event.agent);break;case 'channel':agentAppendChannel(event.message);break;case 'note':a.notes[event.key]=event.note;agentRenderNotes();break;case 'plan':a.plan=event.plan||'';agentRenderNotes();break;case 'chat':agentRenderChat(event.message);break;case 'approval':agentShowApproval(event.approval);break;case 'approval_resolved':agentRemoveApproval(event.id);break;case 'state':a.running=!!event.running;if(event.cooldown_until!==undefined){a.cooldown=event.cooldown_until;a.reason=event.cooldown_reason||''}break}}
-async function agentPoll(){const a=state.agent;if(!state.chatId||!a||a.busyPoll)return;a.busyPoll=true;const chatId=state.chatId;try{const d=await api('/api/agent/poll?chat_id='+encodeURIComponent(chatId)+'&after='+a.seq+'&epoch='+encodeURIComponent(a.epoch));if(chatId!==state.chatId||a!==state.agent)return;a.epoch=d.epoch||'';if(d.snapshot){agentApplySnapshot(d.snapshot)}else if(d.snapshot===null){a.exists=false}(d.events||[]).forEach(agentApplyEvent);a.seq=d.seq||0;a.running=!!d.running;if(d.cooldown_until!==undefined){a.cooldown=d.cooldown_until||0;a.reason=d.cooldown_reason||''}agentSyncPanel();agentRenderStatus();if(a.exists)ensureAgentTimer();else if(state.agentTimer){clearInterval(state.agentTimer);state.agentTimer=null}}catch(error){}finally{a.busyPoll=false}}
-function agentOnChatLoaded(data){(data.messages||[]).forEach(message=>{if(message.message_id)state.agentSeen.add(message.message_id)});if(data.agent_mode)setMode('agent',true);agentPoll()}
-async function sendAgent(text){try{if(state.pendingUploads.length){const uploaded=await attachFiles();if(!uploaded)return}await ensureChat();const messageId=crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2);const route=$('topModel').value;$('prompt').value='';autosize();hint();updateSend();state.agentSeen.add(messageId);if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}renderMessage('user',text,null,{attachments:(state.uploadedFiles||[]).map(item=>item.path)});follow=true;scrollEnd(true);try{await api('/api/agent/send',{chat_id:state.chatId,text,route,message_id:messageId})}catch(error){$('prompt').value=text;autosize();updateSend();throw error}state.agent.exists=true;ensureAgentTimer();await agentPoll();refreshChats().catch(()=>{})}catch(error){toast(error.message)}}
+state.mode='normal';state.agent=null;state.agentSeen=new Set();state.agentTimer=null;state.agentTick=null;
+
+/* ---------- small helpers ---------- */
+const AG_PATHS={
+ write:'<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+ read:'<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+ list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+ run:'<path d="m4 17 6-6-6-6M12 19h8"/>',
+ search:'<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+ note:'<path d="M6 3h12v18l-6-4-6 4z"/>',
+ plan:'<path d="m4 7 2 2 3-3M4 16l2 2 3-3M13 8h8M13 17h8"/>',
+ spawn:'<circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M19 8v6M16 11h6"/>',
+ assign:'<path d="m22 2-11 11M22 2l-7 20-4-9-9-4z"/>',
+ retire:'<path d="M18 6 6 18M6 6l12 12"/>',
+ done:'<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+ blocked:'<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
+ alert:'<path d="M12 3 2 21h20z"/><path d="M12 10v5M12 18h.01"/>',
+ finish:'<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
+ mode:'<path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="m7 22-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/>',
+ msg:'<path d="M21 12a8 8 0 0 1-11.7 7L3 21l2-5.3A8 8 0 1 1 21 12z"/>',
+ file:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+ user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/>'
+};
+function agIcon(kind){return '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">'+(AG_PATHS[kind]||AG_PATHS.note)+'</svg>'}
+function agEl(tag,cls,text){const el=document.createElement(tag);if(cls)el.className=cls;if(text!==undefined&&text!==null)el.textContent=text;return el}
+function agHue(name){if(name==='lead')return 150;let h=7;for(const c of String(name))h=(h*33+c.charCodeAt(0))%360;return h}
+function agTint(el,name){el.style.setProperty('--h',String(agHue(name)))}
+function agNow(){const a=state.agent;return Date.now()/1000+(a?a.skew:0)}
+function agClock(ts){return new Date(ts*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+function agDur(sec){sec=Math.max(0,Math.round(sec));const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;return h?h+'h '+m+'m':m?m+'m '+String(s).padStart(2,'0')+'s':s+'s'}
+function agAgo(ts){if(!ts)return '';const d=agNow()-ts;return d<5?'just now':d<90?Math.round(d)+'s ago':d<5400?Math.round(d/60)+'m ago':Math.round(d/3600)+'h ago'}
+function agSize(n){n=Number(n)||0;return n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':(n/1048576).toFixed(1)+' MB'}
+const AG_STATUS={working:'Working',orchestrating:'Directing',watching:'Watching',idle:'Idle',done:'Done',blocked:'Blocked',waiting:'Needs approval',retrying:'Retrying',retired:'Retired',stopped:'Stopped',finished:'Finished'};
+const AG_ACTIVE=['working','waiting','retrying'];
+
+/* ---------- state ---------- */
+function agentNewState(old){return{seq:-1,epoch:'',exists:false,running:false,finished:false,finishSummary:'',continuous:false,prefSet:false,idlePaused:false,
+ goal:'',plan:'',notes:{},startedAt:0,skew:0,agents:new Map(),entries:new Map(),rows:new Map(),timeline:[],timelineIds:new Set(),msgs:[],files:new Map(),
+ approvals:new Map(),cooldown:0,reason:'',busyPoll:false,selected:'',tab:old?old.tab:'activity',goalOpen:false,open:false,rawOpen:false,dirty:{},raf:0,feedQueue:[],msgQueue:[],cdNode:null}}
+function agentReset(){
+ if(state.agentTimer){clearInterval(state.agentTimer);state.agentTimer=null}
+ if(state.agentTick){clearInterval(state.agentTick);state.agentTick=null}
+ const old=state.agent;if(old&&old.raf)cancelAnimationFrame(old.raf);
+ state.agent=agentNewState(old);state.agentSeen=new Set();
+ ['adRoster','adBanners','adFeed','adMsgs','adFocus','adPlan','adNotes','adFiles'].forEach(id=>{const el=$(id);if(el)el.replaceChildren()});
+ agentSyncPanel();agentDirty('head','banners','roster','feed','msgs','plan','files','focus','strip');
+}
+function agentSelect(name){const a=state.agent;a.selected=name;a.rawOpen=false;a.focusTop=!!name;a.dirty.feedFull=true;agentDirty('roster','feed','focus')}
+function agentDirty(){const a=state.agent;if(!a)return;for(const part of arguments)a.dirty[part]=true;if(!a.raf)a.raf=requestAnimationFrame(agentRender)}
+
+/* ---------- mode + visibility ---------- */
+function agentVisible(){const a=state.agent;return !!(a&&a.exists&&(state.mode==='agent'||a.running))}
+function agentSyncPanel(){
+ const a=state.agent,dock=$('agentDock'),main=$('main');if(!a||!dock)return;
+ const show=agentVisible();dock.hidden=!show;main.classList.toggle('has-agents',show);main.classList.toggle('agents-open',show&&a.open);
+ $('agentStrip').hidden=!show;
+}
+function setMode(mode,silent){
+ state.mode=mode==='agent'?'agent':'normal';
+ try{localStorage.setItem('kurt_mode',state.mode)}catch(error){}
+ document.querySelectorAll('#modeToggle button').forEach(button=>{const on=button.dataset.mode===state.mode;button.classList.toggle('on',on);button.setAttribute('aria-pressed',on?'true':'false')});
+ $('prompt').placeholder=state.mode==='agent'?'Message the lead agent · the team keeps working while you chat':'Message Kurt · type / for tools and skills';
+ hint();agentSyncPanel();
+ if(!silent&&state.mode==='agent')toast('Agent mode: the lead runs a team and stops when the project is finished. Use Run continuously to keep it going.');
+}
+
+/* ---------- derived values ---------- */
+function agentWorkers(){return [...state.agent.agents.values()].filter(x=>!x.lead&&x.status!=='retired')}
+function agentCounts(){
+ const w=agentWorkers();
+ return{done:w.filter(x=>x.status==='done'||x.status==='finished').length,work:w.filter(x=>AG_ACTIVE.includes(x.status)).length,block:w.filter(x=>x.status==='blocked').length,
+  idle:w.filter(x=>['idle','stopped'].includes(x.status)).length,total:w.length}
+}
+function agentOverall(){
+ const a=state.agent,c=agentCounts();
+ if(a.finished)return{tone:'done',text:'Finished · the lead completed the project'};
+ if(!a.running)return{tone:'off',text:a.exists?'Stopped':'Not running'};
+ if(a.approvals.size)return{tone:'warn',text:'Waiting for your approval'};
+ const wait=Math.ceil(a.cooldown-agNow());
+ if(wait>0)return{tone:'warn',text:(a.reason==='rate limit'?'Rate limited':'Model error')+' · retrying in '+wait+'s'};
+ if(a.idlePaused)return{tone:'info',text:'Paused · waiting for your message'};
+ const parts=[a.continuous?'Running continuously':'Running'];
+ if(c.work)parts.push(c.work+' working');else if(c.total)parts.push('team idle');
+ if(a.startedAt)parts.push(agDur(agNow()-a.startedAt));
+ return{tone:'live',text:parts.join(' · ')};
+}
+function agentNowText(ag){
+ if(ag.status==='blocked')return{text:ag.blocked||ag.current||'Blocked',quiet:false};
+ if(ag.status==='done')return{text:ag.current||'Finished: waiting for the lead',quiet:true};
+ if(['idle','stopped','finished','retired'].includes(ag.status))return{text:ag.current||({idle:'Waiting for work',stopped:'Stopped',finished:'Finished',retired:'Retired'})[ag.status],quiet:true};
+ return{text:ag.current||'Working…',quiet:false};
+}
+
+/* ---------- render: header + banners ---------- */
+function renderStatusLine(){const o=agentOverall();$('adPulse').className='ad-pulse '+o.tone;$('adStatus').textContent=o.text}
+function renderHead(){
+ const a=state.agent;renderStatusLine();$('agentStop').disabled=!a.running;
+ const box=$('adContinuous');if(box.checked!==a.continuous)box.checked=a.continuous;
+ $('adModeHelp').textContent=a.continuous?'On: the team keeps improving the work until you press Stop.':'Off: the lead ends the run once the project is finished and verified.';
+ const goal=$('adGoal');goal.hidden=!a.goal;if(a.goal){$('adGoalText').textContent=a.goal;goal.classList.toggle('open',a.goalOpen)}
+ const c=agentCounts(),prog=$('adProgress');prog.hidden=!c.total;
+ if(c.total){
+  const bar=$('adBar'),segs=[['s-done',c.done],['s-work',c.work],['s-block',c.block],['s-idle',c.idle]];
+  bar.replaceChildren();segs.forEach(([cls,n])=>{if(n){const seg=agEl('i',cls);seg.style.flexGrow=String(n);seg.style.flexBasis='0';bar.appendChild(seg)}});
+  const legend=$('adLegend');legend.replaceChildren();
+  [['l-done',c.done,'done'],['l-work',c.work,'working'],['l-block',c.block,'blocked'],['l-idle',c.idle,'idle']].forEach(([cls,n,label])=>{if(n)legend.appendChild(agEl('span',cls,n+' '+label))});
+ }
+}
+function agentBanner(tone,title,body){const box=agEl('div','ad-banner '+tone);box.appendChild(agEl('b','',title));if(body)box.appendChild(agEl('p','',body));return box}
+function renderBanners(){
+ const a=state.agent,host=$('adBanners');host.replaceChildren();a.cdNode=null;
+ a.approvals.forEach(approval=>{
+  const box=agEl('div','ad-banner warn');box.appendChild(agEl('b','',(approval.agent?approval.agent+': ':'')+(approval.title||'Approval needed')));
+  const detail=approval.command||approval.detail||approval.path||'';if(detail)box.appendChild(agEl('pre','',detail));
+  const row=agEl('div','row');
+  const decide=async(approved,always)=>{row.querySelectorAll('button').forEach(b=>b.disabled=true);try{await api('/api/approval/respond',{chat_id:state.chatId,approval_id:approval.id,approved,always:!!always});if(always){state.settings.always_allow=true;syncAlwaysAllow();hint()}}catch(error){toast(error.message)}};
+  [['Approve',()=>decide(true,false),false],['Always allow',()=>decide(true,true),false],['Decline',()=>decide(false,false),false]].forEach(([label,fn])=>{const b=agEl('button','ad-btn small',label);b.type='button';b.onclick=fn;row.appendChild(b)});
+  box.appendChild(row);host.appendChild(box);
+ });
+ if(a.running&&a.cooldown-agNow()>0){const box=agentBanner('warn','Model request failed ('+(a.reason||'error')+')','');const p=agEl('p','');box.appendChild(p);a.cdNode=p;p.textContent='All agents pause and retry automatically.';host.appendChild(box)}
+ if(a.running&&a.idlePaused)host.appendChild(agentBanner('info','The team is idle','The lead has neither finished nor given anyone new work. Tell it what to do next, or turn on Run continuously.'));
+ if(a.finished){
+  const box=agentBanner('ok','Project finished','The lead verified the goal is met and the team stopped on its own. Send a message to start another round.');
+  host.appendChild(box);
+ }else if(a.exists&&!a.running){host.appendChild(agentBanner('off','Stopped','Send a message in Agent mode to resume the team where it left off.'))}
+}
+
+/* ---------- render: roster ---------- */
+function agentRow(name){
+ const a=state.agent;let row=a.rows.get(name);if(row)return row;
+ const root=agEl('button','ag-row');root.type='button';agTint(root,name);
+ const av=agEl('span','ag-av',name.slice(0,1)),line=agEl('span','ag-line'),nm=agEl('span','ag-name',name),role=agEl('span','ag-role'),pill=agEl('span','ag-pill');
+ const now=agEl('span','ag-now'),meta=agEl('span','ag-meta');
+ line.append(nm,role);root.append(av,line,pill,now,meta);
+ root.onclick=()=>{agentSelect(a.selected===name?'':name);if(a.selected&&a.tab!=='activity')agentSetTab('activity')};
+ row={root,role,pill,now,meta};a.rows.set(name,row);return row;
+}
+function renderRoster(){
+ const a=state.agent,host=$('adRoster');
+ const list=[...a.agents.values()].filter(x=>x.status!=='retired');
+ const keep=new Set(list.map(x=>x.name));
+ a.rows.forEach((row,name)=>{if(!keep.has(name)){row.root.remove();a.rows.delete(name)}});
+ list.forEach((ag,index)=>{
+  const row=agentRow(ag.name),r=row.root;
+  r.className='ag-row st-'+ag.status+(a.selected===ag.name?' sel':'');r.setAttribute('aria-pressed',a.selected===ag.name?'true':'false');
+  r.title=(ag.task?'Task: '+ag.task:ag.role||'');
+  row.role.textContent=ag.role||'';row.pill.textContent=AG_STATUS[ag.status]||ag.status;
+  const nt=agentNowText(ag);row.now.textContent=nt.text;row.now.className='ag-now'+(nt.quiet?' quiet':'');row.now.title=nt.text;
+  row.now.hidden=nt.quiet&&nt.text.toLowerCase()===String(row.pill.textContent||'').toLowerCase();
+  row.meta.replaceChildren();
+  if(ag.result){row.meta.appendChild(agEl('span','ag-res '+ag.result,ag.result))}
+  const files=(ag.files||[]).length;if(files)row.meta.appendChild(agEl('span','',files+(files===1?' file':' files')));
+  if(ag.turns)row.meta.appendChild(agEl('span','',ag.turns+(ag.turns===1?' step':' steps')));
+  if(ag.report_ts)row.meta.appendChild(agEl('span','ag-ago','reported '+agAgo(ag.report_ts))).dataset.ts=ag.report_ts;
+  if(!row.meta.children.length)row.meta.hidden=true;else row.meta.hidden=false;
+  if(host.children[index]!==r)host.insertBefore(r,host.children[index]||null);
+ });
+}
+
+/* ---------- render: activity timeline ---------- */
+function agentItemVisible(item){const sel=state.agent.selected;if(!sel)return true;return item.t==='act'?item.d.agent===sel:(item.d.from===sel||item.d.to===sel)}
+function agentActivityNode(item){
+ const d=item.d,node=agEl('div','ad-item k-'+d.kind+(d.ok===false?' bad':'')),ic=agEl('span','ad-ic'),text=agEl('div','ad-text'),time=agEl('time','ad-time',agClock(d.ts));
+ agTint(node,d.agent);ic.innerHTML=agIcon(d.kind);
+ if(d.agent&&d.agent!=='system'){text.appendChild(agEl('span','ad-who',d.agent));text.appendChild(document.createTextNode(' '))}
+ text.appendChild(document.createTextNode(d.text||''));
+ node.append(ic,text,time);
+ if(d.detail){node.classList.add('has-detail');node.appendChild(agEl('pre','ad-detail',d.detail));node.onclick=()=>node.classList.toggle('open')}
+ return node;
+}
+function agentMessageNode(d){
+ const node=agEl('div','ad-item k-msg from-'+(d.from==='user'?'user':'agent')),ic=agEl('span','ad-ic'),text=agEl('div','ad-text'),time=agEl('time','ad-time',agClock(d.ts));
+ agTint(node,d.from);ic.innerHTML=agIcon(d.from==='user'?'user':'msg');
+ const who=agEl('span','ad-who',d.from);text.append(who,agEl('span','ad-to',' → '+d.to),agEl('div','ad-msgtext',d.text||''));
+ node.append(ic,text,time);node.classList.add('has-detail');node.onclick=()=>node.classList.toggle('open');
+ return node;
+}
+function agentNear(el){return el.scrollHeight-el.scrollTop-el.clientHeight<90}
+function renderFeed(full){
+ const a=state.agent,feed=$('adFeed'),body=$('adBody');
+ const visible=a.tab==='activity';const near=agentNear(body)||full;
+ if(full){
+  feed.replaceChildren();a.feedQueue=[];
+  const items=a.timeline.filter(agentItemVisible).slice(-300);
+  if(!items.length){const empty=agEl('div','ad-empty');empty.append(agEl('b','',a.selected?'Nothing from '+a.selected+' yet':'No activity yet'),agEl('span','',a.exists?'Actions, files and reports will appear here as the team works.':'Send a message to the lead to start.'));feed.appendChild(empty)}
+  else items.forEach(item=>feed.appendChild(item.t==='act'?agentActivityNode(item):agentMessageNode(item.d)));
+ }else{
+  const fresh=a.feedQueue.splice(0).filter(agentItemVisible);
+  if(fresh.length){const empty=feed.querySelector('.ad-empty');if(empty)empty.remove();fresh.forEach(item=>feed.appendChild(item.t==='act'?agentActivityNode(item):agentMessageNode(item.d)));while(feed.children.length>400)feed.firstElementChild.remove()}
+ }
+ if(visible){if(a.focusTop&&full&&a.selected){body.scrollTop=0;a.focusTop=false;$('adJump').classList.toggle('show',body.scrollHeight>body.clientHeight+90)}else{if(near)body.scrollTop=body.scrollHeight;$('adJump').classList.toggle('show',!near&&!full)}}
+}
+function renderMsgs(full){
+ const a=state.agent,feed=$('adMsgs'),body=$('adBody');const near=agentNear(body)||full;
+ const make=d=>agentMessageNode(d);
+ if(full){feed.replaceChildren();a.msgQueue=[];
+  if(!a.msgs.length){const empty=agEl('div','ad-empty');empty.append(agEl('b','','No messages yet'),agEl('span','','Messages between you, the lead and the agents show up here.'));feed.appendChild(empty)}
+  else a.msgs.slice(-200).forEach(d=>feed.appendChild(make(d)))}
+ else{const fresh=a.msgQueue.splice(0);if(fresh.length){const empty=feed.querySelector('.ad-empty');if(empty)empty.remove();fresh.forEach(d=>feed.appendChild(make(d)));while(feed.children.length>300)feed.firstElementChild.remove()}}
+ $('adNMsg').textContent=String(a.msgs.length);
+ if(a.tab==='messages'&&near)body.scrollTop=body.scrollHeight;
+}
+function renderFocus(){
+ const a=state.agent,host=$('adFocus');host.replaceChildren();
+ const ag=a.selected&&a.agents.get(a.selected);if(!ag){a.selected='';return}
+ const card=agEl('div','ad-focus');agTint(card,ag.name);
+ const head=agEl('div','ad-focus-head'),title=agEl('strong','',ag.name+' · '+(ag.role||'')),clear=agEl('button','ad-btn small','Show all');clear.type='button';
+ clear.onclick=()=>agentSelect('');head.append(title,clear);card.appendChild(head);
+ const dl=agEl('dl');const row=(k,v,c)=>{if(!v)return;const dd=agEl('dd',c||'',v);dd.title=v;dl.append(agEl('dt','',k),dd)};
+ row('Task',ag.task);row('Status',(AG_STATUS[ag.status]||ag.status)+(ag.current&&!['idle','stopped'].includes(ag.status)?' · '+ag.current:''),'one');
+ if(ag.blocked)row('Blocked',ag.blocked);
+ if(ag.summary&&!ag.summary.startsWith('BLOCKED'))row('Last report',ag.summary);
+ if(ag.files&&ag.files.length)row('Files',ag.files.join(', '),'one');
+ card.appendChild(dl);
+ const entries=[...(a.entries.get(ag.name)||new Map()).values()].filter(e=>e.text&&e.text.trim()).slice(-14);
+ const det=agEl('details');det.open=a.rawOpen;det.ontoggle=()=>{a.rawOpen=det.open};
+ det.appendChild(agEl('summary','','Live output ('+entries.length+')'));
+ const raw=agEl('div','ad-raw');
+ if(!entries.length)raw.appendChild(agEl('div','','Nothing yet.'));
+ entries.forEach(e=>{const box=agEl('div','k-'+e.kind);box.appendChild(agEl('small','',e.kind==='output'?'reply':e.kind));box.appendChild(document.createTextNode(String(e.text).slice(-1800)));raw.appendChild(box)});
+ det.appendChild(raw);card.appendChild(det);host.appendChild(card);
+}
+
+/* ---------- render: plan, notes, files, strip ---------- */
+function renderPlan(){
+ const a=state.agent,plan=$('adPlan'),notes=$('adNotes');plan.replaceChildren();notes.replaceChildren();
+ plan.appendChild(agEl('div','ad-h','Plan'));
+ const lines=String(a.plan||'').split('\n').map(x=>x.trimEnd()).filter(x=>x.trim());
+ if(!lines.length)plan.appendChild(agEl('div','ad-empty','The lead has not written a plan yet.'));
+ else{const ul=agEl('ul','ad-plan');lines.forEach(line=>{const m=line.match(/^\s*(?:[-*]|\d+[.)])\s*(?:\[( |x|X)\]\s*)?(.*)$/);const li=agEl('li');const box=agEl('i','','✓');
+  const textValue=(m?m[2]:line).trim();const done=!!(m&&m[1]&&m[1].toLowerCase()==='x')||/\((?:done|complete|completed|finished)\)|\bstatus:\s*(?:done|complete)/i.test(textValue);
+  if(done)li.className='done';li.append(box,agEl('span','',textValue));ul.appendChild(li)});plan.appendChild(ul)}
+ notes.appendChild(agEl('div','ad-h','Shared notes'));
+ const keys=Object.keys(a.notes||{});
+ if(!keys.length)notes.appendChild(agEl('div','ad-empty','No shared notes yet.'));
+ keys.forEach(key=>{const n=a.notes[key],box=agEl('div','ad-note');const t=agEl('b','',key);const by=agEl('small','','by '+(n.by||''));box.append(t,by,agEl('p','',n.value||''));notes.appendChild(box)});
+}
+function renderFiles(){
+ const a=state.agent,host=$('adFiles');host.replaceChildren();
+ const rows=[...a.files.values()].sort((x,y)=>y.ts-x.ts);$('adNFiles').textContent=String(rows.length);
+ if(!rows.length){const empty=agEl('div','ad-empty');empty.append(agEl('b','','No files written yet'),agEl('span','','Files the team creates show up here.'));host.appendChild(empty);return}
+ rows.forEach(f=>{const r=agEl('div','ad-file'),ic=agEl('span','ad-ic'),main=agEl('div'),name=agEl('strong','',f.path);name.title=f.path;ic.innerHTML=agIcon('file');agTint(r,f.by);
+  const sub=agEl('small','');sub.append(agEl('span','ad-who',f.by||'team'),document.createTextNode(' · '+agClock(f.ts)));main.append(name,sub);r.append(ic,main,agEl('span','sz',agSize(f.size)));host.appendChild(r)});
+}
+function renderStrip(){
+ const a=state.agent,strip=$('agentStrip');if(!a||!agentVisible())return;
+ const dots=$('agentStripDots');dots.replaceChildren();
+ [...a.agents.values()].filter(x=>x.status!=='retired').slice(0,5).forEach(ag=>{const dot=agEl('i',AG_ACTIVE.includes(ag.status)||ag.status==='orchestrating'?'working':'');agTint(dot,ag.name);dots.appendChild(dot)});
+ const o=agentOverall(),c=agentCounts(),t=$('agentStripText');t.replaceChildren();
+ t.appendChild(agEl('b','',a.approvals.size?'Approval needed':o.tone==='done'?'Finished':a.running?'Team working':'Team stopped'));
+ const bits=[];if(c.total){bits.push(c.done+'/'+c.total+' done');if(c.work)bits.push(c.work+' working');if(c.block)bits.push(c.block+' blocked')}
+ if(bits.length)t.appendChild(agEl('em','',' · '+bits.join(' · ')));
+ strip.classList.toggle('attn',a.approvals.size>0||c.block>0);
+}
+function agentSetTab(tab){
+ const a=state.agent;a.tab=tab;
+ document.querySelectorAll('#adTabs button').forEach(b=>{const on=b.dataset.tab===tab;b.classList.toggle('on',on);b.setAttribute('aria-selected',on?'true':'false')});
+ $('adPaneActivity').hidden=tab!=='activity';$('adPaneMessages').hidden=tab!=='messages';$('adPanePlan').hidden=tab!=='plan';$('adPaneFiles').hidden=tab!=='files';
+ const body=$('adBody');if(tab==='activity'||tab==='messages')requestAnimationFrame(()=>{body.scrollTop=body.scrollHeight});
+}
+function agentRender(){
+ const a=state.agent;if(!a)return;a.raf=0;const d=a.dirty;a.dirty={};
+ agentSyncPanel();
+ if(d.head)renderHead();if(d.banners)renderBanners();if(d.roster)renderRoster();if(d.focus)renderFocus();
+ if(d.feed)renderFeed(!!d.feedFull);if(d.msgs)renderMsgs(!!d.msgsFull);if(d.plan)renderPlan();if(d.files)renderFiles();if(d.strip)renderStrip();
+}
+function agentTickRender(){
+ const a=state.agent;if(!a||!a.exists)return;
+ renderStatusLine();
+ if(a.cdNode){const left=Math.ceil(a.cooldown-agNow());if(left>0)a.cdNode.textContent='All agents pause and retry automatically in '+left+'s.';else agentDirty('banners')}
+ document.querySelectorAll('#adRoster .ag-ago').forEach(el=>{if(el.dataset.ts)el.textContent='reported '+agAgo(Number(el.dataset.ts))});
+}
+
+/* ---------- data in ---------- */
+function agentUpsertAgent(ag){
+ if(!ag||!ag.name)return;const a=state.agent,prev=a.agents.get(ag.name);
+ const merged=Object.assign({},prev||{},ag);if(ag.entries===undefined&&prev)merged.entries=prev.entries;a.agents.set(ag.name,merged);
+ if(ag.status==='retired'&&a.selected===ag.name)a.selected='';
+ agentDirty('head','roster','strip');if(a.selected===ag.name)agentDirty('focus');
+}
+function agentUpsertEntry(name,entry){
+ if(!entry||!entry.id)return;const a=state.agent;let map=a.entries.get(name);if(!map){map=new Map();a.entries.set(name,map)}
+ map.set(entry.id,entry);while(map.size>40)map.delete(map.keys().next().value);
+ if(a.selected===name&&a.rawOpen)agentDirty('focus');
+}
+function agentAddActivity(d){
+ if(!d||!d.id)return;const a=state.agent;if(a.timelineIds.has('a'+d.id))return;a.timelineIds.add('a'+d.id);
+ const item={t:'act',ts:d.ts,d};a.timeline.push(item);a.feedQueue.push(item);
+ while(a.timeline.length>600){const old=a.timeline.shift();a.timelineIds.delete((old.t==='act'?'a':'m')+old.d.id)}
+ if(d.kind==='finish'){a.finished=true}
+ agentDirty('feed');
+}
+function agentAddChannel(d){
+ if(!d||!d.id)return;const a=state.agent;if(a.timelineIds.has('m'+d.id))return;a.timelineIds.add('m'+d.id);
+ a.msgs.push(d);a.msgQueue.push(d);if(a.msgs.length>400)a.msgs.shift();
+ const item={t:'msg',ts:d.ts,d};a.timeline.push(item);a.feedQueue.push(item);
+ agentDirty('feed','msgs','strip');
+}
+function agentRenderChat(message){
+ if(!message||!message.message_id||state.agentSeen.has(message.message_id))return;
+ state.agentSeen.add(message.message_id);
+ if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
+ renderMessage(message.role,message.content,[],{model:message.model||null});follow=true;scrollEnd(true);
+}
+function agentApplySnapshot(s){
+ const a=state.agent;a.exists=true;a.running=!!s.running;a.finished=!!s.finished;a.finishSummary=s.finish_summary||'';a.continuous=!!s.continuous;a.idlePaused=!!s.idle_paused;
+ a.goal=s.goal||'';a.plan=s.plan||'';a.notes=s.notes||{};a.startedAt=s.started_at||0;if(s.now)a.skew=s.now-Date.now()/1000;
+ a.agents.clear();a.entries.clear();a.rows.forEach(row=>row.root.remove());a.rows.clear();
+ (s.agents||[]).forEach(ag=>{a.agents.set(ag.name,ag);const map=new Map();(ag.entries||[]).forEach(e=>map.set(e.id,e));a.entries.set(ag.name,map)});
+ a.timeline=[];a.timelineIds=new Set();a.feedQueue=[];a.msgQueue=[];a.msgs=[];
+ const items=[];(s.activity||[]).forEach(d=>items.push({t:'act',ts:d.ts,d}));(s.channel||[]).forEach(d=>items.push({t:'msg',ts:d.ts,d}));
+ items.sort((x,y)=>x.ts-y.ts).forEach(item=>{a.timeline.push(item);a.timelineIds.add((item.t==='act'?'a':'m')+item.d.id);if(item.t==='msg')a.msgs.push(item.d)});
+ a.files=new Map();(s.files||[]).forEach(f=>a.files.set(f.path,f));
+ a.approvals=new Map();(s.approvals||[]).forEach(x=>a.approvals.set(x.id,x));
+ a.cooldown=s.cooldown_until||0;a.reason=s.cooldown_reason||'';
+ if(a.selected&&!a.agents.has(a.selected))a.selected='';
+ (s.chat||[]).forEach(agentRenderChat);
+ a.dirty.feedFull=true;a.dirty.msgsFull=true;agentDirty('head','banners','roster','focus','feed','msgs','plan','files','strip');
+}
+function agentApplyEvent(event){
+ const a=state.agent;a.exists=true;
+ switch(event.type){
+  case 'entry':agentUpsertEntry(event.agent,event.entry);break;
+  case 'agent':agentUpsertAgent(event.agent);break;
+  case 'activity':agentAddActivity(event.item);break;
+  case 'channel':agentAddChannel(event.message);break;
+  case 'note':a.notes[event.key]=event.note;agentDirty('plan');break;
+  case 'plan':a.plan=event.plan||'';agentDirty('plan');break;
+  case 'file':a.files.set(event.file.path,event.file);agentDirty('files');break;
+  case 'chat':agentRenderChat(event.message);break;
+  case 'approval':a.approvals.set(event.approval.id,event.approval);agentDirty('banners','head','strip');break;
+  case 'approval_resolved':a.approvals.delete(event.id);agentDirty('banners','head','strip');break;
+  case 'mode':a.continuous=!!event.continuous;agentDirty('head');break;
+  case 'finished':a.finished=true;a.finishSummary=event.summary||'';agentDirty('banners','head','strip');break;
+  case 'state':
+   a.running=!!event.running;if(event.finished!==undefined)a.finished=!!event.finished;if(event.idle_paused!==undefined)a.idlePaused=!!event.idle_paused;
+   if(event.cooldown_until!==undefined){a.cooldown=event.cooldown_until;a.reason=event.cooldown_reason||''}
+   agentDirty('head','banners','roster','strip');break;
+ }
+}
+async function agentPoll(){
+ const a=state.agent;if(!state.chatId||!a||a.busyPoll)return;a.busyPoll=true;const chatId=state.chatId;
+ try{
+  const d=await api('/api/agent/poll?chat_id='+encodeURIComponent(chatId)+'&after='+a.seq+'&epoch='+encodeURIComponent(a.epoch));
+  if(chatId!==state.chatId||a!==state.agent)return;
+  if(d.now)a.skew=d.now-Date.now()/1000;
+  a.epoch=d.epoch||'';
+  if(d.snapshot){agentApplySnapshot(d.snapshot)}else if(d.snapshot===null){a.exists=false}
+  (d.events||[]).forEach(agentApplyEvent);
+  a.seq=d.seq||0;a.running=!!d.running;
+  if(d.finished!==undefined)a.finished=!!d.finished;if(d.continuous!==undefined&&!d.snapshot)a.continuous=!!d.continuous;if(d.idle_paused!==undefined)a.idlePaused=!!d.idle_paused;
+  if(d.cooldown_until!==undefined){a.cooldown=d.cooldown_until||0;a.reason=d.cooldown_reason||''}
+  agentDirty('head','strip');agentSyncPanel();
+  if(a.exists)ensureAgentTimer();else if(state.agentTimer){clearInterval(state.agentTimer);state.agentTimer=null}
+ }catch(error){}finally{a.busyPoll=false}
+}
+function ensureAgentTimer(){
+ if(!state.chatId||!state.agent||!state.agent.exists)return;
+ if(!state.agentTimer)state.agentTimer=setInterval(agentPoll,1000);
+ if(!state.agentTick)state.agentTick=setInterval(agentTickRender,1000);
+}
+function agentOnChatLoaded(data){
+ (data.messages||[]).forEach(message=>{if(message.message_id)state.agentSeen.add(message.message_id)});
+ if(data.agent_mode)setMode('agent',true);agentPoll();
+}
+async function sendAgent(text){
+ try{
+  if(state.pendingUploads.length){const uploaded=await attachFiles();if(!uploaded)return}
+  await ensureChat();
+  const messageId=crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2);
+  const route=$('topModel').value,a=state.agent;
+  $('prompt').value='';autosize();hint();updateSend();state.agentSeen.add(messageId);
+  if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
+  renderMessage('user',text,null,{attachments:(state.uploadedFiles||[]).map(item=>item.path)});follow=true;scrollEnd(true);
+  const payload={chat_id:state.chatId,text,route,message_id:messageId};
+  if(a.prefSet)payload.continuous=a.continuous;
+  try{await api('/api/agent/send',payload)}catch(error){$('prompt').value=text;autosize();updateSend();throw error}
+  a.exists=true;a.prefSet=false;agentSyncPanel();ensureAgentTimer();await agentPoll();refreshChats().catch(()=>{});
+ }catch(error){toast(error.message)}
+}
+
+/* ---------- wiring ---------- */
 document.querySelectorAll('#modeToggle button').forEach(button=>{button.onclick=()=>setMode(button.dataset.mode)});
-$('agentStop').onclick=async()=>{try{await api('/api/agent/stop',{chat_id:state.chatId});toast('Agent stopped');agentPoll()}catch(error){toast(error.message)}};
-$('agentCollapse').onclick=()=>{state.agent.collapsed=!state.agent.collapsed;agentSyncPanel()};
-document.querySelectorAll('#agentTabs button').forEach(button=>{button.onclick=()=>{state.agent.tab=button.dataset.tab;document.querySelectorAll('#agentTabs button').forEach(b=>b.classList.toggle('on',b===button));$('agentPaneTeam').hidden=button.dataset.tab!=='team';$('agentPaneChannel').hidden=button.dataset.tab!=='channel';$('agentPaneNotes').hidden=button.dataset.tab!=='notes'}});
+$('agentStop').onclick=async()=>{try{await api('/api/agent/stop',{chat_id:state.chatId});toast('Agent team stopped');agentPoll()}catch(error){toast(error.message)}};
+$('adContinuous').onchange=async event=>{
+ const a=state.agent,value=event.target.checked;a.continuous=value;a.prefSet=true;agentDirty('head');
+ if(state.chatId&&a.exists){try{await api('/api/agent/mode',{chat_id:state.chatId,continuous:value});a.prefSet=false;agentPoll()}catch(error){toast(error.message)}}
+};
+$('adGoal').onclick=()=>{const a=state.agent;a.goalOpen=!a.goalOpen;agentDirty('head')};
+$('adTabs').onclick=event=>{const b=event.target.closest('button[data-tab]');if(b)agentSetTab(b.dataset.tab)};
+$('adBody').addEventListener('scroll',()=>{const body=$('adBody');if(agentNear(body))$('adJump').classList.remove('show')});
+$('adJump').onclick=()=>{const body=$('adBody');body.scrollTop=body.scrollHeight;$('adJump').classList.remove('show')};
+$('agentStrip').onclick=()=>{state.agent.open=true;agentSyncPanel()};
+$('adClose').onclick=()=>{state.agent.open=false;agentSyncPanel()};
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&state.agent&&state.agent.open){state.agent.open=false;agentSyncPanel()}});
 agentReset();
 try{if(localStorage.getItem('kurt_mode')==='agent')setMode('agent',true)}catch(error){}
 $('messages').addEventListener('scroll',()=>{const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});$('toBottom').onclick=()=>{follow=true;scrollEnd(true);$('toBottom').classList.remove('show')};
@@ -5619,11 +6115,11 @@ class KurtWebApp:
             K.PROVIDER_KEYS[:] = [selected]
         return model
 
-    def agent_stream(self, candidate, messages, max_tokens=4096, think=True):
+    def agent_stream(self, candidate, messages, max_tokens=4096, think=True, temperature=0.2):
         with self._agent_apply_lock:
             model = self.agent_apply_route(candidate)
             stream = K.stream_chat(
-                messages, model=model, think=think, temperature=0.3,
+                messages, model=model, think=think, temperature=temperature,
                 max_tokens=max_tokens, reasoning_effort="medium",
             )
         try:
@@ -6204,6 +6700,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._agent_send(data)
             elif parsed.path == "/api/agent/stop":
                 self._json(self.app.agent_manager.stop(str(data.get("chat_id") or "")))
+            elif parsed.path == "/api/agent/mode":
+                self._json(self.app.agent_manager.set_continuous(str(data.get("chat_id") or ""), bool(data.get("continuous"))))
             elif parsed.path == "/api/chat":
                 self._chat(data)
             else:
@@ -6771,7 +7269,9 @@ class Handler(BaseHTTPRequestHandler):
         chat["route"] = route_info["route"]
         chat["model"] = route_info["model"]
         message_id = str(data.get("message_id") or "").strip()[:100]
-        self._json(self.app.agent_manager.send(chat_id, text, route_info, message_id))
+        continuous = data.get("continuous")
+        continuous = continuous if isinstance(continuous, bool) else None
+        self._json(self.app.agent_manager.send(chat_id, text, route_info, message_id, continuous))
 
     def _chat(self, data):
         chat_id = str(data.get("chat_id") or "")
