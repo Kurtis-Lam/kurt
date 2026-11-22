@@ -3133,7 +3133,7 @@ async function ensureChat(initialMessage){
  return state.chatId;
 }
 async function newChat(){cancelRun();agentReset();state.chatId=null;state.linkedFolder='';hint();state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();agentReset();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.linkedFolder=data.linked_folder||'';if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null,attachments:message.attachments||[],media:message.media||[]}));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();agentOnChatLoaded(data);setTitle(data.title||'Conversation',[data.model||''].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
+async function loadChat(id){cancelRun();agentReset();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.linkedFolder=data.linked_folder||'';if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=context.items||[]}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>agentLabelMessage(renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null,attachments:message.attachments||[],media:message.media||[]}),message));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();agentOnChatLoaded(data);setTitle(data.title||'Conversation',[data.model||''].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
 async function linkFolderFromMessage(text){
  const intent=/\b(?:link|connect)\s+(?:this\s+)?(?:session|chat|workspace)\s+to\b/i.test(text);
  if(!intent)return false;
@@ -3503,11 +3503,12 @@ function agentAddChannel(d){
  const item={t:'msg',ts:d.ts,d};a.timeline.push(item);a.feedQueue.push(item);
  agentDirty('feed','msgs','strip');
 }
+function agentLabelMessage(node,message){if(node&&message&&message.agent&&message.role==='assistant'){const label=node.querySelector('.assistant-heading span');if(label)label.textContent=message.agent;node.classList.add('from-agent')}return node}
 function agentRenderChat(message){
  if(!message||!message.message_id||state.agentSeen.has(message.message_id))return;
  state.agentSeen.add(message.message_id);
  if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
- renderMessage(message.role,message.content,[],{model:message.model||null});follow=true;scrollEnd(true);
+ agentLabelMessage(renderMessage(message.role,message.content,[],{model:message.model||null}),message);follow=true;scrollEnd(true);
 }
 function agentApplySnapshot(s){
  const a=state.agent;a.exists=true;a.running=!!s.running;a.finished=!!s.finished;a.finishSummary=s.finish_summary||'';a.continuous=!!s.continuous;a.idlePaused=!!s.idle_paused;
@@ -5699,12 +5700,12 @@ class KurtWebApp:
         """Only built when a command actually needs it; waits for a background prewarm if one is running."""
         return self.prewarm_chat_environment(chat_id, with_pip=with_pip).result()
 
-    def run_command(self, chat_id, command, timeout=120):
+    def run_command(self, chat_id, command, timeout=120, tty=None):
         private_workspace = self.chat_workspace(chat_id)
         env_root = self.ensure_chat_environment(chat_id, with_pip=self._command_needs_pip(command))
         active_root = self.chat_work_root(chat_id)
         return run_workspace_command(
-            private_workspace, env_root, command, timeout=timeout,
+            private_workspace, env_root, command, timeout=timeout, tty=tty,
             working_directory=active_root,
             writable_roots=[private_workspace, active_root, env_root,
                             private_workspace / ".tmp", private_workspace / ".home", Path.home()],
