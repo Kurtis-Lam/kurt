@@ -127,6 +127,11 @@ def clip(text, limit):
     return text[:limit] + "\n… [truncated {} characters]".format(len(text) - limit)
 
 
+def _short(text, limit):
+    flat = " ".join(str(text or "").split())
+    return flat if len(flat) <= limit else flat[:limit - 1].rstrip() + "\u2026"
+
+
 def clip_tail(text, limit):
     text = str(text or "")
     if len(text) <= limit:
@@ -1821,7 +1826,7 @@ class AgentSwarm:
         for member in members:
             if member.summary:
                 reports.append("- {}{}: {}".format(member.name, " ({})".format(member.last_result) if member.last_result else "",
-                                                   clip(member.summary, 220).replace("\n", " ")))
+                                                   _short(member.summary, 220)))
         if reports:
             lines.append("Team reports:")
             lines.extend(reports)
