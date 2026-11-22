@@ -1,10 +1,27 @@
 """Kurt agent mode.
 
-An always-on lead agent orchestrates a team of subagents that share one
-context (a channel, shared notes, and a plan). Everything runs in background
-threads, keeps going until stopped, retries failed or rate-limited model calls
-after one minute, and stays reachable: the user can message the lead at any
-time and receive an answer while the team keeps working.
+A lead agent orchestrates a team of subagents that share one context (a
+channel, shared notes, a plan and a live list of the files in the workspace).
+Everything runs in background threads, retries failed or rate-limited model
+calls after one minute, and stays reachable: the user can message the lead at
+any time and receive an answer while the team keeps working.
+
+Runs are finite by default: the lead ends the run with FINISH once the goal is
+met and verified. Continuous mode (a switch in the UI, or the user asking for
+it in words) keeps the team working until the user stops it.
+
+Guard rails enforced by code, not just by prompts:
+
+* runaway or repeating model output is detected while it streams, aborted,
+  discarded and retried with a correction;
+* tool results written by the model itself are cut off and never executed;
+* DONE needs evidence (real tool use) and may not cite files that do not exist;
+* an existing file cannot be overwritten before the agent has read it;
+* agents may only read inside the project workspace;
+* duplicate, flooding and ping-pong messages are suppressed;
+* repeated identical actions are flagged, then the agent is marked BLOCKED;
+* FINISH is refused while teammates work or before the final state has been
+  verified by someone other than its author.
 
 The module uses only the Python standard library. All Kurt services (model
 routing, workspace files, commands, approvals, usage) are reached through the
@@ -13,17 +30,20 @@ routing, workspace files, commands, approvals, usage) are reached through the
 
 import difflib
 import hashlib
+import os
 import re
 import threading
 import time
 import uuid
-from collections import deque
+from collections import deque, namedtuple
+from pathlib import Path
 
 RETRY_SECONDS = 60
 MAX_SUBAGENTS = 8
 MAX_EVENTS = 4000
 MAX_CHANNEL = 400
 MAX_ENTRIES = 80
+MAX_ACTIVITY = 800
 MAX_HISTORY = 14
 MAX_TOOL_ROUNDS = 30
 LEAD_TOOL_ROUNDS = 6
@@ -36,15 +56,57 @@ READ_LIMIT = 30000
 EVENT_TEXT_LIMIT = 6000
 PERSIST_INTERVAL = 3.0
 
+MAX_ACTIONS_PER_TURN = 8
+MAX_DEGENERATE_STRIKES = 3
+MAX_NUDGES = 2
+MAX_REPEAT_ACTIONS = 3
+MAX_LOOP_WARNINGS = 2
+MAX_DONE_REJECTS = 2
+MAX_FINISH_REJECTS = 3
+REASONING_CHAR_LIMIT = 24000
+POST_WINDOW = 60.0
+POST_LIMIT = 8
+PINGPONG_LIMIT = 6
+DUPLICATE_RATIO = 0.88
+STALL_SECONDS = 420
+IDLE_REVIEW_LIMIT = 3
+FILE_SCAN_LIMIT = 400
+FILE_LIST_LIMIT = 60
+SCAN_DEPTH = 5
+DEFAULT_TEMPERATURE = 0.2
+RETRY_TEMPERATURE = 0.55
+
 THINK_TAG_RE = re.compile(r"<(/)?think(?:ing)?>", re.I)
 STRAY_CLOSE_RE = re.compile(r"</think(?:ing)?>", re.I)
 RATE_LIMIT_RE = re.compile(r"429|rate.?limit|quota|overload|too many|capacity|throttl", re.I)
 BLOCK_START_RE = re.compile(r"^\s*@@@\s*([A-Za-z_]+)\b[ \t]*(.*)$")
 BLOCK_END_RE = re.compile(r"^\s*@@@\s*END\b", re.I)
-VERBS = {"SPAWN", "ASSIGN", "RETIRE", "PLAN", "WAIT", "SAY", "NOTE", "DONE",
+VERBS = {"SPAWN", "ASSIGN", "RETIRE", "PLAN", "WAIT", "SAY", "NOTE", "DONE", "BLOCKED", "FINISH",
          "READ", "LIST", "WRITE", "RUN", "SEARCH"}
-LEAD_ONLY = {"SPAWN", "ASSIGN", "RETIRE", "PLAN", "WAIT"}
+LEAD_ONLY = {"SPAWN", "ASSIGN", "RETIRE", "PLAN", "WAIT", "FINISH"}
+WORKER_ONLY = {"DONE", "BLOCKED"}
 TOOL_VERBS = {"READ", "LIST", "WRITE", "RUN", "SEARCH"}
+WORKING_STATES = ("working", "waiting", "retrying")
+
+FABRICATED_RE = re.compile(
+    r"^\s*(?:TOOL\s+RESULTS?\s*:|NEW\s+MESSAGES\s+FOR\s+YOU\s*:|SHARED\s+CONTEXT\b|</?(?:tool_response|tool_result|function_results?)>"
+    r"|\[(?:READ|LIST)\s+\S"
+    r"|\[(?:READ|LIST|WRITE|RUN|SEARCH|SPAWN|ASSIGN|RETIRE|DONE|BLOCKED|FINISH|SAY|NOTE|PLAN|WAIT)\s+"
+    r"(?:result|results|ok|succeeded|failed|rejected|declined|held|suppressed|ignored|for:)\b)",
+    re.I)
+RESULT_RE = re.compile(r"^\W*RESULT\s*:\s*(PASS|FAIL|PARTIAL)\b", re.I | re.M)
+
+CONTINUOUS_ON_RE = re.compile(
+    r"\b(?:run|runs|running|work|works|working|operate|keep\s+(?:going|working|running)|go\s+on|stay\s+(?:on|running|active))\b"
+    r"[^.\n]{0,25}?\b(?:continuous(?:ly)?|non-?stop|forever|indefinitely|24\s*/\s*7)\b"
+    r"|\b(?:continuous(?:ly)?|non-?stop|always[- ]on)\s+(?:mode|agents?|run|running)\b"
+    r"|\bnever\s+stop\b|\buntil\s+i\s+(?:tell|ask|say|stop)\b", re.I)
+CONTINUOUS_OFF_RE = re.compile(
+    r"\b(?:stop\s+when\s+(?:it\s+is\s+|it'?s\s+|you\s+are\s+|you'?re\s+)?(?:done|finished|complete)"
+    r"|(?:turn|switch)\s+off\s+continuous|not\s+continuous|stop\s+continuous|no\s+longer\s+continuous"
+    r"|finish\s+and\s+stop)\b", re.I)
+
+Action = namedtuple("Action", "verb args body closed")
 
 
 class StopRequested(Exception):
@@ -69,6 +131,19 @@ def slug(value, fallback="agent"):
     value = re.sub(r"[^A-Za-z0-9_-]+", "-", str(value or "").strip()).strip("-_")
     return (value or fallback)[:24]
 
+
+def detect_continuous(text):
+    """True or False when the user clearly asks for (or against) continuous running, else None."""
+    text = str(text or "")
+    on, off = bool(CONTINUOUS_ON_RE.search(text)), bool(CONTINUOUS_OFF_RE.search(text))
+    if on == off:
+        return None
+    return on
+
+
+# ---------------------------------------------------------------------------
+# Parsing model output
+# ---------------------------------------------------------------------------
 
 FUNC_CALL_RE = re.compile(r"<function=\s*([A-Za-z_][\w.-]*)\s*>(.*?)(?:</function>|\Z)", re.S | re.I)
 FUNC_PARAM_RE = re.compile(r"<parameter=\s*([A-Za-z_][\w.-]*)\s*>\s*(.*?)\s*(?:</parameter>|(?=<parameter=)|\Z)", re.S | re.I)
@@ -127,7 +202,7 @@ def _function_to_block(name, raw_params):
         args, body = _oneline(_param(params, "target")) or "all", _param(params, "message")
     elif verb == "NOTE":
         args, body = _oneline(_param(params, "key")), _param(params, "note")
-    elif verb == "DONE":
+    elif verb in ("DONE", "BLOCKED", "FINISH"):
         args, body = "", _param(params, "summary")
     elif verb == "SPAWN":
         name_value = _oneline(_param(params, "name")) or "agent"
@@ -158,10 +233,12 @@ def normalize_function_calls(text):
 
 
 def strip_markup(text):
-    """Remove leftover tool-call tags and stray @@@ lines from text meant for people."""
+    """Remove leftover tool-call tags, empty code fences and stray @@@ lines from text meant for people."""
     text = WRAPPER_TAG_RE.sub("", str(text or ""))
     lines = [line for line in text.split("\n") if not BLOCK_END_RE.match(line)]
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    text = "\n".join(lines)
+    text = re.sub(r"```[A-Za-z0-9_-]*[ \t]*\n?\s*```", "", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def _bare_opener(lines, index):
@@ -177,11 +254,27 @@ def _bare_opener(lines, index):
     return None
 
 
-def parse_actions(text):
-    """Split model output into (prose, [(verb, args, body)])."""
+class Turn:
+    """One parsed model reply."""
+
+    def __init__(self, prose, actions, fabricated, clean):
+        self.prose = prose
+        self.actions = actions
+        self.fabricated = fabricated
+        self.clean = clean
+
+
+def parse_turn(text):
+    """Split a model reply into commentary, action blocks and fabricated-result detection.
+
+    Everything after a line that imitates a tool result is invented by the model: it is cut off,
+    so neither the fake result nor any action that depends on it is ever executed.
+    """
     lines = normalize_function_calls(text).split("\n")
     prose, actions = [], []
+    fabricated = False
     index = 0
+    cut = len(lines)
     while index < len(lines):
         match = BLOCK_START_RE.match(lines[index])
         verb = args = None
@@ -192,28 +285,160 @@ def parse_actions(text):
             if bare:
                 verb, args = bare
         if verb:
-            body = []
+            body, closed = [], False
             index += 1
             while index < len(lines):
                 if BLOCK_END_RE.match(lines[index]):
                     index += 1
+                    closed = True
                     break
                 nxt = BLOCK_START_RE.match(lines[index])
                 if nxt and nxt.group(1).upper() in VERBS:
+                    closed = True
                     break
                 body.append(lines[index])
                 index += 1
-            actions.append((verb, args, "\n".join(body)))
+            actions.append(Action(verb, args, "\n".join(body), closed))
+        elif FABRICATED_RE.match(lines[index]):
+            fabricated = True
+            cut = index
+            break
         else:
             prose.append(lines[index])
             index += 1
-    return strip_markup("\n".join(prose)), actions
+    return Turn(strip_markup("\n".join(prose)), actions, fabricated, "\n".join(lines[:cut]).strip())
 
 
-def strip_fence(body):
-    stripped = body.strip("\n")
-    match = re.match(r"^```[^\n]*\n(.*)\n```\s*$", stripped, re.S)
-    return match.group(1) if match else body
+def parse_actions(text):
+    """Split model output into (prose, [(verb, args, body)])."""
+    turn = parse_turn(text)
+    return turn.prose, [(item.verb, item.args, item.body) for item in turn.actions]
+
+
+def display_text(raw):
+    """What a person should read of a model reply: the commentary, never action blocks or tool tags."""
+    return parse_turn(raw).prose
+
+
+LIVE_LABELS = {
+    "WRITE": "Writing {a}", "READ": "Reading {a}", "LIST": "Listing {a}", "RUN": "Preparing a command",
+    "SEARCH": "Searching the web", "SAY": "Messaging {a}", "NOTE": "Writing a note", "DONE": "Writing the report",
+    "BLOCKED": "Reporting a blocker", "PLAN": "Updating the plan", "SPAWN": "Setting up {a}",
+    "ASSIGN": "Briefing {a}", "RETIRE": "Retiring {a}", "WAIT": "Waiting", "FINISH": "Writing the final summary",
+}
+
+
+def live_activity(raw):
+    """Describe the action block a model is still streaming, for the 'now' line of the UI."""
+    open_block = None
+    for line in normalize_function_calls(raw).split("\n"):
+        match = BLOCK_START_RE.match(line)
+        if match and match.group(1).upper() in VERBS:
+            open_block = (match.group(1).upper(), match.group(2).strip())
+        elif BLOCK_END_RE.match(line):
+            open_block = None
+    if not open_block:
+        return ""
+    verb, args = open_block
+    subject = clip(args.split("|")[0].strip() or "…", 60)
+    return LIVE_LABELS.get(verb, verb.title()).format(a=subject)
+
+
+# ---------------------------------------------------------------------------
+# Degenerate output detection
+# ---------------------------------------------------------------------------
+
+_INLINE_RE = re.compile(r"(.{2,160}?)\1{7,}", re.S)
+_RUN_RE = re.compile(r"(\S)\1{199,}")
+
+
+def _line_loop(text):
+    lines = text.split("\n")
+    usable = lines[:-1]
+    count = len(usable)
+    if count < 2:
+        return None
+    offsets, pos = [], 0
+    for line in usable:
+        offsets.append(pos)
+        pos += len(line) + 1
+    for period in (1, 2, 3, 4):
+        if count < period * 2:
+            continue
+        block = usable[count - period:]
+        index = count - period
+        repeats = 1
+        while index - period >= 0 and usable[index - period:index] == block:
+            repeats += 1
+            index -= period
+        size = sum(len(line) + 1 for line in block)
+        if not any(line.strip() for line in block):
+            hit = repeats * period >= 40
+        elif size <= 4:
+            hit = repeats >= 100
+        else:
+            hit = repeats >= 6 and repeats * size >= 240
+        if hit:
+            return offsets[index]
+    return None
+
+
+def _inline_loop(text):
+    window = text[-900:]
+    base = len(text) - len(window)
+    best = None
+    run = _RUN_RE.search(window)
+    if run:
+        best = run.start()
+    if "\n" not in window[-300:]:
+        for match in _INLINE_RE.finditer(window):
+            if len(match.group(0)) >= 240:
+                best = match.start() if best is None else min(best, match.start())
+                break
+    return None if best is None else base + best
+
+
+def find_loop(text):
+    """Offset in text where a degenerate repeating run begins, or None."""
+    found = [value for value in (_line_loop(text), _inline_loop(text)) if value is not None]
+    return min(found) if found else None
+
+
+class LoopGuard:
+    """Watches a stream of text and trips once it degenerates into endless repetition."""
+
+    TAIL = 2400
+    STEP = 120
+
+    def __init__(self):
+        self.tail = ""
+        self.total = 0
+        self.since = 0
+        self.start = None
+
+    def feed(self, chunk):
+        if self.start is not None:
+            return True
+        self.tail = (self.tail + chunk)[-self.TAIL:]
+        self.total += len(chunk)
+        self.since += len(chunk)
+        if self.since < self.STEP:
+            return False
+        self.since = 0
+        offset = find_loop(self.tail)
+        if offset is None:
+            return False
+        self.start = max(0, self.total - len(self.tail) + offset)
+        return True
+
+
+class Generation(tuple):
+    """(reasoning, answer) plus a ``degenerate`` flag naming the stream that looped, if any."""
+
+    def __new__(cls, reasoning, answer, degenerate=""):
+        obj = super().__new__(cls, (reasoning, answer))
+        obj.degenerate = degenerate
+        return obj
 
 
 def split_stray_think(reasoning, answer):
@@ -256,6 +481,36 @@ class ThinkSplitter:
             break
         return out
 
+
+# ---------------------------------------------------------------------------
+# Claims about files
+# ---------------------------------------------------------------------------
+
+CLAIM_FILE_RE = re.compile(
+    r"(?<![\w/.:\\-])((?:[\w.-]+/)*[\w-][\w.-]*\.(?:py|js|jsx|mjs|ts|tsx|html|htm|css|scss|json|md|txt|sh|bat|java|c|cc|cpp|h|hpp|rs|go|rb|php|yml|yaml|toml|csv|sql|xml|svg|lua|cs|kt|swift))\b",
+    re.I)
+DOMAIN_RE = re.compile(r"\.(?:com|org|net|io|dev|app|ai|co|edu|gov|me|xyz)$", re.I)
+KNOWN_LIBS = {"node", "three", "p5", "d3", "vue", "react", "next", "express", "chart", "phaser", "pixi", "jquery",
+              "angular", "svelte", "nuxt", "backbone", "ember", "alpine", "htmx", "lodash", "moment", "anime", "gsap",
+              "tone", "howler", "matter", "babylon", "konva", "fabric", "leaflet", "mocha", "jest", "socket"}
+
+
+def claimed_files(text):
+    names = []
+    for match in CLAIM_FILE_RE.finditer(str(text or "")):
+        name = match.group(1)
+        first = name.split("/")[0]
+        if "/" in name and DOMAIN_RE.search(first):
+            continue
+        if "/" not in name and name.rsplit(".", 1)[0].lower() in KNOWN_LIBS:
+            continue
+        names.append(name)
+    return list(dict.fromkeys(names))
+
+
+# ---------------------------------------------------------------------------
+# Model gate
+# ---------------------------------------------------------------------------
 
 class ModelGate:
     """Lets many agent threads generate at once while holding the app's model lock.
@@ -325,6 +580,10 @@ class ModelGate:
                 self.model_lock.release()
 
 
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
+
 COMMON_SYNTAX = """
 ACTION BLOCKS
 You act by writing action blocks. A block looks like this:
@@ -332,53 +591,80 @@ You act by writing action blocks. A block looks like this:
 optional body
 @@@ END
 Use ONLY this @@@ block format. Never write <function=...>, <parameter=...>, <tool_call>, JSON tool calls or any other tag-based call; they are not executed. Every block starts with @@@ VERB and ends with @@@ END.
-Plain text outside blocks is your private running commentary; it appears in your own panel and is delivered to no one. To tell anyone anything, use SAY.
+Plain text outside blocks is a one-line private note that appears in your own panel and is delivered to no one. To tell anyone anything, use SAY. Keep notes to a sentence or two.
 
 Verbs available to every agent:
-- SAY <target>   Body is the message. Targets: lead, all, a teammate's name{user_target}. Every message is visible to the whole team and to the user.
+- SAY <target>   Body is the message. Targets: lead, all, a teammate's name{user_target}. Every message is visible to the whole team and to the user. Send one only when you need something or have a result worth sharing; no greetings, thanks or acknowledgements.
 - NOTE <key>     Body is a fact, decision, interface contract, file map or result to keep in the shared notes that every teammate reads. Reusing a key overwrites it. Keep notes short and current.
-- READ <path>    Read a text file (or list a folder). Relative paths resolve inside the shared project workspace.
+- READ <path>    Read a text file. Paths resolve inside the project workspace.
 - LIST <path>    List a folder. An empty path lists the project workspace.
 - SEARCH <query> Search the web.
-- WRITE <path>   Body is the complete new content of the file. Paths are relative to the shared project workspace.
-- RUN            Body is one shell command, run in the shared project workspace.
-Tool results come back in the next message. Never claim a file was saved or a command succeeded until its result says so. File changes and commands that change state may wait for the human's approval; keep working on other things or wait for the result.
-All agents work in the same project workspace, so coordinate who owns which file before writing and read a file again before editing it.
+- WRITE <path>   Body is the complete new content of the file. Paths are relative to the project workspace. An existing file must be READ by you first.
+- RUN            Body is one shell command, run in the project workspace.
+
+GROUND RULES (the system checks these and refuses or cuts off violations)
+- The WORKSPACE FILES list in the shared context is the live truth about what exists. Only read, edit or mention files that are listed there or that you have just written. Never invent file names, APIs, command output, test results or progress.
+- Results of READ, LIST, SEARCH, RUN and WRITE are produced only by the system and arrive in your next message. Never write a result yourself ("TOOL RESULTS", "[RUN result]", "[READ ...]"), never guess what a file contains or what a command printed, and never say an action worked before its result says so. Anything you write after a pretend result is cut off and ignored.
+- After your action blocks, stop and wait for the results. Send at most {max_actions} action blocks per reply, and do not repeat an action that already returned a result: use it or change approach.
+- Stay inside the project workspace. Do not search the rest of the computer for files.
+- If you do not know something, find out with READ, LIST or RUN. If you cannot find out, say so plainly instead of guessing.
 """
 
-LEAD_SYSTEM = """You are LEAD, the orchestrator of Kurt's autonomous agent team. You run continuously until the human stops you. You are always reachable: the human can message you at any moment, and you answer them first.
+MODE_FINITE = """8. FINISHING. This is a normal run: the team stops when the work is done. When the goal is met and verified (every deliverable is listed in WORKSPACE FILES, a teammate other than the author tested or reviewed the final state and reported RESULT: PASS, no open blockers) write FINISH with the final report. Do not invent extra work afterwards, and do not FINISH while any teammate is still working. The system checks these conditions and refuses an early FINISH; the FINISH CHECK line in the shared context shows whether you are ready."""
 
-Your job:
-1. Turn the human's goal into a plan (PLAN) and keep it current.
-2. Split the work across specialised subagents (SPAWN) with a clear role, mission and file ownership: for example logic, UI, tester, debugger, reviewer. Spawn only what the work needs, at most {max_agents} at once.
-3. Coordinate: answer their questions, resolve conflicts, hand out new work (ASSIGN), retire agents that are no longer useful (RETIRE), and record shared decisions with NOTE.
-4. Never declare the project finished for good. When a milestone is complete, define the next improvement: more tests, bug hunting, polish, performance, docs. If the team has nothing useful left to do, WAIT.
-5. Do not SAY user on every team message. Message the human only when they asked something, when a real milestone is reached or when you are blocked, and never repeat a status you already gave. When the human messages you, reply with SAY user using real facts from the live team state (who is doing what, what finished, what is blocked, what comes next). Be concrete and brief. If the message contains an instruction, act on it and tell them what you changed.
-6. Do the work through the team, not alone. Use READ, LIST, SEARCH and RUN only to inspect and verify.
+MODE_CONTINUOUS = """8. CONTINUOUS MODE. The human asked the team to keep running until they stop it. Never use FINISH. When a milestone is complete, define the next useful improvement (more tests, bug hunting, polish, performance, docs) and assign it. If there is truly nothing useful left to do, WAIT."""
+
+LEAD_SYSTEM = """You are LEAD, the orchestrator of Kurt's agent team. You are always reachable: the human can message you at any moment and you answer them first.
+
+The ONLY goal is the one under GOAL in the shared context. Everything the team does must serve it. Reject scope creep: no extra features, rewrites or side projects the human did not ask for.
+
+How you run the team:
+1. PLAN: turn the goal into a short ordered plan (3 to 7 steps, each with an owner and a status) and keep it current.
+2. SPAWN only the specialists the goal truly needs, usually 2 to 4 (hard limit {max_agents}). Each mission states the goal, the files the agent owns, the interfaces it must respect and its definition of done.
+3. Sequence dependent work. Do not start a tester or reviewer before there is something to test: spawn or ASSIGN them after the builder reports DONE, and give them the exact file names.
+4. React to reports. DONE reports start with RESULT: PASS, FAIL or PARTIAL and give evidence. Accept PASS only when the evidence is concrete (files written, command output, specific lines checked). A BLOCKED agent needs a decision from you: unblock it, reassign it or RETIRE it. Send failures back to the owner with ASSIGN.
+5. Verify with your own tools when it matters: LIST the workspace, READ the key files, RUN a check. Do not repeat a teammate's claim as fact until the live state (WORKSPACE FILES, team reports) supports it.
+6. Message the human (SAY user) only when they asked something, at a real milestone, or when you are blocked and need them. Answer with real facts from the live team state, briefly, and never repeat a status you already gave. If their message contains an instruction, act on it and say what you changed.
+7. Do the work through the team, not alone. Use READ, LIST, SEARCH and RUN only to inspect and verify.
+{mode_block}
 
 Lead-only verbs:
-- SPAWN <name> | <role>   Body is the agent's mission: goal, files it owns, interfaces it must respect, and how to report back.
+- SPAWN <name> | <role>   Body is the agent's mission: goal, files it owns, interfaces it must respect, definition of done, how to report back.
 - ASSIGN <name>           Body is a new instruction or task for an existing agent.
 - RETIRE <name>           Stop an agent permanently.
 - PLAN                    Body replaces the shared plan (a short ordered list with owners and status).
-- WAIT <seconds>          Sleep until the next review (5 to 900) unless something happens sooner. Use it when the team is busy and nothing needs you.
+- WAIT <seconds>          Sleep until the next review (5 to 900) unless a teammate reports sooner. Use it whenever the team is busy and nothing needs you.
+- FINISH                  Body is the final report for the human: what was built, where the files are, how it was verified, known limits. Ends the run (normal mode only).
 {syntax}"""
 
-AGENT_SYSTEM = """You are {name}, a subagent on Kurt's autonomous agent team. Your role: {role}.
-You work in parallel with teammates and share one context with them: the channel, the shared notes and the plan are shown below and everyone sees the same thing.
+AGENT_SYSTEM = """You are {name}, a subagent on Kurt's agent team. Your role: {role}.
+You work in parallel with teammates and share one context with them: the channel, the shared notes, the plan and the workspace file list are shown below and everyone sees the same thing.
+
+Stay on task. Your task is under YOUR CURRENT TASK in the shared context. Do that and nothing else: no unrelated work, no redesigning the project, no extra requirements, no wandering through other folders. If your task depends on something that does not exist yet, do not guess and do not search elsewhere: report BLOCKED and say what you are waiting for.
 
 How you work:
-- Do your assigned task fully with tools. Own your files; ask the owner (SAY <name>) before changing someone else's, and read the current file first.
-- Communicate with teammates directly and briefly when you need an interface, a decision, a review or a bug fixed. Report blockers to lead.
-- Publish contracts, file maps and key decisions with NOTE so teammates stay in sync.
-- When your task is complete, or you are blocked and cannot continue, finish with DONE and a short summary of what you did, which files you touched and what remains. The lead will give you more work.
-- Never talk to the human directly; report to lead.
-- Do not repeat yourself or chat for its own sake. If you have nothing to do, finish with DONE.
-Extra verb:
-- DONE   Body is your summary. Ends your current task.
+1. Look first. Check WORKSPACE FILES and READ what you depend on before you change anything.
+2. Work in small steps with tools. Own your files; ask the owner (SAY <name>) before changing someone else's.
+3. Verify your own work with tools (READ the file back, RUN a check) before you report. A claim without evidence is rejected.
+4. Publish contracts, file maps and key decisions with NOTE so teammates stay in sync.
+5. Report to lead, never to the human. Messages are short and only when you need something or have a result.
+
+Finishing your task (pick exactly one, in a reply of its own, after you have seen the results of your last action):
+- DONE    Body: first line "RESULT: PASS" (everything asked is complete and works), "RESULT: FAIL" (you found problems; list them) or "RESULT: PARTIAL". Then what you did, the files you touched and the evidence (commands run and what they printed, lines you checked). The system rejects DONE without real tool use and DONE that mentions files that do not exist.
+- BLOCKED Body: what stops you and exactly what you need. Use it when you cannot continue.
+Do not repeat yourself or chat for its own sake. If you have nothing to do, finish with DONE or BLOCKED.
+Extra verbs: DONE and BLOCKED, as described above.
 {syntax}"""
 
-QUICK_SYSTEM = """You are LEAD answering the human while your main orchestration loop is busy. Answer using only the live team state below. Be direct and concrete in 2 to 6 sentences: what is done, who is doing what, what is blocked, and what is next. If the human gave an instruction, say it has been passed to your orchestration loop. Do not use action blocks."""
+QUICK_SYSTEM = """You are LEAD answering the human while your main orchestration loop is busy. Answer using only the live team state below; never claim something is finished unless the state shows it. Be direct and concrete in 2 to 6 sentences: what is done, who is doing what, what is blocked, and what is next. If the human gave an instruction, say it has been passed to your orchestration loop. Do not use action blocks."""
+
+DEGENERATE_NOTICE = ("SYSTEM: your previous reply got stuck repeating the same text and was discarded; nothing in it was executed. "
+                     "Reply again with a short, fresh reply: one or two action blocks at most. If you were writing a long file, write a smaller first part.")
+FABRICATED_NOTICE = ("[SYSTEM] Your reply contained text that imitated a tool result. Everything from that point on was removed and NOT executed. "
+                     "Results only come from the system, in the next message: send your action blocks and then stop.")
+NUDGE = ("NO ACTION RECEIVED. Your reply contained no action block, so nothing happened. Reply with an action block now: "
+         "READ, LIST, WRITE, RUN or SEARCH to keep working on your task, SAY to ask a teammate, DONE (with RESULT and evidence) if your task is complete, "
+         "or BLOCKED if you cannot continue.")
 
 
 class Agent:
@@ -388,6 +674,8 @@ class Agent:
         self.task = task
         self.lead = lead
         self.status = "idle"
+        self.current = ""
+        self.cur_emit = 0.0
         self.summary = ""
         self.turns = 0
         self.retry_at = 0.0
@@ -399,6 +687,25 @@ class Agent:
         self.wake = threading.Event()
         self.thread = None
         self.heartbeat = LEAD_HEARTBEAT
+        self.files = {}
+        self.seen = {}
+        self.last_report_ts = 0.0
+        self.last_result = ""
+        self.blocked_reason = ""
+        self.last_activity = time.time()
+        self.temperature = None
+        self.suppress_think = False
+        self.reset_task()
+
+    def reset_task(self):
+        self.evidence = 0
+        self.done_rejects = 0
+        self.strikes = 0
+        self.nudges = 0
+        self.loop_warnings = 0
+        self.recent = deque(maxlen=8)
+        self.blocked_reason = ""
+        self.last_result = ""
 
 
 class AgentSwarm:
@@ -414,6 +721,7 @@ class AgentSwarm:
         self.events = deque(maxlen=MAX_EVENTS)
         self.seq = 0
         self.channel = []
+        self.activity = deque(maxlen=MAX_ACTIVITY)
         self.notes = {}
         self.plan = ""
         self.goal = ""
@@ -426,9 +734,26 @@ class AgentSwarm:
         self.started_at = time.time()
         self.user_msg_count = 0
         self.recent_user_posts = []
+        self.continuous = False
+        self.finished = False
+        self.finish_summary = ""
+        self.finish_rejects = 0
+        self.idle_paused = False
+        self.idle_reviews = 0
+        self.review_signature = None
+        self.user_paths = set()
+        self.file_state = {}
+        self.last_change_ts = 0.0
+        self.last_writer = ""
+        self.sent_log = {}
+        self.streaks = {}
+        self.scan_lock = threading.Lock()
+        self.scan_at = 0.0
+        self.scan_cache = ([], False)
         self.lead = Agent("lead", "Lead orchestrator", lead=True)
         self.agents["lead"] = self.lead
         self.restored = bool(restore)
+        self.restored_finished = False
         if restore:
             self._restore(restore)
 
@@ -443,6 +768,8 @@ class AgentSwarm:
     def _restore(self, data):
         self.goal = str(data.get("goal") or "")
         self.plan = str(data.get("plan") or "")
+        self.continuous = bool(data.get("continuous"))
+        self.restored_finished = bool(data.get("finished"))
         notes = data.get("notes")
         if isinstance(notes, dict):
             for key, item in list(notes.items())[:200]:
@@ -452,28 +779,40 @@ class AgentSwarm:
         channel = data.get("channel")
         if isinstance(channel, list):
             self.channel = [item for item in channel if isinstance(item, dict)][-MAX_CHANNEL:]
+        activity = data.get("activity")
+        if isinstance(activity, list):
+            for item in activity[-200:]:
+                if isinstance(item, dict):
+                    self.activity.append(item)
         for item in data.get("agents") or []:
             if not isinstance(item, dict) or item.get("name") == "lead" or item.get("retired"):
                 continue
             name = slug(item.get("name"))
             agent = Agent(name, str(item.get("role") or "Agent")[:120], str(item.get("task") or ""))
             agent.summary = str(item.get("summary") or "")
-            agent.status = "working" if item.get("status") in ("working", "retrying", "waiting") else "idle"
+            agent.last_result = str(item.get("result") or "")
+            agent.status = "working" if item.get("status") in ("working", "retrying", "waiting") and not self.restored_finished else "idle"
             self.agents[name.lower()] = agent
+        for row in data.get("files") or []:
+            if isinstance(row, dict) and row.get("path"):
+                self.file_state[str(row["path"])] = {"by": str(row.get("by") or ""), "ts": float(row.get("ts") or 0),
+                                                     "size": int(row.get("size") or 0), "rel": str(row["path"])}
         self.lead.summary = str((data.get("lead") or {}).get("summary") or "")
 
-    def start(self, first_message):
+    def start(self, first_message, message_id="", continuous=None):
         self.lead.thread = threading.Thread(target=self._lead_loop, name="kurt-agent-lead", daemon=True)
         self.lead.thread.start()
         for agent in list(self.agents.values()):
             if not agent.lead:
                 self._launch(agent, resumed=True)
-        if self.restored:
+        if self.restored and not self.restored_finished:
             self.lead.inbox.append({"from": "system", "text": "Agent mode was restarted. Review the restored plan, notes, channel and team, then continue the work.", "ts": time.time()})
         self._emit("state", running=True)
-        self.user_message(first_message)
+        self.user_message(first_message, message_id, continuous)
 
-    def stop(self):
+    def stop(self, final_status="stopped", finished=False):
+        if finished:
+            self.finished = True
         self.stop_event.set()
         for agent in list(self.agents.values()):
             agent.wake.set()
@@ -485,9 +824,11 @@ class AgentSwarm:
                     pending["event"].set()
         for agent in list(self.agents.values()):
             if agent.status != "retired":
-                self._set_status(agent, "stopped")
-        self._emit("state", running=False)
+                self._set_status(agent, final_status, current="")
+        self._emit("state", running=False, finished=self.finished)
         self._persist(force=True)
+
+    # -- events ----------------------------------------------------------
 
     def _emit(self, kind, **payload):
         with self.lock:
@@ -511,16 +852,13 @@ class AgentSwarm:
 
     def _entry_emit(self, agent, entry, force=False, done=False):
         now = time.time()
+        agent.last_activity = now
         if done:
             entry["done"] = True
         if not (force or done) and now - entry["emitted"] < 0.4:
             return
         entry["emitted"] = now
         self._emit("entry", agent=agent.name, entry=self._entry_view(entry))
-
-    def _entry_append(self, agent, entry, text):
-        entry["text"] = clip_tail(entry["text"] + text, 20000) if len(entry["text"]) > 20000 else entry["text"] + text
-        self._entry_emit(agent, entry)
 
     def _entry_set(self, agent, entry, text, done=True):
         entry["text"] = str(text)
@@ -531,21 +869,55 @@ class AgentSwarm:
         self._entry_emit(agent, entry, done=True)
         return entry
 
-    def _set_status(self, agent, status, task=None):
+    def _activity(self, agent, kind, text, detail="", ok=None):
+        item = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "agent": agent.name if agent else "system",
+                "kind": kind, "text": clip(text, 260), "detail": clip(detail, 2500), "ok": ok}
+        with self.lock:
+            self.activity.append(item)
+        if agent is not None:
+            agent.last_activity = time.time()
+        self._emit("activity", item=item)
+        return item
+
+    def _set_status(self, agent, status, task=None, current=None):
         changed = agent.status != status
         agent.status = status
         if task is not None:
             agent.task = task
             changed = True
+        if current is not None and current != agent.current:
+            agent.current = current
+            agent.cur_emit = time.time()
+            changed = True
+        agent.last_activity = time.time()
         if changed:
             self._emit("agent", agent=self._agent_view(agent, entries=0))
+
+    def _set_current(self, agent, text, force=False):
+        text = clip(text, 140)
+        now = time.time()
+        if text == agent.current or not (force or now - agent.cur_emit > 0.5):
+            return
+        agent.current = text
+        agent.cur_emit = now
+        self._emit("agent", agent=self._agent_view(agent, entries=0))
 
     def _agent_view(self, agent, entries=25, text_cap=4000):
         with self.lock:
             items = list(agent.entries)[-entries:] if entries else []
+            files = list(agent.files)[-12:]
         return {"name": agent.name, "role": agent.role, "task": clip(agent.task, 600), "status": agent.status,
-                "summary": clip(agent.summary, 800), "turns": agent.turns, "retry_at": agent.retry_at,
-                "lead": agent.lead, "entries": [self._entry_view(item, text_cap) for item in items]}
+                "current": agent.current, "summary": clip(agent.summary, 800), "turns": agent.turns,
+                "retry_at": agent.retry_at, "lead": agent.lead, "files": files, "result": agent.last_result,
+                "blocked": clip(agent.blocked_reason, 400), "report_ts": agent.last_report_ts,
+                "strikes": agent.strikes, "entries": [self._entry_view(item, text_cap) for item in items]}
+
+    def files_view(self):
+        with self.lock:
+            rows = [{"path": item.get("rel") or key, "by": item.get("by", ""), "ts": item.get("ts", 0), "size": item.get("size", 0)}
+                    for key, item in self.file_state.items()]
+        rows.sort(key=lambda row: row["ts"], reverse=True)
+        return rows[:200]
 
     def snapshot(self):
         with self.lock:
@@ -553,9 +925,12 @@ class AgentSwarm:
             channel = list(self.channel)[-150:]
             notes = {key: {"value": clip(item["value"], 3000), "by": item["by"], "ts": item["ts"]} for key, item in self.notes.items()}
             approvals = list(self.pending.values())
-            return {"running": self.running, "goal": self.goal, "plan": self.plan, "notes": notes, "channel": channel,
-                    "agents": agents, "approvals": approvals, "cooldown_until": self.cooldown_until,
-                    "cooldown_reason": self.cooldown_reason, "model": self.model_name, "seq": self.seq,
+            activity = list(self.activity)[-300:]
+            return {"running": self.running, "finished": self.finished, "finish_summary": self.finish_summary,
+                    "continuous": self.continuous, "idle_paused": self.idle_paused, "goal": self.goal, "plan": self.plan,
+                    "notes": notes, "channel": channel, "activity": activity, "files": self.files_view(), "agents": agents,
+                    "approvals": approvals, "cooldown_until": self.cooldown_until, "cooldown_reason": self.cooldown_reason,
+                    "model": self.model_name, "seq": self.seq, "started_at": self.started_at, "now": time.time(),
                     "chat": chat_history(self.host, self.chat_id)}
 
     def events_since(self, after, epoch=""):
@@ -565,8 +940,9 @@ class AgentSwarm:
                 return {"seq": self.seq, "epoch": self.epoch, "running": self.running, "snapshot": self.snapshot(), "events": []}
             events = [event for event in self.events if event["seq"] > after][:800]
             seq = events[-1]["seq"] if events else self.seq
-            return {"seq": seq, "epoch": self.epoch, "running": self.running, "events": events,
-                    "cooldown_until": self.cooldown_until, "cooldown_reason": self.cooldown_reason}
+            return {"seq": seq, "epoch": self.epoch, "running": self.running, "finished": self.finished,
+                    "continuous": self.continuous, "idle_paused": self.idle_paused, "events": events,
+                    "now": time.time(), "cooldown_until": self.cooldown_until, "cooldown_reason": self.cooldown_reason}
 
     def state_for_persistence(self):
         with self.lock:
@@ -575,11 +951,13 @@ class AgentSwarm:
                 if agent.lead:
                     continue
                 agents.append({"name": agent.name, "role": agent.role, "task": clip(agent.task, 1500), "status": agent.status,
-                               "summary": clip(agent.summary, 1500), "retired": agent.retired})
+                               "summary": clip(agent.summary, 1500), "retired": agent.retired, "result": agent.last_result})
             notes = {key: {"value": clip(item["value"], 4000), "by": item["by"], "ts": item["ts"]} for key, item in self.notes.items()}
             lead_entries = [self._entry_view(item, 1500) for item in list(self.lead.entries)[-8:]]
             return {"goal": self.goal, "plan": self.plan, "notes": notes, "channel": list(self.channel)[-120:],
-                    "agents": agents, "running": self.running, "updated": time.time(),
+                    "activity": list(self.activity)[-120:], "agents": agents, "running": self.running,
+                    "finished": self.finished, "finish_summary": self.finish_summary, "continuous": self.continuous,
+                    "files": self.files_view(), "updated": time.time(),
                     "lead": {"summary": self.lead.summary, "entries": lead_entries}}
 
     def _persist(self, force=False):
@@ -604,10 +982,141 @@ class AgentSwarm:
             agent = self.agents.get(key)
         return agent if agent and agent.status != "retired" else None
 
+    # -- workspace knowledge ----------------------------------------------
+
+    def _work_root(self):
+        try:
+            return Path(self.host.chat_work_root(self.chat_id)).resolve()
+        except Exception:
+            return None
+
+    def _scan(self, fresh=False):
+        """Bounded walk of the project workspace: ([(relative path, size, mtime_ns)], truncated)."""
+        now = time.time()
+        with self.scan_lock:
+            if not fresh and now - self.scan_at < 1.0:
+                return self.scan_cache
+            root = self._work_root()
+            items, truncated = [], False
+            if root is not None and root.is_dir():
+                skip = {"node_modules", "__pycache__", "venv", "env", "site-packages", "dist", "build", "target"}
+                for dirpath, dirnames, filenames in os.walk(str(root)):
+                    rel_dir = os.path.relpath(dirpath, str(root))
+                    depth = 0 if rel_dir == "." else rel_dir.count(os.sep) + 1
+                    dirnames[:] = [] if depth >= SCAN_DEPTH else sorted(d for d in dirnames if not d.startswith(".") and d not in skip)
+                    for name in sorted(filenames):
+                        if name.startswith("."):
+                            continue
+                        full = os.path.join(dirpath, name)
+                        try:
+                            stat = os.lstat(full)
+                        except OSError:
+                            continue
+                        rel = name if rel_dir == "." else os.path.join(rel_dir, name)
+                        items.append((rel.replace(os.sep, "/"), stat.st_size, stat.st_mtime_ns))
+                        if len(items) >= FILE_SCAN_LIMIT:
+                            truncated = True
+                            break
+                    if truncated:
+                        break
+            self.scan_cache = (items, truncated)
+            self.scan_at = time.time()
+            return self.scan_cache
+
+    def workspace_files_text(self, limit=FILE_LIST_LIMIT):
+        items, truncated = self._scan()
+        if not items:
+            return "(none yet: the project workspace is empty. Nothing has been created, so do not assume any file exists.)"
+        written = {}
+        with self.lock:
+            for key, info in self.file_state.items():
+                written[info.get("rel") or key] = info.get("by", "")
+        rows = []
+        for rel, size, _mtime in items[:limit]:
+            by = " by {}".format(written[rel]) if rel in written else ""
+            rows.append("- {} ({} bytes{})".format(rel, size, by))
+        if len(items) > limit or truncated:
+            rows.append("- … more files not shown")
+        return "\n".join(rows)
+
+    def _file_exists(self, name):
+        root = self._work_root()
+        if root is None:
+            return True
+        try:
+            if (root / name).exists():
+                return True
+        except OSError:
+            return True
+        items, truncated = self._scan(fresh=True)
+        base = name.rsplit("/", 1)[-1].lower()
+        wanted = name.lower()
+        for rel, _size, _mtime in items:
+            low = rel.lower()
+            if low == wanted or low.endswith("/" + wanted) or low.rsplit("/", 1)[-1] == base:
+                return True
+        return truncated
+
+    def missing_claimed_files(self, text):
+        return [name for name in claimed_files(text) if not self._file_exists(name)]
+
+    def _signature(self):
+        items, _truncated = self._scan(fresh=True)
+        return tuple(items)
+
+    def _rel(self, path):
+        root = self._work_root()
+        try:
+            return Path(path).resolve().relative_to(root).as_posix() if root is not None else str(path)
+        except ValueError:
+            return str(path)
+
+    def _within_scope(self, path):
+        try:
+            path = Path(path).resolve()
+        except OSError:
+            return False
+        roots = []
+        root = self._work_root()
+        if root is not None:
+            roots.append(root)
+        try:
+            roots.append(Path(self.host.chat_workspace(self.chat_id)).resolve())
+        except Exception:
+            pass
+        for base in roots:
+            try:
+                path.relative_to(base)
+                return True
+            except ValueError:
+                continue
+        text = str(path)
+        return any(text == allowed or text.startswith(allowed.rstrip("/\\") + os.sep) for allowed in self.user_paths)
+
+    def _remember_user_paths(self, text):
+        for token in re.findall(r"(?:~|/|[A-Za-z]:[\\/])[^\s\"'<>|`]*", str(text or "")):
+            token = token.rstrip(".,;:)]}")
+            if len(token) < 3:
+                continue
+            try:
+                self.user_paths.add(str(Path(token).expanduser().resolve()))
+            except (OSError, RuntimeError):
+                continue
+
+    # -- messaging --------------------------------------------------------
+
     def post(self, sender, target, text, kind="message"):
+        message, _reason = self._post(sender, target, text, kind)
+        return message
+
+    def _norm(self, text):
+        return " ".join(re.sub(r"[^a-z0-9 ]+", " ", str(text).lower()).split())
+
+    def _post(self, sender, target, text, kind="message", checked=False):
+        """Deliver a message. With ``checked`` duplicates, floods and ping-pong are suppressed: (message|None, reason)."""
         text = clip(str(text or "").strip(), 4000)
         if not text:
-            return None
+            return None, "empty"
         target = str(target or "all").strip()
         lowered = target.lower()
         if lowered in ("user", "human") and sender != "lead":
@@ -616,7 +1125,7 @@ class AgentSwarm:
         recipient = None
         if lowered in ("all", "everyone", "team", "*"):
             lowered = "all"
-        elif lowered == "user" or lowered == "human":
+        elif lowered in ("user", "human"):
             lowered = "user"
         else:
             recipient = self._find(lowered)
@@ -625,7 +1134,11 @@ class AgentSwarm:
                 lowered = "lead" if sender != "lead" else "all"
                 recipient = self._find(lowered) if lowered != "all" else None
         if lowered == "user" and kind != "quick" and self._is_repeat_for_user(text):
-            return None
+            return None, "That message repeats what the human was already told."
+        if checked and sender not in ("user", "system"):
+            reason = self._chatter_block(sender, lowered, text)
+            if reason:
+                return None, reason
         message = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "from": sender, "to": lowered, "text": text, "kind": kind}
         with self.lock:
             self.channel.append(message)
@@ -641,10 +1154,48 @@ class AgentSwarm:
         elif recipient is not None:
             recipient.inbox.append(message)
             recipient.wake.set()
-        return message
+        return message, ""
+
+    def _chatter_block(self, sender, target, text):
+        """Reason a team message must be suppressed (duplicate, flood or ping-pong), else ''."""
+        now = time.time()
+        norm = self._norm(text)
+        with self.lock:
+            log = [item for item in self.sent_log.get(sender, []) if now - item[0] < 600]
+            for _ts, earlier_target, earlier in log[-6:]:
+                if earlier_target == target and self._same_message(norm, earlier):
+                    self.sent_log[sender] = log
+                    return "That duplicates a message you already sent. Do not repeat yourself: act on your task or wait for a reply."
+            if len([item for item in log if now - item[0] < POST_WINDOW]) >= POST_LIMIT:
+                self.sent_log[sender] = log
+                return "You are sending too many messages. Stop messaging and do your task, or report DONE / BLOCKED."
+            if target not in ("all", "user", "lead") and target != sender:
+                key = frozenset((sender, target))
+                if self.streaks.get(key, 0) >= PINGPONG_LIMIT:
+                    self.sent_log[sender] = log
+                    return ("You and {} have exchanged {} messages without either of you doing any work. Stop chatting: act on your task, "
+                            "or report DONE / BLOCKED to lead.").format(target, PINGPONG_LIMIT)
+                self.streaks[key] = self.streaks.get(key, 0) + 1
+            log.append((now, target, norm))
+            self.sent_log[sender] = log[-30:]
+        return ""
+
+    @staticmethod
+    def _same_message(norm, earlier):
+        """Near-identical text. Messages whose numbers differ ("bug 3" / "bug 4") are different messages."""
+        if norm == earlier:
+            return True
+        if re.findall(r"\d+", norm) != re.findall(r"\d+", earlier):
+            return False
+        return difflib.SequenceMatcher(None, norm, earlier).ratio() >= DUPLICATE_RATIO
+
+    def _note_work(self, agent):
+        with self.lock:
+            for key in [key for key in self.streaks if agent.name in key]:
+                self.streaks[key] = 0
 
     def _is_repeat_for_user(self, text):
-        norm = " ".join(re.sub(r"[^a-z0-9 ]+", " ", text.lower()).split())
+        norm = self._norm(text)
         with self.lock:
             recent = [item for item in self.recent_user_posts if item[0] == self.user_msg_count][-4:]
             for _count, earlier in recent:
@@ -665,7 +1216,22 @@ class AgentSwarm:
             self.host.save_chats()
         self._emit("chat", message=record)
 
-    def user_message(self, text, message_id=""):
+    def set_continuous(self, value, by="user"):
+        value = bool(value)
+        if value == self.continuous:
+            return
+        self.continuous = value
+        self._emit("mode", continuous=value)
+        self._activity(None, "mode", "Continuous mode turned {}".format("on: the team keeps working until you stop it" if value else "off: the team stops when the lead finishes the project"))
+        self.idle_paused = False
+        self.idle_reviews = 0
+        notice = ("MODE CHANGED by the human: CONTINUOUS is now ON. Do not FINISH; keep improving the work until the human stops you." if value else
+                  "MODE CHANGED by the human: CONTINUOUS is now OFF. Finish the project once it is complete and verified, then use FINISH.")
+        self.lead.inbox.append({"from": "system", "text": notice, "ts": time.time()})
+        self.lead.wake.set()
+        self._persist(force=True)
+
+    def user_message(self, text, message_id="", continuous=None):
         text = str(text or "").strip()
         if not text:
             return
@@ -676,12 +1242,23 @@ class AgentSwarm:
                 chat["messages"].append(record)
                 chat["updated"] = time.time()
                 if chat.get("title") in (None, "", "New conversation"):
-                    chat["title"] = clip(text.replace("\n", " "), 60)
+                    flat = " ".join(str(text).split())
+                    chat["title"] = flat if len(flat) <= 60 else flat[:59].rstrip() + "\u2026"
             self.host.save_chats()
         if not self.goal:
             self.goal = clip(text, 4000)
+        elif self.restored_finished and self.restored:
+            self.goal = clip("{}\n\n(Earlier, already completed: {})".format(text, clip(self.goal, 600)), 4000)
+            self.restored_finished = False
+        self._remember_user_paths(text)
         with self.lock:
             self.user_msg_count += 1
+        if continuous is None:
+            continuous = detect_continuous(text)
+        if continuous is not None:
+            self.set_continuous(continuous)
+        self.idle_paused = False
+        self.idle_reviews = 0
         message = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "from": "user", "to": "lead", "text": text, "kind": "user"}
         with self.lock:
             self.channel.append(message)
@@ -703,7 +1280,7 @@ class AgentSwarm:
                 return
             agent.retry_at = self.cooldown_until
             if agent.status != "retrying":
-                self._set_status(agent, "retrying")
+                self._set_status(agent, "retrying", current="Waiting to retry the model request")
             self.stop_event.wait(min(1.0, remaining))
         raise StopRequested()
 
@@ -711,27 +1288,32 @@ class AgentSwarm:
         detail = clip(str(exc), 600)
         reason = "rate limit" if RATE_LIMIT_RE.search(detail) else "error"
         with self.lock:
+            fresh = self.cooldown_until < time.time() + 5
             self.cooldown_until = max(self.cooldown_until, time.time() + RETRY_SECONDS)
             self.cooldown_reason = reason
             agent.retry_at = self.cooldown_until
         self._note_entry(agent, "error", "The model request hit a {}: {}\nRetrying in {} seconds.".format(reason, detail, RETRY_SECONDS))
-        self._set_status(agent, "retrying")
+        if fresh:
+            self._activity(agent, "alert", "The model request hit a {}. All agents wait {} seconds, then retry.".format(reason, RETRY_SECONDS), detail=detail, ok=False)
+        self._set_status(agent, "retrying", current="Model {}: retrying soon".format(reason))
         self._emit("state", running=True, cooldown_until=self.cooldown_until, cooldown_reason=reason)
 
-    def _generate(self, agent, messages, max_tokens=GENERATION_TOKENS, entries=True):
-        """Return (reasoning, answer). Retries forever, one minute after each failure."""
+    # -- generation -------------------------------------------------------
+
+    def _generate(self, agent, messages, max_tokens=GENERATION_TOKENS, entries=True, think=True, temperature=None):
+        """Return a Generation (reasoning, answer). Retries forever, one minute after each failure."""
         while True:
             if self.stop_event.is_set():
                 raise StopRequested()
             self._wait_cooldown(agent)
             try:
-                return self._generate_once(agent, messages, max_tokens, entries)
+                return self._generate_once(agent, messages, max_tokens, entries, think, temperature)
             except StopRequested:
                 raise
             except Exception as exc:
                 self._on_failure(agent, exc)
 
-    def _generate_once(self, agent, messages, max_tokens, entries):
+    def _generate_once(self, agent, messages, max_tokens, entries, think=True, temperature=None):
         host = self.host
         count = len(self.candidates)
         order = [(self.active_candidate + step) % count for step in range(count)]
@@ -742,6 +1324,9 @@ class AgentSwarm:
             while True:
                 reasoning_entry = output_entry = None
                 reasoning_parts, answer_parts = [], []
+                guards = {"reasoning": LoopGuard(), "answer": LoopGuard()}
+                degenerate = ""
+                last_view = 0.0
                 started = time.monotonic()
                 in_chars = sum(len(str(item.get("content") or "")) for item in messages if isinstance(item, dict))
                 splitter = ThinkSplitter()
@@ -752,10 +1337,13 @@ class AgentSwarm:
                     entered = True
                     if agent.status != "working" and not agent.lead:
                         self._set_status(agent, "working")
+                    if entries:
+                        self._set_current(agent, "Thinking…", force=True)
                     call_messages = list(messages)
                     if empty_retry:
                         call_messages.append({"role": "system", "content": "Your previous reply was empty. Reply now with visible text or action blocks."})
-                    stream = host.agent_stream(candidate, call_messages, max_tokens=max_tokens, think=not empty_retry)
+                    stream = host.agent_stream(candidate, call_messages, max_tokens=max_tokens, think=think and not empty_retry,
+                                               temperature=temperature if temperature is not None else DEFAULT_TEMPERATURE)
                     for kind, chunk in stream:
                         if self.stop_event.is_set():
                             raise StopRequested()
@@ -768,29 +1356,50 @@ class AgentSwarm:
                         else:
                             continue
                         for piece_kind, piece in pieces:
-                            if piece_kind == "reasoning":
-                                reasoning_parts.append(piece)
-                                if entries:
-                                    if reasoning_entry is None:
-                                        reasoning_entry = self._entry_open(agent, "thinking")
-                                    self._entry_append(agent, reasoning_entry, piece)
+                            part = "reasoning" if piece_kind == "reasoning" else "answer"
+                            (reasoning_parts if part == "reasoning" else answer_parts).append(piece)
+                            guard = guards[part]
+                            if guard.feed(piece) or (part == "reasoning" and guard.total > REASONING_CHAR_LIMIT):
+                                degenerate = part
+                                break
+                            if not entries:
+                                continue
+                            if part == "reasoning":
+                                if reasoning_entry is None:
+                                    reasoning_entry = self._entry_open(agent, "thinking")
+                                reasoning_entry["text"] = clip_tail(reasoning_entry["text"] + piece, 20000)
+                                self._entry_emit(agent, reasoning_entry)
                             else:
-                                answer_parts.append(piece)
-                                if entries:
-                                    if output_entry is None:
-                                        output_entry = self._entry_open(agent, "output")
-                                    self._entry_append(agent, output_entry, piece)
-                    for piece_kind, piece in splitter.feed("", final=True):
-                        (reasoning_parts if piece_kind == "reasoning" else answer_parts).append(piece)
-                    reasoning, answer = split_stray_think("".join(reasoning_parts), "".join(answer_parts))
+                                now = time.monotonic()
+                                if now - last_view >= 0.3:
+                                    last_view = now
+                                    output_entry = self._view_output(agent, output_entry, "".join(answer_parts))
+                        if degenerate:
+                            break
+                    if not degenerate:
+                        for piece_kind, piece in splitter.feed("", final=True):
+                            (reasoning_parts if piece_kind == "reasoning" else answer_parts).append(piece)
+                    reasoning_text, answer_text = "".join(reasoning_parts), "".join(answer_parts)
+                    if degenerate:
+                        guard = guards[degenerate]
+                        if degenerate == "reasoning":
+                            reasoning_text = reasoning_text[:guard.start] if guard.start is not None else reasoning_text
+                            answer_text = ""
+                        else:
+                            answer_text = answer_text[:guard.start] if guard.start is not None else answer_text
+                        if reasoning_entry is not None:
+                            self._entry_set(agent, reasoning_entry, clip_tail(reasoning_text, 4000) + ("\n… [stopped: the model was looping]" if degenerate == "reasoning" else ""))
+                        if output_entry is not None:
+                            self._entry_set(agent, output_entry, display_text(answer_text) or "(discarded: the reply was stuck repeating itself)")
+                        self.active_candidate = candidate_index
+                        return Generation(reasoning_text.strip(), answer_text.strip(), degenerate)
+                    reasoning, answer = split_stray_think(reasoning_text, answer_text)
                     if not answer.strip() and not reasoning.strip():
                         raise RuntimeError("The model returned no response text.")
                     if reasoning_entry is not None:
-                        self._entry_set(agent, reasoning_entry, reasoning)
-                    if output_entry is not None:
-                        self._entry_set(agent, output_entry, answer)
-                    elif entries and answer:
-                        self._note_entry(agent, "output", answer)
+                        self._entry_set(agent, reasoning_entry, clip_tail(reasoning, 20000))
+                    if entries:
+                        output_entry = self._view_output(agent, output_entry, answer, final=True)
                     self.active_candidate = candidate_index
                     try:
                         host.record_usage(self.chat_id, candidate.get("model"), self.route_info.get("route"),
@@ -798,7 +1407,7 @@ class AgentSwarm:
                                           time.monotonic() - started)
                     except Exception:
                         pass
-                    return reasoning, answer
+                    return Generation(reasoning, answer)
                 except StopRequested:
                     raise
                 except Exception as exc:
@@ -823,6 +1432,25 @@ class AgentSwarm:
                 self._note_entry(agent, "error", "This model or key failed ({}). Switching to the next entry in the group.".format(clip(last_error, 300)))
         raise last_error or RuntimeError("No working model entry was found.")
 
+    def _view_output(self, agent, entry, raw, final=False):
+        """Show only the commentary of a streaming reply and say what the agent is doing right now."""
+        prose = display_text(raw)
+        if prose:
+            if entry is None:
+                entry = self._entry_open(agent, "output")
+            entry["text"] = prose
+            if final:
+                self._entry_emit(agent, entry, force=True, done=True)
+            else:
+                self._entry_emit(agent, entry)
+        elif entry is not None and final:
+            self._entry_emit(agent, entry, force=True, done=True)
+        if not final:
+            self._set_current(agent, live_activity(raw) or "Thinking…")
+        return entry
+
+    # -- shared context -----------------------------------------------------
+
     def team_table(self, exclude=""):
         rows = []
         with self.lock:
@@ -830,8 +1458,9 @@ class AgentSwarm:
         for agent in agents:
             if agent.status == "retired" or agent.name == exclude:
                 continue
-            rows.append("- {} [{}] status={} task: {} | last report: {}".format(
-                agent.name, agent.role, agent.status, clip(agent.task, 220).replace("\n", " ") or "none",
+            extra = " result={}".format(agent.last_result) if agent.last_result else ""
+            rows.append("- {} [{}] status={}{} task: {} | last report: {}".format(
+                agent.name, agent.role, agent.status, extra, clip(agent.task, 220).replace("\n", " ") or "none",
                 clip(agent.summary, 220).replace("\n", " ") or "none"))
         return "\n".join(rows) or "(no subagents yet)"
 
@@ -850,10 +1479,17 @@ class AgentSwarm:
             note_lines.append(line)
         chat_lines = ["[{}] {} -> {}: {}".format(time.strftime("%H:%M:%S", time.localtime(item["ts"])), item["from"], item["to"],
                                                  clip(item["text"], 500).replace("\n", " ")) for item in channel]
-        return ("SHARED CONTEXT (identical for every agent)\nGOAL: {}\n\nPLAN:\n{}\n\nSHARED NOTES:\n{}\n\nTEAM:\n{}\n\nRECENT CHANNEL:\n{}\n\n"
+        text = ("SHARED CONTEXT (identical for every agent)\nMODE: {}\nGOAL (the only thing the team works on): {}\n\nPLAN:\n{}\n\nSHARED NOTES:\n{}\n\nTEAM:\n{}\n\n"
+                "WORKSPACE FILES (live, checked by the system; this is the truth about what exists):\n{}\n\nRECENT CHANNEL:\n{}\n\n"
                 "PROJECT WORKSPACE: {}").format(
+            "CONTINUOUS (keep improving until the human stops the team)" if self.continuous else "NORMAL (the lead finishes the run when the goal is met and verified)",
             clip(goal, 2500) or "(none yet)", clip(plan, 3000) or "(no plan yet)", "\n".join(note_lines) or "(no notes yet)",
-            self.team_table(), "\n".join(chat_lines) or "(quiet)", self._workspace_label())
+            self.team_table(), self.workspace_files_text(), "\n".join(chat_lines) or "(quiet)", self._workspace_label())
+        if agent is not None and agent.lead:
+            text += "\n\nFINISH CHECK: " + self._finish_summary_line()
+        elif agent is not None:
+            text += "\n\nYOUR CURRENT TASK (stay on this and nothing else):\n" + (clip(agent.task, 1800) or "(none: ask lead)")
+        return text
 
     def _workspace_label(self):
         try:
@@ -878,28 +1514,68 @@ class AgentSwarm:
     def _trim(self, agent):
         if len(agent.history) > MAX_HISTORY:
             del agent.history[:-MAX_HISTORY]
+        while agent.history and agent.history[0].get("role") != "user":
+            del agent.history[0]
         for item in agent.history:
             item["content"] = clip(item["content"], 7000)
 
     def _system_for(self, agent):
         if agent.lead:
-            syntax = COMMON_SYNTAX.replace("{user_target}", ", user")
-            system = LEAD_SYSTEM.replace("{max_agents}", str(MAX_SUBAGENTS)).replace("{syntax}", syntax)
+            syntax = COMMON_SYNTAX.replace("{user_target}", ", user").replace("{max_actions}", str(MAX_ACTIONS_PER_TURN))
+            mode = MODE_CONTINUOUS if self.continuous else MODE_FINITE
+            system = LEAD_SYSTEM.replace("{max_agents}", str(MAX_SUBAGENTS)).replace("{mode_block}", mode).replace("{syntax}", syntax)
         else:
-            syntax = COMMON_SYNTAX.replace("{user_target}", "")
+            syntax = COMMON_SYNTAX.replace("{user_target}", "").replace("{max_actions}", str(MAX_ACTIONS_PER_TURN))
             system = AGENT_SYSTEM.replace("{name}", agent.name).replace("{role}", agent.role).replace("{syntax}", syntax)
         return [{"role": "system", "content": system}, {"role": "system", "content": self.shared_context(agent)}]
 
+    # -- loops --------------------------------------------------------------
+
+    def _team_signature(self):
+        with self.lock:
+            return (tuple((a.name, a.status, round(a.last_report_ts)) for a in self.agents.values() if not a.lead),
+                    round(self.last_change_ts), len(self.channel))
+
+    def _scheduled_review(self):
+        """Reason for an unprompted lead review, or None when nothing needs the lead (saves model calls)."""
+        if self.continuous:
+            return "scheduled review"
+        if self.idle_paused:
+            return None
+        with self.lock:
+            members = [a for a in self.agents.values() if not a.lead and a.status != "retired"]
+        now = time.time()
+        working = [a for a in members if a.status in WORKING_STATES]
+        if working:
+            stalled = [a.name for a in working if a.status == "working" and now - a.last_activity > STALL_SECONDS]
+            return "stalled agents: " + ", ".join(stalled) if stalled else None
+        signature = self._team_signature()
+        if signature == self.review_signature:
+            self.idle_reviews += 1
+            if self.idle_reviews >= IDLE_REVIEW_LIMIT:
+                self.idle_paused = True
+                self._activity(None, "alert", "The team is idle and the lead has neither finished nor given new work. Message the lead to continue.", ok=False)
+                self._emit("state", running=True, idle_paused=True)
+                return None
+        else:
+            self.idle_reviews = 0
+        self.review_signature = signature
+        return "team idle review"
+
     def _lead_loop(self):
         lead = self.lead
-        reason = "start"
         while not self.stop_event.is_set():
             try:
                 triggered = lead.wake.wait(timeout=lead.heartbeat)
                 if self.stop_event.is_set():
                     break
                 lead.wake.clear()
-                reason = "new messages" if triggered else "scheduled review"
+                if triggered or lead.inbox:
+                    reason = "new messages"
+                else:
+                    reason = self._scheduled_review()
+                    if reason is None:
+                        continue
                 self._agent_turn(lead, reason)
             except StopRequested:
                 break
@@ -907,14 +1583,15 @@ class AgentSwarm:
                 self._note_entry(lead, "error", "Lead loop error: {}".format(clip(exc, 500)))
                 self._wait(5)
             self._wait(2)
-        self._set_status(lead, "stopped")
+        if not self.finished:
+            self._set_status(lead, "stopped", current="")
 
     def _agent_loop(self, agent):
         while not self.stop_event.is_set() and not agent.retired:
             try:
                 if not agent.inbox:
-                    if agent.status not in ("idle", "stopped"):
-                        self._set_status(agent, "idle")
+                    if agent.status in WORKING_STATES:
+                        self._set_status(agent, "idle", current="Waiting for work")
                     agent.wake.wait(timeout=3)
                     agent.wake.clear()
                     if not agent.inbox:
@@ -927,9 +1604,9 @@ class AgentSwarm:
                 self._wait(5)
             self._wait(1)
         if agent.retired:
-            self._set_status(agent, "retired")
-        else:
-            self._set_status(agent, "stopped")
+            self._set_status(agent, "retired", current="")
+        elif not self.finished:
+            self._set_status(agent, "stopped", current="")
 
     def _launch(self, agent, resumed=False):
         agent.thread = threading.Thread(target=self._agent_loop, args=(agent,), name="kurt-agent-" + agent.name, daemon=True)
@@ -939,67 +1616,117 @@ class AgentSwarm:
                                 "ts": time.time()})
             agent.wake.set()
 
+    def _worker_prompt(self, agent, inbox):
+        return ("NEW MESSAGES FOR YOU:\n{}\n\nYOUR TASK: {}\n\nTake the next small step toward your task. Reply with action blocks "
+                "(plus at most one short line of commentary), then stop and wait for the results.").format(
+            self._format_inbox(inbox) or "(none)", clip(agent.task, 1500))
+
+    def _on_degenerate(self, agent, gen):
+        """Handle a reply that degenerated into repetition. Returns True when the agent should stop trying this turn."""
+        agent.strikes += 1
+        agent.temperature = RETRY_TEMPERATURE
+        if gen.degenerate == "reasoning":
+            agent.suppress_think = True
+        what = "its thinking" if gen.degenerate == "reasoning" else "its reply"
+        self._activity(agent, "alert", "{}'s model got stuck repeating {}. The output was stopped and discarded ({}/{}).".format(
+            agent.name, what, agent.strikes, MAX_DEGENERATE_STRIKES), ok=False)
+        if agent.strikes < MAX_DEGENERATE_STRIKES:
+            return False
+        if agent.lead:
+            agent.strikes = 0
+            self._set_status(agent, "orchestrating", current="Model keeps looping: paused until the next event")
+            return True
+        self._block(agent, "My model repeatedly got stuck producing endless repeated text, so I stopped instead of guessing. "
+                           "Please re-assign this with a smaller, simpler task.", auto=True)
+        return True
+
+    def _check_alive(self, agent):
+        if self.stop_event.is_set() or agent.retired:
+            raise StopRequested()
+
     def _agent_turn(self, agent, reason):
         agent.busy = True
         try:
             inbox = self._drain(agent)
             if agent.lead:
                 agent.heartbeat = LEAD_HEARTBEAT
-                self._set_status(agent, "orchestrating")
-                prompt = self._lead_prompt(reason, inbox)
+                self._set_status(agent, "orchestrating", current="Reviewing the team")
+                base = self._lead_prompt(reason, inbox)
                 max_rounds = LEAD_TOOL_ROUNDS
             else:
-                prompt = "NEW MESSAGES FOR YOU:\n{}\n\nCurrent task: {}\nContinue working with action blocks.".format(
-                    self._format_inbox(inbox) or "(none)", clip(agent.task, 1500))
+                self._set_status(agent, "working", current="Starting")
+                base = self._worker_prompt(agent, inbox)
                 max_rounds = MAX_TOOL_ROUNDS
-                self._set_status(agent, "working")
-            for round_index in range(max_rounds):
-                if self.stop_event.is_set() or agent.retired:
-                    raise StopRequested()
+            extra = []
+            nudges = 0
+            for _round in range(max_rounds):
+                self._check_alive(agent)
+                prompt = base + ("\n\n" + "\n".join(extra) if extra else "")
                 agent.history.append({"role": "user", "content": prompt})
                 self._trim(agent)
                 messages = self._system_for(agent) + [dict(item) for item in agent.history]
-                reasoning, answer = self._generate(agent, messages)
+                gen = self._generate(agent, messages, think=not agent.suppress_think, temperature=agent.temperature)
+                reasoning, answer = gen
                 agent.turns += 1
-                agent.history.append({"role": "assistant", "content": answer or reasoning})
+                if gen.degenerate:
+                    if agent.history and agent.history[-1].get("role") == "user":
+                        agent.history.pop()
+                    if self._on_degenerate(agent, gen):
+                        break
+                    extra = [DEGENERATE_NOTICE]
+                    continue
+                agent.strikes = 0
+                agent.temperature = None
+                agent.suppress_think = False
+                turn = parse_turn(answer)
+                agent.history.append({"role": "assistant", "content": turn.clean or answer or reasoning})
                 self._trim(agent)
-                prose, actions = parse_actions(answer)
-                results, finished, said_to_user = self._execute(agent, actions)
+                extra = []
+                results, finished, said_to_user, stop_turn = self._execute(agent, turn)
                 if agent.lead:
                     pending_user = [item for item in inbox if item.get("from") == "user" and not item.get("quick_reply")]
-                    if pending_user and not said_to_user and prose and not results:
-                        self.post("lead", "user", prose)
+                    if pending_user and not said_to_user and turn.prose and not results and not self.finished:
+                        self.post("lead", "user", turn.prose)
                         said_to_user = True
-                    if prose:
-                        agent.summary = clip(prose, 600)
-                    used_tools = any(verb in TOOL_VERBS for verb, _a, _b in actions)
+                    if turn.prose:
+                        agent.summary = clip(turn.prose, 600)
+                    if self.finished or self.stop_event.is_set():
+                        break
+                    used_tools = any(item.verb in TOOL_VERBS for item in turn.actions)
                     failed = any(("rejected" in item or "failed" in item) for item in results)
-                    if not results or not (used_tools or failed):
+                    if stop_turn or not results or not (used_tools or failed):
                         break
                 else:
-                    if finished:
+                    if finished or stop_turn:
                         break
                     if not results:
-                        summary = clip(prose, 800) or "Finished my turn without further actions."
-                        agent.summary = summary
-                        self.post(agent.name, "lead", "[idle] " + summary)
-                        break
+                        if turn.actions:
+                            self._set_status(agent, "idle", current="Waiting for a reply")
+                            break
+                        nudges += 1
+                        if nudges > MAX_NUDGES:
+                            self._block(agent, "I replied several times without taking any action, so I am stopping. Last thing I said: {}".format(
+                                clip(turn.prose or answer, 300)), auto=True)
+                            break
+                        base = NUDGE
+                        continue
                 late = self._drain(agent)
-                prompt = "TOOL RESULTS:\n" + "\n\n".join(results)
+                base = "TOOL RESULTS:\n" + "\n\n".join(results)
                 if late:
-                    prompt += "\n\nNEW MESSAGES FOR YOU:\n" + self._format_inbox(late)
+                    base += "\n\nNEW MESSAGES FOR YOU:\n" + self._format_inbox(late)
                     inbox = inbox + late
             else:
                 if not agent.lead:
                     agent.summary = "Reached the per-task round limit."
-                    self.post(agent.name, "lead", "[idle] Reached my round limit on the current task. Send follow-up work if more is needed.")
+                    self._set_status(agent, "idle", current="Round limit reached")
+                    self.post(agent.name, "lead", "[LIMIT] Reached my round limit on the current task. Send follow-up work if more is needed.")
         finally:
             agent.busy = False
             if not self.stop_event.is_set() and not agent.retired:
                 if agent.lead:
-                    self._set_status(agent, "orchestrating")
-                elif not agent.inbox:
-                    self._set_status(agent, "idle")
+                    self._set_status(agent, "watching", current="Waiting for the team")
+                elif not agent.inbox and agent.status in WORKING_STATES:
+                    self._set_status(agent, "idle", current="Waiting for work")
 
     def _lead_prompt(self, reason, inbox):
         parts = ["TURN REASON: {}".format(reason)]
@@ -1010,36 +1737,166 @@ class AgentSwarm:
         if others:
             parts.append("TEAM MESSAGES:\n" + self._format_inbox(others))
         if not inbox:
-            parts.append("No new messages. Review progress. Use WAIT if the team is busy and nothing needs you; otherwise assign the next useful work.")
+            if self.continuous:
+                parts.append("No new messages. Review progress. Use WAIT if the team is busy and nothing needs you; otherwise assign the next useful work.")
+            else:
+                parts.append("No new messages. Check the team state and the FINISH CHECK. If the goal is met and verified, FINISH. "
+                             "If something is missing, assign exactly that. If the team is busy, WAIT.")
         parts.append("Decide your next actions now.")
         return "\n\n".join(parts)
 
-    def _execute(self, agent, actions):
-        results, finished, said_to_user = [], False, False
-        for verb, args, body in actions:
+    # -- finishing ------------------------------------------------------------
+
+    def _finish_gate(self):
+        """(hard, soft) reasons that stand in the way of FINISH. Hard ones can never be overridden."""
+        hard, soft = [], []
+        if self.continuous:
+            hard.append("continuous mode is on: the human asked the team to keep running until they stop it")
+        with self.lock:
+            members = [a for a in self.agents.values() if not a.lead and a.status != "retired"]
+        busy = [a.name for a in members if a.status in WORKING_STATES or a.inbox]
+        if busy:
+            hard.append("still working or has unread messages: " + ", ".join(busy))
+        blocked = [a.name for a in members if a.status == "blocked"]
+        if blocked:
+            soft.append("unresolved blockers: " + ", ".join(blocked))
+        if self.last_change_ts:
+            stamp = time.strftime("%H:%M:%S", time.localtime(self.last_change_ts))
+            reporters = [a for a in list(members) + [self.lead] if a.last_report_ts > self.last_change_ts]
+            others = reporters if len(members) <= 1 else [a for a in reporters if a.name != self.last_writer]
+            if not members:
+                soft.append("files were written but no teammate verified them")
+            elif not others:
+                soft.append("nobody other than {} has reported since the last file change at {}: have a tester or reviewer verify the final state".format(
+                    self.last_writer or "the author", stamp))
+            fails = [a.name for a in reporters if a.last_result in ("FAIL", "PARTIAL")]
+            if fails:
+                soft.append("reports since the last change say FAIL or PARTIAL: " + ", ".join(fails))
+        return hard, soft
+
+    def _finish_summary_line(self):
+        hard, soft = self._finish_gate()
+        if not hard and not soft:
+            return "ready: the work looks verified. FINISH is allowed now."
+        return "not ready: " + "; ".join(hard + soft)
+
+    def _try_finish(self, agent, args, body):
+        """Returns None when the run was finished, else the rejection text."""
+        hard, soft = self._finish_gate()
+        summary = clip(body.strip() or args.strip(), 3500) or "The goal has been completed."
+        if hard:
+            return "[FINISH rejected] " + "; ".join(hard) + ". Use WAIT now; you will be woken when a teammate reports."
+        missing = self.missing_claimed_files(summary)
+        if missing:
+            soft.append("your summary mentions files that do not exist: " + ", ".join(missing[:6]))
+        unverified = []
+        if soft:
+            self.finish_rejects += 1
+            if self.finish_rejects < MAX_FINISH_REJECTS:
+                return "[FINISH rejected] Not verified yet: " + "; ".join(soft) + ". Fix that (ASSIGN the right teammate) and FINISH again."
+            unverified = soft
+        self._finish(agent, summary, unverified)
+        return None
+
+    def _finish(self, agent, summary, unverified):
+        lines = [summary.strip(), "", "Verified by the system:"]
+        files = self.files_view()
+        scanned, _truncated = self._scan(fresh=True)
+        if scanned:
+            lines.append("Files in the workspace: " + ", ".join(rel for rel, _s, _m in scanned[:20]) + (" …" if len(scanned) > 20 else ""))
+        else:
+            lines.append("Files in the workspace: none")
+        reports = []
+        with self.lock:
+            members = [a for a in self.agents.values() if not a.lead and a.status != "retired"]
+        for member in members:
+            if member.summary:
+                reports.append("- {}{}: {}".format(member.name, " ({})".format(member.last_result) if member.last_result else "",
+                                                   clip(member.summary, 220).replace("\n", " ")))
+        if reports:
+            lines.append("Team reports:")
+            lines.extend(reports)
+        if unverified:
+            lines.append("")
+            lines.append("Warning: finished with open verification points: " + "; ".join(unverified))
+        text = "\n".join(lines).strip()
+        self.finish_summary = text
+        self._activity(agent, "finish", "The lead finished the project", detail=text, ok=not unverified)
+        message = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "from": "lead", "to": "user", "text": text, "kind": "final"}
+        with self.lock:
+            self.channel.append(message)
+        self._emit("channel", message=message)
+        self._deliver_to_user(text, "lead")
+        self._emit("finished", summary=text, files=files)
+        self.stop(final_status="finished", finished=True)
+
+    # -- executing actions ----------------------------------------------------
+
+    def _execute(self, agent, turn):
+        results, finished, said_to_user, stop_turn = [], False, False, False
+        if turn.fabricated:
+            results.append(FABRICATED_NOTICE)
+        seen, actions = set(), []
+        for item in turn.actions:
+            key = (item.verb, item.args.strip(), item.body.strip())
+            if key in seen:
+                continue
+            seen.add(key)
+            actions.append(item)
+        if len(actions) > MAX_ACTIONS_PER_TURN:
+            dropped = len(actions) - MAX_ACTIONS_PER_TURN
+            actions = actions[:MAX_ACTIONS_PER_TURN]
+            results.append("[LIMIT] Only the first {} action blocks were run; {} were dropped. Send them again in your next reply if still needed.".format(
+                MAX_ACTIONS_PER_TURN, dropped))
+        has_work = any(item.verb in TOOL_VERBS for item in actions)
+        for item in actions:
+            verb, args, body = item.verb, item.args, item.body
             if verb in LEAD_ONLY and not agent.lead:
                 results.append("[{} rejected] Only lead may use {}.".format(verb, verb))
                 continue
-            if verb == "DONE" and agent.lead:
+            if verb in WORKER_ONLY and agent.lead:
                 continue
             try:
                 if verb == "SAY":
                     target, _sep, inline = args.partition(" ")
                     text = body.strip() or inline.strip()
-                    if self.post(agent.name, target or "all", text) and target.lower() in ("user", "human") and agent.lead:
+                    message, reason = self._post(agent.name, target or "all", text, checked=True)
+                    if message is None:
+                        if reason and reason != "empty":
+                            results.append("[SAY suppressed] " + reason)
+                    elif target.lower() in ("user", "human") and agent.lead:
                         said_to_user = True
                 elif verb == "NOTE":
                     key = slug(args or "note", "note")
+                    value = body.strip() or args
                     with self.lock:
-                        self.notes[key] = {"value": body.strip() or args, "by": agent.name, "ts": time.time()}
-                    self._emit("note", key=key, note={"value": clip(self.notes[key]["value"], 3000), "by": agent.name, "ts": self.notes[key]["ts"]})
-                    self._note_entry(agent, "action", "NOTE {}".format(key))
+                        existing = self.notes.get(key)
+                        unchanged = bool(existing) and existing["value"] == value
+                        if not unchanged and not existing and len(self.notes) >= 60:
+                            results.append("[NOTE rejected] The shared notes are full. Reuse an existing key or ask lead to clean up.")
+                            continue
+                        if not unchanged:
+                            self.notes[key] = {"value": value, "by": agent.name, "ts": time.time()}
+                    if not unchanged:
+                        self._emit("note", key=key, note={"value": clip(value, 3000), "by": agent.name, "ts": self.notes[key]["ts"]})
+                        self._activity(agent, "note", "Shared note: {}".format(key), detail=value)
                 elif verb == "DONE":
-                    summary = clip((body.strip() or args), 1500) or "Task complete."
-                    agent.summary = summary
-                    self._note_entry(agent, "action", "DONE: " + clip(summary, 300))
-                    self.post(agent.name, "lead", "[DONE] " + summary)
+                    outcome = self._accept_done(agent, body.strip() or args.strip(), has_work)
+                    if outcome:
+                        results.append(outcome)
+                    else:
+                        finished = True
+                elif verb == "BLOCKED":
+                    self._block(agent, clip(body.strip() or args.strip(), 1200) or "No reason given.")
                     finished = True
+                elif verb == "FINISH":
+                    outcome = self._try_finish(agent, args, body)
+                    if outcome:
+                        results.append(outcome)
+                        stop_turn = True
+                    else:
+                        finished = True
+                        stop_turn = True
                 elif verb == "SPAWN":
                     results.append(self._spawn(agent, args, body))
                 elif verb == "ASSIGN":
@@ -1047,23 +1904,94 @@ class AgentSwarm:
                 elif verb == "RETIRE":
                     results.append(self._retire(agent, args))
                 elif verb == "PLAN":
-                    with self.lock:
-                        self.plan = clip(body.strip(), 6000)
-                    self._emit("plan", plan=self.plan)
-                    self._note_entry(agent, "action", "PLAN updated")
+                    plan = clip(body.strip(), 6000)
+                    if plan != self.plan:
+                        with self.lock:
+                            self.plan = plan
+                        self._emit("plan", plan=self.plan)
+                        self._activity(agent, "plan", "Updated the plan", detail=plan)
                 elif verb == "WAIT":
                     try:
                         agent.heartbeat = max(5, min(900, int(float(args.split()[0]))))
                     except (ValueError, IndexError):
                         agent.heartbeat = LEAD_HEARTBEAT
-                    self._note_entry(agent, "action", "WAIT {}s".format(agent.heartbeat))
+                    self._set_current(agent, "Waiting for the team", force=True)
                 elif verb in TOOL_VERBS:
-                    results.append(self._tool(agent, verb, args, body))
+                    if not item.closed and verb == "WRITE":
+                        results.append("[WRITE rejected] Your reply was cut off before '@@@ END', so the file was NOT written (a half-written file would be corrupt). "
+                                       "Write a smaller file, or split the content into several files, and finish each block with @@@ END.")
+                        continue
+                    self._note_work(agent)
+                    results.append(self._track_repeat(agent, item, self._tool(agent, verb, args, body)))
             except StopRequested:
                 raise
             except Exception as exc:
-                results.append("[{} failed] {}".format(verb, clip(exc, 800)))
-        return [item for item in results if item], finished, said_to_user
+                results.append("[{} failed] {}".format(verb, clip(exc, 800)) + self._missing_hint(verb))
+            if self.finished or (agent.status == "blocked" and not agent.lead):
+                break
+        results = [item for item in results if item]
+        if agent.status == "blocked" and not finished and not agent.lead and agent.blocked_reason:
+            finished = True
+        return results, finished, said_to_user, stop_turn
+
+    def _missing_hint(self, verb):
+        if verb in ("READ", "LIST"):
+            return "\nFiles that exist in the workspace:\n" + self.workspace_files_text(25)
+        return ""
+
+    def _track_repeat(self, agent, item, result):
+        """Flag an agent that keeps repeating the same action with the same result."""
+        key = (item.verb, _oneline(item.args)[:200], hashlib.md5(item.body.encode("utf-8", "replace")).hexdigest()[:8])
+        digest = hashlib.md5(str(result).encode("utf-8", "replace")).hexdigest()[:8]
+        agent.recent.append((key, digest))
+        repeats = sum(1 for entry in agent.recent if entry == (key, digest))
+        if repeats < MAX_REPEAT_ACTIONS:
+            return result
+        agent.loop_warnings += 1
+        agent.recent.clear()
+        if agent.lead:
+            return result + "\n[LOOP WARNING] You already did this exact action {} times with the same result. Use what you have or change approach.".format(repeats)
+        if agent.loop_warnings >= MAX_LOOP_WARNINGS:
+            self._block(agent, "I got stuck repeating the same action ({} {}) with the same result, so I stopped instead of looping. "
+                               "I need a different approach or more information.".format(item.verb, clip(_oneline(item.args) or _oneline(item.body), 80)), auto=True)
+            return result
+        return result + "\n[LOOP WARNING] You already did this exact action {} times with the same result. Use the result, change your approach, or report BLOCKED.".format(repeats)
+
+    def _accept_done(self, agent, text, has_work):
+        text = clip(text, 1500) or "Task complete."
+        if has_work:
+            return "[DONE ignored] Do not combine DONE with other actions. Wait for their results, check them, then send DONE alone."
+        problems = []
+        if agent.evidence == 0:
+            problems.append("you have not read, written, run or searched anything for this task, so there is no evidence. Do the work with tools first")
+        missing = self.missing_claimed_files(text)
+        if missing:
+            problems.append("your summary mentions files that do not exist in the workspace: {}. Check WORKSPACE FILES, then correct the summary or create them".format(", ".join(missing[:6])))
+        if problems and agent.done_rejects < MAX_DONE_REJECTS:
+            agent.done_rejects += 1
+            return "[DONE rejected] " + "; ".join(problems) + "."
+        if problems:
+            text += "\n(UNVERIFIED: {})".format("; ".join(problems))
+        result = RESULT_RE.search(text)
+        agent.last_result = result.group(1).upper() if result else ("PARTIAL" if problems else "")
+        agent.summary = text
+        agent.last_report_ts = time.time()
+        agent.blocked_reason = ""
+        self._note_work(agent)
+        self._set_status(agent, "done", current="Finished: waiting for the lead")
+        self._activity(agent, "done", "Reported done" + (" ({})".format(agent.last_result) if agent.last_result else ""), detail=text, ok=not problems and agent.last_result != "FAIL")
+        self.post(agent.name, "lead", "[DONE] " + text)
+        return ""
+
+    def _block(self, agent, reason, auto=False):
+        agent.blocked_reason = reason
+        agent.summary = "BLOCKED: " + reason
+        agent.last_report_ts = time.time()
+        agent.last_result = ""
+        self._note_work(agent)
+        self._set_status(agent, "blocked", current="Blocked: " + clip(reason, 100))
+        self._activity(agent, "blocked", "Blocked" + (" (stopped automatically)" if auto else ""), detail=reason, ok=False)
+        self.post(agent.name, "lead", "[BLOCKED] " + reason)
 
     def _spawn(self, agent, args, body):
         name_part, _sep, role_part = args.partition("|")
@@ -1079,9 +2007,10 @@ class AgentSwarm:
                 return "[SPAWN rejected] The team already has {} subagents. RETIRE one first.".format(MAX_SUBAGENTS)
             member = Agent(name, role, clip(mission, 1500))
             member.status = "working"
+            member.current = "Starting"
             self.agents[name.lower()] = member
         self._emit("agent", agent=self._agent_view(member, entries=0))
-        self._note_entry(agent, "action", "SPAWN {} | {}".format(name, role))
+        self._activity(agent, "spawn", "Added {} ({})".format(name, role), detail=mission)
         self._launch(member)
         self.post("lead", name, mission, kind="assignment")
         return "[SPAWN ok] {} ({}) is running.".format(name, role)
@@ -1094,8 +2023,9 @@ class AgentSwarm:
         text = body.strip()
         if not text:
             return "[ASSIGN rejected] The instruction is empty."
-        self._set_status(target, "working", task=clip(text, 1500))
-        self._note_entry(agent, "action", "ASSIGN {}".format(target.name))
+        target.reset_task()
+        self._set_status(target, "working", task=clip(text, 1500), current="Starting")
+        self._activity(agent, "assign", "Gave {} a task".format(target.name), detail=text)
         self.post("lead", target.name, text, kind="assignment")
         return "[ASSIGN ok] {} received the task.".format(target.name)
 
@@ -1106,8 +2036,8 @@ class AgentSwarm:
             return "[RETIRE rejected] No active subagent named '{}'.".format(name)
         target.retired = True
         target.wake.set()
-        self._set_status(target, "retired")
-        self._note_entry(agent, "action", "RETIRE {}".format(target.name))
+        self._set_status(target, "retired", current="")
+        self._activity(agent, "retire", "Retired {}".format(target.name))
         self.post("lead", "all", "{} was retired.".format(target.name), kind="system")
         return "[RETIRE ok] {} stopped.".format(target.name)
 
@@ -1125,7 +2055,7 @@ class AgentSwarm:
         with self.lock:
             self.pending[approval_id] = payload
         previous = agent.status
-        self._set_status(agent, "waiting")
+        self._set_status(agent, "waiting", current="Waiting for your approval")
         self._emit("approval", approval=payload)
         deadline = time.time() + APPROVAL_TIMEOUT
         while pending["approved"] is None and time.time() < deadline and not self.stop_event.is_set():
@@ -1137,35 +2067,56 @@ class AgentSwarm:
             self.pending.pop(approval_id, None)
         self._emit("approval_resolved", id=approval_id, approved=approved)
         if not self.stop_event.is_set() and agent.status == "waiting":
-            self._set_status(agent, previous if previous != "waiting" else "working")
+            self._set_status(agent, previous if previous != "waiting" else "working", current="")
         return approved
+
+    @staticmethod
+    def _sha(data):
+        return hashlib.sha256(data if isinstance(data, bytes) else str(data).encode("utf-8")).hexdigest()
+
+    def _mark_change(self, agent):
+        self.last_change_ts = time.time()
+        self.last_writer = agent.name
 
     def _tool(self, agent, verb, args, body):
         host = self.host
         argument = (args or body or "").strip()
         if verb == "READ":
-            self._note_entry(agent, "action", "READ " + clip(argument, 200))
+            self._set_current(agent, "Reading " + clip(argument, 60), force=True)
             path = host.resolve_user_read_path(self.chat_id, argument)
+            if not self._within_scope(path):
+                return ("[READ rejected] {} is outside the project workspace ({}). Stay inside the workspace. "
+                        "If you need something from elsewhere, ask lead.").format(path, self._workspace_label())
             if path.is_dir():
+                self._activity(agent, "list", "Listed " + (self._rel(path) or "."), ok=True)
                 return self._list_dir(path, "READ")
             if path.stat().st_size > 2_000_000:
                 return "[READ failed] {} is larger than 2 MB.".format(path)
             raw = path.read_bytes()
             if b"\x00" in raw[:4096]:
                 return "[READ failed] {} looks binary.".format(path)
+            agent.seen[str(path)] = self._sha(raw)
+            agent.evidence += 1
+            self._activity(agent, "read", "Read {}".format(self._rel(path)), ok=True)
             return "[READ {}]\n{}".format(path, clip(raw.decode("utf-8", errors="replace"), READ_LIMIT))
         if verb == "LIST":
-            self._note_entry(agent, "action", "LIST " + clip(argument or ".", 200))
+            self._set_current(agent, "Listing " + clip(argument or ".", 60), force=True)
             path = host.chat_work_root(self.chat_id) if not argument or argument == "." else host.resolve_user_read_path(self.chat_id, argument)
+            if not self._within_scope(path):
+                return ("[LIST rejected] {} is outside the project workspace ({}). Stay inside the workspace.").format(path, self._workspace_label())
+            self._activity(agent, "list", "Listed " + (self._rel(path) or "."), ok=True)
             return self._list_dir(path, "LIST")
         if verb == "SEARCH":
-            self._note_entry(agent, "action", "SEARCH " + clip(argument, 200))
+            self._set_current(agent, "Searching: " + clip(argument, 60), force=True)
             result = host.search_web(argument)
             if not result.get("ok"):
+                self._activity(agent, "search", "Search failed: " + clip(argument, 80), detail=str(result.get("message", "")), ok=False)
                 return "[SEARCH failed] {}".format(result.get("message", "unknown error"))
+            agent.evidence += 1
             lines = ["[SEARCH results for: {}]".format(argument)]
             for number, item in enumerate(result.get("results", []), 1):
                 lines.append("{}. {}\nURL: {}\nSnippet: {}".format(number, item.get("title", "Untitled"), item.get("url", ""), item.get("snippet", "")))
+            self._activity(agent, "search", "Searched: " + clip(argument, 80), ok=True)
             return clip("\n\n".join(lines), RESULT_LIMIT)
         if verb == "WRITE":
             target = args.strip().strip("\"'")
@@ -1175,21 +2126,41 @@ class AgentSwarm:
             if not content.endswith("\n"):
                 content += "\n"
             resolved = host.resolve_working_path(self.chat_id, target, allow_missing=True)
-            self._note_entry(agent, "action", "WRITE {} ({} bytes)".format(target, len(content.encode("utf-8"))))
+            rel = self._rel(resolved)
+            new_sha = self._sha(content)
+            current_sha = self._sha(resolved.read_bytes()) if resolved.is_file() else None
+            if current_sha is not None and current_sha != new_sha and agent.seen.get(str(resolved)) != current_sha:
+                owner = self.file_state.get(rel, {}).get("by")
+                return ("[WRITE held] {} already exists{} and you have not read its current version. "
+                        "READ it first, then send the WRITE again, so you do not overwrite work you have not seen.").format(
+                            rel, " (last changed by {})".format(owner) if owner and owner != agent.name else "")
+            self._set_current(agent, "Writing " + rel, force=True)
             if not self._approval(agent, "write_file", "{} wants to write a file".format(agent.name),
                                   detail="{}\n\n{}".format(resolved, clip(content, 4000)), path=str(resolved)):
+                self._activity(agent, "write", "Write declined: " + rel, ok=False)
                 return "[WRITE declined] The user declined this change. Nothing was written: {}".format(target)
             chat = host.get_chat(self.chat_id) or {}
             with self.file_lock:
                 resolved = host.resolve_working_path(self.chat_id, target, allow_missing=True)
                 current = hashlib.sha256(resolved.read_bytes()).hexdigest() if resolved.is_file() else None
                 outcome = host.apply_approved_file(self.chat_id, target, content, current, str(chat.get("linked_folder") or ""))
+            size = len(content.encode("utf-8"))
+            info = {"by": agent.name, "ts": time.time(), "sha": new_sha, "size": size, "rel": rel}
+            with self.lock:
+                self.file_state[rel] = info
+                agent.files[rel] = size
+            agent.seen[str(resolved)] = new_sha
+            agent.evidence += 1
+            if current != new_sha:
+                self._mark_change(agent)
+            self._emit("file", file={"path": rel, "by": agent.name, "ts": info["ts"], "size": size})
+            self._activity(agent, "write", "Wrote {} ({})".format(rel, human_size(size)), detail=clip(content, 1800), ok=True)
             return "[WRITE succeeded] {}".format(outcome.get("message") or resolved)
         if verb == "RUN":
             command = (body.strip() or args.strip())
             if not command:
                 return "[RUN rejected] No command was given."
-            self._note_entry(agent, "action", "RUN " + clip(command, 300))
+            self._set_current(agent, "Running: " + clip(command.split("\n")[0], 80), force=True)
             readonly = False
             try:
                 readonly = bool(host.is_readonly_command(self.chat_id, command))
@@ -1197,21 +2168,30 @@ class AgentSwarm:
                 readonly = False
             if not readonly and not self._approval(agent, "command", "{} wants to run a command".format(agent.name),
                                                    detail="Runs with your account's permissions in the project workspace.", command=command):
+                self._activity(agent, "run", "Command declined", detail=command, ok=False)
                 return "[RUN declined] The user declined this command. It was not executed: {}".format(command)
             try:
                 host.prewarm_chat_environment(self.chat_id, with_pip=host._command_needs_pip(command))
             except Exception:
                 pass
+            before = self._signature()
             outcome = host.run_command(self.chat_id, command)
+            if self._signature() != before:
+                self._mark_change(agent)
+            agent.evidence += 1
+            ok = bool(outcome.get("ok"))
             text = "[RUN result]\nCommand: {}\nExit code: {}\nStatus: {}\nOutput:\n{}".format(
-                command, outcome.get("returncode", -1), "succeeded" if outcome.get("ok") else "failed",
+                command, outcome.get("returncode", -1), "succeeded" if ok else "failed",
                 clip(outcome.get("output") or "(no output)", RESULT_LIMIT))
-            self._note_entry(agent, "result", clip(text, 3000))
+            if agent.lead:
+                agent.last_report_ts = time.time()
+                agent.last_result = "PASS" if ok else "FAIL"
+            self._activity(agent, "run", "{} `{}`".format("Ran" if ok else "Command failed:", clip(command.split("\n")[0], 90)),
+                           detail="exit code {}\n{}".format(outcome.get("returncode", -1), clip(outcome.get("output") or "(no output)", 2000)), ok=ok)
             return text
         return ""
 
-    @staticmethod
-    def _list_dir(path, label):
+    def _list_dir(self, path, label):
         rows = []
         for item in sorted(path.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.casefold())):
             try:
@@ -1226,7 +2206,11 @@ class AgentSwarm:
             if len(rows) >= 300:
                 rows.append("… truncated at 300 entries")
                 break
-        return "[{} {}]\n{}".format(label, path, "\n".join(rows) or "(empty)")
+        text = "[{} {}]\n{}".format(label, path, "\n".join(rows) or "(empty)")
+        if not rows:
+            text += ("\nThis folder is empty: nothing has been created here yet. Do NOT search other folders or invent files. "
+                     "If your task depends on a teammate's output, report BLOCKED and say who you are waiting for; otherwise create what your task needs.")
+        return text
 
     def _status_report(self):
         with self.lock:
@@ -1234,6 +2218,8 @@ class AgentSwarm:
             plan = self.plan.strip()
             recent = [item for item in self.channel if item.get("from") not in ("user", "system")][-3:]
         lines = []
+        if self.finished:
+            lines.append("The project is finished.")
         if members:
             lines.append("Team status:")
             for member in members:
@@ -1268,6 +2254,21 @@ class AgentSwarm:
             self._note_entry(lead, "error", "Quick reply failed: {}".format(clip(exc, 300)))
 
 
+def strip_fence(body):
+    stripped = body.strip("\n")
+    match = re.match(r"^```[^\n]*\n(.*)\n```\s*$", stripped, re.S)
+    return match.group(1) if match else body
+
+
+def human_size(size):
+    size = float(size)
+    for unit in ("B", "KB", "MB"):
+        if size < 1024 or unit == "MB":
+            return "{:.0f} {}".format(size, unit) if unit == "B" else "{:.1f} {}".format(size, unit)
+        size /= 1024.0
+    return "{} B".format(int(size))
+
+
 def chat_history(host, chat_id):
     chat = host.get_chat(chat_id) or {}
     return [dict(item) for item in chat.get("messages", []) if isinstance(item, dict) and item.get("agent_mode")][-40:]
@@ -1286,12 +2287,12 @@ class AgentManager:
                     return chat_id
         return None
 
-    def send(self, chat_id, text, route_info, message_id=""):
+    def send(self, chat_id, text, route_info, message_id="", continuous=None):
         with self.lock:
             swarm = self.swarms.get(chat_id)
             if swarm is not None and swarm.running:
-                swarm.user_message(text, message_id)
-                return {"ok": True, "running": True, "started": False}
+                swarm.user_message(text, message_id, continuous)
+                return {"ok": True, "running": True, "started": False, "continuous": swarm.continuous}
             for other_id, other in self.swarms.items():
                 if other_id != chat_id and other.running:
                     raise ValueError("Agent mode is already running in another chat. Stop it there before starting here.")
@@ -1300,8 +2301,25 @@ class AgentManager:
                 raise ValueError("Conversation not found.")
             swarm = AgentSwarm(self.host, chat_id, route_info, restore=chat.get("agent") if isinstance(chat.get("agent"), dict) else None)
             self.swarms[chat_id] = swarm
-            swarm.start(text)
-        return {"ok": True, "running": True, "started": True}
+            swarm.start(text, message_id, continuous)
+        return {"ok": True, "running": True, "started": True, "continuous": swarm.continuous}
+
+    def set_continuous(self, chat_id, value):
+        value = bool(value)
+        with self.lock:
+            swarm = self.swarms.get(chat_id)
+        if swarm is not None and swarm.running:
+            swarm.set_continuous(value)
+            return {"ok": True, "continuous": swarm.continuous, "running": True}
+        chat = self.host.get_chat(chat_id)
+        if chat is None:
+            raise ValueError("Conversation not found.")
+        saved = chat.get("agent")
+        if isinstance(saved, dict):
+            with self.host.lock:
+                saved["continuous"] = value
+            self.host.save_chats()
+        return {"ok": True, "continuous": value, "running": False}
 
     def stop(self, chat_id):
         with self.lock:
@@ -1322,13 +2340,18 @@ class AgentManager:
             return {"seq": 0, "epoch": "", "running": False, "snapshot": None, "events": []}
         if epoch == "" and after == 0:
             return {"seq": 0, "epoch": "", "running": False, "events": []}
-        agents = [{"name": "lead", "role": "Lead orchestrator", "task": "", "status": "stopped", "summary": str((saved.get("lead") or {}).get("summary") or ""),
-                   "turns": 0, "retry_at": 0, "lead": True, "entries": (saved.get("lead") or {}).get("entries") or []}]
+        status = "finished" if saved.get("finished") else "stopped"
+        agents = [{"name": "lead", "role": "Lead orchestrator", "task": "", "status": status, "current": "", "summary": str((saved.get("lead") or {}).get("summary") or ""),
+                   "turns": 0, "retry_at": 0, "lead": True, "files": [], "result": "", "blocked": "", "report_ts": 0, "strikes": 0,
+                   "entries": (saved.get("lead") or {}).get("entries") or []}]
         for item in saved.get("agents") or []:
             if isinstance(item, dict) and not item.get("retired"):
-                agents.append({"name": item.get("name"), "role": item.get("role"), "task": item.get("task"), "status": "stopped",
-                               "summary": item.get("summary"), "turns": 0, "retry_at": 0, "lead": False, "entries": []})
-        snapshot = {"running": False, "goal": saved.get("goal", ""), "plan": saved.get("plan", ""), "notes": saved.get("notes") or {},
-                    "channel": (saved.get("channel") or [])[-150:], "agents": agents, "approvals": [], "cooldown_until": 0,
-                    "cooldown_reason": "", "model": "", "seq": 0, "chat": chat_history(self.host, chat_id)}
+                agents.append({"name": item.get("name"), "role": item.get("role"), "task": item.get("task"), "status": status, "current": "",
+                               "summary": item.get("summary"), "turns": 0, "retry_at": 0, "lead": False, "files": [],
+                               "result": item.get("result") or "", "blocked": "", "report_ts": 0, "strikes": 0, "entries": []})
+        snapshot = {"running": False, "finished": bool(saved.get("finished")), "finish_summary": saved.get("finish_summary", ""),
+                    "continuous": bool(saved.get("continuous")), "idle_paused": False, "goal": saved.get("goal", ""), "plan": saved.get("plan", ""),
+                    "notes": saved.get("notes") or {}, "channel": (saved.get("channel") or [])[-150:], "activity": (saved.get("activity") or [])[-300:],
+                    "files": saved.get("files") or [], "agents": agents, "approvals": [], "cooldown_until": 0, "cooldown_reason": "",
+                    "model": "", "seq": 0, "started_at": saved.get("updated") or 0, "now": time.time(), "chat": chat_history(self.host, chat_id)}
         return {"seq": 0, "epoch": "", "running": False, "snapshot": snapshot, "events": []}
