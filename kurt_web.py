@@ -5875,7 +5875,17 @@ class KurtWebApp:
         quoted = subprocess.list2cmdline([shown]) if os.name == "nt" else shlex.quote(shown)
         before = self._snapshot_outputs(work_root)
         try:
-            result = self.run_command(chat_id, "python " + quoted, timeout=timeout)
+            try:
+                source_text = script.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                source_text = ""
+            needs_terminal = bool(re.search(r"^\s*(?:import\s+curses|from\s+curses\b)|\bcurses\.wrapper\b|\bcurses\.initscr\b", source_text, re.M))
+            if needs_terminal:
+                result = self.run_command(chat_id, "python " + quoted, timeout=timeout, tty={"keys": [], "timeout": 15})
+                if isinstance(result, dict) and result.get("output"):
+                    result["output"] = "This program needs a terminal, so it ran in a pseudo terminal for up to 15 seconds with no keys pressed.\n" + result["output"]
+            else:
+                result = self.run_command(chat_id, "python " + quoted, timeout=timeout)
         except Exception as exc:
             result = {"ok": False, "returncode": -1, "output": str(exc), "elapsed": None}
         after = self._snapshot_outputs(work_root)
