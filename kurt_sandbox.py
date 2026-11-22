@@ -126,7 +126,247 @@ def _is_within(path, root):
         return False
 
 
-def _mac_sandbox_profile(write_roots, allow_network=False):
+TTY_ROWS = 24
+TTY_COLS = 80
+TTY_KEYS = {
+    'ENTER': '\r', 'RETURN': '\r', 'SPACE': ' ', 'TAB': '\t', 'ESC': '\x1b', 'ESCAPE': '\x1b',
+    'BACKSPACE': '\x7f', 'UP': '\x1b[A', 'DOWN': '\x1b[B', 'RIGHT': '\x1b[C', 'LEFT': '\x1b[D',
+    'CTRL-C': '\x03', 'CTRL-D': '\x04', 'CTRL-Q': '\x11',
+}
+
+
+def parse_tty_keys(text):
+    """Turn a line such as 'w a ENTER UP q' into a list of byte strings to type."""
+    keys = []
+    for token in str(text or '').split():
+        named = TTY_KEYS.get(token.upper())
+        if named is not None:
+            keys.append(named)
+        else:
+            keys.extend(token)
+    return keys[:200]
+
+
+class _Screen:
+    """A tiny terminal emulator so curses output can be read as a final screen."""
+
+    def __init__(self, rows=TTY_ROWS, cols=TTY_COLS):
+        self.rows, self.cols = rows, cols
+        self.grid = [[' '] * cols for _ in range(rows)]
+        self.row = self.col = 0
+
+    def _scroll(self):
+        self.grid.pop(0)
+        self.grid.append([' '] * self.cols)
+
+    def _put(self, ch):
+        if self.col >= self.cols:
+            self.col = 0
+            self.row += 1
+        if self.row >= self.rows:
+            self.row = self.rows - 1
+            self._scroll()
+        self.grid[self.row][self.col] = ch
+        self.col += 1
+
+    def feed(self, text):
+        i, n = 0, len(text)
+        while i < n:
+            ch = text[i]
+            if ch == '\x1b':
+                if i + 1 < n and text[i + 1] == '[':
+                    j = i + 2
+                    while j < n and not ('@' <= text[j] <= '~'):
+                        j += 1
+                    if j >= n:
+                        break
+                    self._csi(text[i + 2:j], text[j])
+                    i = j + 1
+                    continue
+                if i + 1 < n and text[i + 1] == ']':
+                    j = i + 2
+                    while j < n and text[j] not in '\x07':
+                        if text[j] == '\x1b' and j + 1 < n and text[j + 1] == '\\':
+                            j += 1
+                            break
+                        j += 1
+                    i = j + 1
+                    continue
+                i += 3 if i + 1 < n and text[i + 1] in '()#' else 2
+                continue
+            if ch == '\r':
+                self.col = 0
+            elif ch == '\n':
+                self.row += 1
+                if self.row >= self.rows:
+                    self.row = self.rows - 1
+                    self._scroll()
+            elif ch == '\b':
+                self.col = max(0, self.col - 1)
+            elif ch == '\t':
+                self.col = min(self.cols - 1, (self.col // 8 + 1) * 8)
+            elif ch >= ' ':
+                self._put(ch)
+            i += 1
+
+    def _csi(self, params, final):
+        private = params.startswith('?') or params.startswith('>')
+        nums = []
+        for part in params.lstrip('?>').split(';'):
+            try:
+                nums.append(int(part))
+            except ValueError:
+                nums.append(0)
+        first = nums[0] if nums and nums[0] else 1
+        if private:
+            return
+        if final in 'Hf':
+            self.row = min(self.rows - 1, max(0, (nums[0] or 1) - 1))
+            self.col = min(self.cols - 1, max(0, ((nums[1] if len(nums) > 1 else 1) or 1) - 1))
+        elif final == 'A':
+            self.row = max(0, self.row - first)
+        elif final == 'B':
+            self.row = min(self.rows - 1, self.row + first)
+        elif final == 'C':
+            self.col = min(self.cols - 1, self.col + first)
+        elif final == 'D':
+            self.col = max(0, self.col - first)
+        elif final == 'G':
+            self.col = min(self.cols - 1, first - 1)
+        elif final == 'd':
+            self.row = min(self.rows - 1, first - 1)
+        elif final == 'J':
+            mode = nums[0] if nums else 0
+            if mode in (2, 3):
+                self.grid = [[' '] * self.cols for _ in range(self.rows)]
+            elif mode == 0:
+                for c in range(self.col, self.cols):
+                    self.grid[self.row][c] = ' '
+                for r in range(self.row + 1, self.rows):
+                    self.grid[r] = [' '] * self.cols
+            elif mode == 1:
+                for c in range(0, self.col + 1):
+                    self.grid[self.row][c] = ' '
+                for r in range(0, self.row):
+                    self.grid[r] = [' '] * self.cols
+        elif final == 'K':
+            mode = nums[0] if nums else 0
+            if mode == 0:
+                for c in range(self.col, self.cols):
+                    self.grid[self.row][c] = ' '
+            elif mode == 1:
+                for c in range(0, self.col + 1):
+                    self.grid[self.row][c] = ' '
+            else:
+                self.grid[self.row] = [' '] * self.cols
+        elif final == 'X':
+            for c in range(self.col, min(self.cols, self.col + first)):
+                self.grid[self.row][c] = ' '
+
+    def text(self):
+        lines = [''.join(row).rstrip() for row in self.grid]
+        while lines and not lines[-1]:
+            lines.pop()
+        return '\n'.join(lines)
+
+
+def run_in_pty(argv, cwd, env, timeout=10, keys=None):
+    """Run argv attached to a pseudo terminal, type optional keys, return the final screen.
+
+    The process is stopped when it exits or when the timeout passes. A program that is
+    still alive at the timeout (a game loop, a server) is killed and reported as such.
+    """
+    import fcntl
+    import pty
+    import select
+    import signal
+    import struct
+    import termios
+    import time
+
+    child_env = dict(env)
+    child_env.update({'TERM': 'xterm-256color', 'LINES': str(TTY_ROWS), 'COLUMNS': str(TTY_COLS)})
+    pid, fd = pty.fork()
+    if pid == 0:
+        try:
+            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack('HHHH', TTY_ROWS, TTY_COLS, 0, 0))
+            os.chdir(str(cwd))
+            os.execvpe(argv[0], argv, child_env)
+        except BaseException:
+            pass
+        os._exit(127)
+    timeout = max(1.0, min(float(timeout), 60.0))
+    started = time.monotonic()
+    pending = list(keys or [])
+    next_key = started + 1.2
+    raw = b''
+    status = None
+    killed = False
+    try:
+        while True:
+            now = time.monotonic()
+            if pending and now >= next_key:
+                try:
+                    os.write(fd, pending.pop(0).encode('utf-8', 'replace'))
+                except OSError:
+                    pending = []
+                next_key = now + 0.35
+            if now - started > timeout:
+                killed = True
+                break
+            ready, _w, _x = select.select([fd], [], [], 0.1)
+            if ready:
+                try:
+                    chunk = os.read(fd, 65536)
+                except OSError:
+                    chunk = b''
+                if not chunk:
+                    break
+                raw += chunk
+                if len(raw) > 2_000_000:
+                    killed = True
+                    break
+        if killed:
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.killpg(pid, sig)
+                except (ProcessLookupError, PermissionError, OSError):
+                    try:
+                        os.kill(pid, sig)
+                    except OSError:
+                        pass
+                time.sleep(0.2)
+        try:
+            deadline = time.monotonic() + 3
+            while status is None and time.monotonic() < deadline:
+                done, status_value = os.waitpid(pid, os.WNOHANG)
+                if done:
+                    status = status_value
+                    break
+                time.sleep(0.05)
+        except ChildProcessError:
+            status = 0
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    if status is None:
+        code = -9
+    elif os.WIFEXITED(status):
+        code = os.WEXITSTATUS(status)
+    elif os.WIFSIGNALED(status):
+        code = -os.WTERMSIG(status)
+    else:
+        code = -1
+    screen = _Screen()
+    screen.feed(raw.decode('utf-8', 'replace'))
+    final = screen.text() or '(the program drew nothing)'
+    return {'returncode': code, 'killed': killed, 'screen': final, 'seconds': round(time.monotonic() - started, 1),
+            'keys': len(keys or [])}
+
+
+def _mac_sandbox_profile(write_roots, allow_network=False, tty=False):
     """Build a Seatbelt profile with broad read access and narrowly scoped writes."""
     def quoted(path):
         return json.dumps(str(Path(path).resolve(strict=False)))
@@ -155,13 +395,16 @@ def _mac_sandbox_profile(write_roots, allow_network=False):
         # Writes remain confined to private session state and, only when linked, the chosen folder.
     ]
     rules.append('(allow file-write* {})'.format(' '.join('(subpath {})'.format(quoted(path)) for path in existing)))
+    if tty:
+        rules.append('(allow pseudo-tty)')
+        rules.append('(allow file-ioctl)')
     if allow_network:
         rules.append('(allow network-outbound)')
     return '\n'.join(rules)
 
 
 def run_workspace_command(workspace, env_dir, command, timeout=120, project_root=None,
-                          working_directory=None, writable_roots=None):
+                          working_directory=None, writable_roots=None, tty=None):
     """Run a user-approved shell command under the macOS Seatbelt filesystem sandbox.
 
     Reads are permitted wherever the current OS account has read access. Writes are allowed
@@ -229,7 +472,7 @@ def run_workspace_command(workspace, env_dir, command, timeout=120, project_root
     # receive no network permission, even though local file reads are broad.
     allow_network = bool(re.search(r'(?i)(?:\b(?:pip|pip3|npm|pnpm|yarn|cargo|go)\s+(?:install|add|get)\b|\bpython(?:3)?\s+-m\s+pip\s+install\b|\b(?:git\s+(?:clone|fetch|pull))\b|\b(?:curl|wget)\b)', raw))
     try:
-        profile = _mac_sandbox_profile(normalized_roots, allow_network=allow_network)
+        profile = _mac_sandbox_profile(normalized_roots, allow_network=allow_network, tty=bool(tty))
     except Exception as exc:
         return {'ok': False, 'returncode': -1, 'output': 'Could not prepare the macOS sandbox profile: ' + str(exc)}
 
@@ -252,6 +495,21 @@ def run_workspace_command(workspace, env_dir, command, timeout=120, project_root
         'LC_ALL': os.environ.get('LC_ALL', 'en_US.UTF-8'),
     }
     started = time.monotonic()
+    if tty:
+        try:
+            outcome = run_in_pty([sandbox_exec, '-p', profile, shell, '-c', raw], cwd, env,
+                                 timeout=tty.get('timeout', 10) if isinstance(tty, dict) else 10,
+                                 keys=tty.get('keys') if isinstance(tty, dict) else None)
+        except OSError as exc:
+            return {'ok': False, 'returncode': -1, 'output': 'Could not start the sandboxed terminal command: ' + str(exc)}
+        note = ('The program was still running after {} s and was stopped. That is normal for a game or server: judge it by the screen below.'
+                .format(outcome['seconds']) if outcome['killed'] else 'The program exited with code {}.'.format(outcome['returncode']))
+        text = 'Ran in a pseudo terminal ({}x{}), typed {} key(s). {}\nFinal screen:\n{}'.format(
+            TTY_COLS, TTY_ROWS, outcome['keys'], note, outcome['screen'])
+        crashed = (not outcome['killed']) and outcome['returncode'] != 0
+        return {'ok': not crashed, 'returncode': outcome['returncode'], 'output': text[:16000],
+                'elapsed': round(time.monotonic() - started, 2), 'working_directory': str(cwd),
+                'sandbox': 'macOS Seatbelt', 'network_allowed': allow_network, 'tty': True}
     try:
         result = subprocess.run(
             [sandbox_exec, '-p', profile, shell, '-c', raw],
