@@ -1915,6 +1915,36 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 @media(max-width:560px){.ad-roster{grid-template-columns:1fr;max-height:180px}.ad-head{padding:13px 12px 11px}.ad-team{padding:10px 11px 9px}.ad-body{padding:9px 9px 14px}.ad-tabs{padding:0 5px}.ad-tabs button{padding:9px 8px;font-size:10.5px}}
 @media(prefers-reduced-motion:reduce){.ad-pulse.live::after,.ag-row .ag-av::after{animation:none}.ad-bar i,.ad-track,.ad-track::after{transition:none}}
 
+
+/* Compact agent workspace and real file download cards */
+.think-text{white-space:normal}.think-text p{margin:0 0 6px}
+.think-text strong,.ad-msgtext strong,.ad-activity-copy strong,.ad-raw-text strong{font-weight:750;color:var(--text)}
+.think-text p,.ad-activity-copy p,.ad-msgtext p,.ad-raw-text p{margin:0 0 5px}
+.ad-detail{display:none;grid-column:2/4;max-height:220px;overflow:auto;margin:5px 0 2px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--code);overflow-wrap:anywhere;font:11px/1.55 var(--sans);color:var(--text)}
+.ad-item.open .ad-detail{display:block}.ad-raw>div{white-space:normal;font:11px/1.5 var(--sans)}.ad-raw-text{overflow-wrap:anywhere}
+.agent-dock{flex-basis:clamp(360px,39%,560px);min-width:340px}
+.ad-head{gap:8px;padding:11px 12px 9px}.ad-summary{gap:2px;padding:9px 10px;border-radius:10px}.ad-summary strong{font-size:12.5px}
+.ad-summary p{font-size:11px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+.ad-summary small{font-size:10px}.ad-controls{gap:8px;padding-top:2px}.ad-mode{gap:8px}.ad-mode b{font-size:11px}.ad-mode small{font-size:9.5px}
+.ad-progress{gap:4px}.ad-legend{gap:3px 8px;font-size:9.5px}.ad-banners{gap:5px;padding:7px 12px 0;max-height:22%}
+.ad-banner{padding:7px 9px;font-size:11px}.ad-banner b{margin-bottom:1px;font-size:11.5px}.ad-banner .row{gap:5px;margin-top:6px}
+.ad-team{gap:5px;padding:8px 12px}.ad-section-head{font-size:9px}.ad-lead-card{gap:7px;padding:7px 8px}
+.ad-lead-avatar{width:31px;height:31px}.ad-lead-name{font-size:11px}.ad-lead-current{font-size:10px;line-height:1.35;max-width:48%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ad-lead-report,.ad-lead-role{display:none!important}.ad-roster{grid-template-columns:1fr;gap:3px;max-height:116px;overflow:auto}
+.ag-row{grid-template-columns:25px minmax(0,1fr) auto;grid-template-rows:auto;gap:6px;padding:5px 7px;min-height:32px}
+.ag-row .ag-av{width:23px;height:23px}.ag-row .ag-line{gap:3px}.ag-name{font-size:10.5px}.ag-role{display:none}
+.ag-pill{font-size:9px;padding:2px 6px}.ag-now{grid-column:2;grid-row:2;font-size:9.5px;line-height:1.2;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ag-meta{display:none!important}.ad-tabs{padding:0 8px;gap:2px}.ad-tabs button{padding:8px 9px;font-size:10.5px}.ad-tabs .n{font-size:9px}
+.ad-body{padding:9px 11px 14px}.ad-conversation-note{display:none}.ad-item{padding:7px 5px;gap:7px;font-size:11px}.ad-item .ad-text{line-height:1.4}
+.ad-time{font-size:9px}.ad-msg-route{gap:4px;margin-bottom:2px}.ad-route-kind{font-size:9px}.ad-msgtext{font-size:11px;line-height:1.45;white-space:normal}
+.ad-focus{gap:5px;padding:8px}.ad-focus dl{font-size:10.5px;gap:3px 8px}.ad-file-grid{display:grid;gap:7px}
+.ad-file-list{margin-top:8px;padding-top:7px;border-top:1px solid var(--line);color:var(--muted);font-size:10.5px}.ad-file-list summary{cursor:pointer;user-select:none}.ad-file-list .ad-file-grid{margin-top:7px}
+.file-artifact-card{width:100%;max-width:none;padding:8px 10px;border-radius:10px}.file-artifact-card .artifact-trigger-icon{width:30px;height:30px}
+.file-artifact-card .artifact-trigger-name{font-size:11.5px}.file-artifact-card .artifact-trigger-status{font-size:10px}
+.ad-report{margin-top:5px}.ad-report summary{cursor:pointer;color:var(--muted);font-size:10.5px}
+.ad-finish-summary{max-height:200px;overflow:auto;margin-top:7px;padding-top:7px;border-top:1px solid var(--line);font-size:11px;line-height:1.5;white-space:pre-wrap}
+@media(max-width:560px){.agent-dock{min-width:0}.ad-roster{max-height:110px}.ad-head{padding:10px}.ad-team{padding:8px 10px}.ad-body{padding:8px}}
+
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -1998,8 +2028,8 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 </section>
 <nav class="ad-tabs" id="adTabs" role="tablist" aria-label="Team workspace tabs">
  <button type="button" role="tab" data-tab="activity" class="on">Overview</button>
- <button type="button" role="tab" data-tab="messages">Conversations <span class="n" id="adNMsg">0</span></button>
- <button type="button" role="tab" data-tab="plan">Plan &amp; notes</button>
+ <button type="button" role="tab" data-tab="messages">Messages <span class="n" id="adNMsg">0</span></button>
+ <button type="button" role="tab" data-tab="plan">Plan</button>
  <button type="button" role="tab" data-tab="files">Files <span class="n" id="adNFiles">0</span></button>
 </nav>
 <div class="ad-body" id="adBody">
@@ -2303,7 +2333,7 @@ function setThink(node,entries){
  items.forEach(item=>{
   const data=typeof item==='string'?{text:item}:item||{};
   if(data.kind==='approval'&&data.approval){body.appendChild(createApprovalRow(node,data));return}
-  if(data.kind==='thinking'){const block=document.createElement('div');block.className='think-text';block.textContent=String(data.detail||'');body.appendChild(block);return}
+  if(data.kind==='thinking'){const block=document.createElement('div');block.className='think-text';block.innerHTML=renderMarkdown(String(data.detail||''));body.appendChild(block);return}
   const PAUSE='Paused for your approval: ';
   if(typeof data.text==='string'&&data.text.startsWith(PAUSE)&&items.some(x=>x&&x.kind==='approval'&&x.approval&&String(x.text||x.approval.title||'')===data.text.slice(PAUSE.length)))return;
   const label=String(data.text||'Step'),detail=String(data.detail||'');
@@ -2451,11 +2481,11 @@ function renderMessage(role,content,artifacts,extra){
   bubble.insertAdjacentHTML('beforeend','<div class="assistant-heading"><svg class="mark" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><span>Kurt</span><button type="button" class="think-head" hidden aria-expanded="false"><svg class="ic chev" aria-hidden="true"><use href="#i-chev"/></svg><span class="think-label">Thinking</span></button><span class="assistant-status"></span></div>');
   bubble.appendChild(thinkBlock());bubble.querySelector('.think-head').onclick=()=>{wrap.__userToggled=true;setThinkOpen(wrap,!bubble.querySelector('.work-log').classList.contains('open'))};
   bubble.insertAdjacentHTML('beforeend','<div class="content"></div><div class="message-artifacts"></div><div class="msg-foot"><button class="icon-btn copy-msg" title="Copy" aria-label="Copy message"><svg class="ic"><use href="#i-copy"/></svg></button><span class="response-metrics"></span></div>');
-  const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindFileLinks(contentNode);renderMcpMedia(contentNode,extra?.media||[]);bindCopy(wrap);
+  const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);renderMcpMedia(contentNode,extra?.media||[]);bindCopy(wrap);
   wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];
   if(extra?.reasoning&&!wrap.__worklog.some(entry=>entry&&entry.kind==='thinking'))wrap.__worklog.unshift({kind:'thinking',text:'Thinking',ok:null,detail:extra.reasoning});
   setThink(wrap,wrap.__worklog);setThinkLabel(wrap,false,extra?.thinkingSeconds||(extra?.stats&&extra.stats.thought_seconds)||0);
-  setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);
+  setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);bindFileLinks(contentNode);
   wrap.__artifacts=Array.isArray(artifacts)?artifacts.slice():[];
   bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'));
  }
@@ -2626,18 +2656,25 @@ function codeAction(lang){
  const kind={python:'py',py:'py',html:'html',htm:'html',svg:'svg',markdown:'md',md:'md'}[String(lang||'').toLowerCase()];
  return kind?'<button class="copy-mini" data-open-code="'+kind+'">'+(kind==='py'?'Run':'Preview')+'</button>':'';
 }
+function fileCardButton(name,path,kind='file',meta='Open file'){
+ const button=document.createElement('button');button.type='button';button.className='artifact-trigger file-artifact-card';button.dataset.path=String(Array.isArray(path)?path.join(','):path||'');
+ button.innerHTML='<span class="artifact-trigger-icon"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span><span class="artifact-trigger-text"><span class="artifact-trigger-name"></span><span class="artifact-trigger-status"></span></span><span class="artifact-trigger-open" aria-hidden="true">↗</span>';
+ button.querySelector('.artifact-trigger-name').textContent=name;
+ button.querySelector('.artifact-trigger-status').textContent=meta;
+ button.setAttribute('aria-label',(kind==='zip'?'Open ZIP archive ':'Open file ')+name);
+ button.onclick=async()=>{button.disabled=true;try{if(kind==='zip'){const paths=Array.isArray(path)?path:[path];const r=await api('/api/artifact/export',{chat_id:state.chatId,paths});const artifact={kind:'file_ref',name:r.name,path:r.name,mime:r.mime||'application/zip',size:r.size,url:r.url,validation:{ok:true,checked:true,message:paths.length+' files · ZIP archive'}};openArtifactPreview(artifact,button)}else await openWorkspaceFile(path,'work')}catch(error){toast('Could not open '+name+': '+error.message)}finally{button.disabled=false}};
+ return button;
+}
 function bindFileLinks(root){
  if(!root)return;
- const known=new Set([...Object.keys(PV_TYPES),...Object.keys(LANG_BY_EXT)]);
- root.querySelectorAll('code').forEach(code=>{
-  if(code.closest('pre')||code.closest('.codebox')||code.dataset.fileLink)return;
-  const text=(code.textContent||'').trim();
-  if(!text||text.length>180||/[\s<>"|?*\\]/.test(text)||text.includes('..')||text.includes('://'))return;
-  const match=text.match(/\.([A-Za-z0-9]{1,5})$/);if(!match||!known.has(match[1].toLowerCase()))return;
-  code.dataset.fileLink='1';code.classList.add('file-link');code.title='Open in the file card';code.setAttribute('role','button');code.tabIndex=0;
-  const open=async()=>{try{await openWorkspaceFile(text,'work')}catch(error){if(state.linkedFolder){try{await openWorkspaceFile(text,'private');return}catch(inner){}}toast('Could not open '+text+': '+error.message)}};
-  code.onclick=open;code.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open()}};
- });
+ const known=new Set([...Object.keys(PV_TYPES),...Object.keys(LANG_BY_EXT),...Array.from(PV_BINARY||[])]),found=[];
+ const add=(node,path)=>{path=String(path||'').trim().replace(/^\.\//,'');if(!path||path.length>240||path.includes('..')||/^(?:https?:|mailto:|data:|javascript:|#|\/preview\/)/i.test(path))return;const ext=(path.match(/\.([A-Za-z0-9]{1,8})$/)||[])[1];if(!ext||!known.has(ext.toLowerCase()))return;if(!found.some(x=>x.path===path))found.push({node,path})};
+ root.querySelectorAll('code').forEach(code=>{if(code.closest('pre')||code.closest('.codebox')||code.dataset.fileLink)return;const text=(code.textContent||'').trim();if(!text||/[<>|?*\\]/.test(text)||text.includes('://'))return;add(code,text)});
+ root.querySelectorAll('a[href]').forEach(link=>{if(link.closest('.artifact-trigger')||link.dataset.fileLink)return;const href=link.getAttribute('href')||'';if(href.startsWith('/')||/^(?:https?:|mailto:|data:|javascript:|#)/i.test(href))return;add(link,href)});
+ if(!found.length)return;
+ const cardHost=root.closest('.bubble')?.querySelector('.message-artifacts')||root;
+ if(found.length>3){found.forEach(item=>item.node.remove());cardHost.appendChild(fileCardButton('Download '+found.length+' files as ZIP',found.map(x=>x.path),'zip','ZIP archive · '+found.length+' files'));return}
+ found.forEach(item=>{item.node.remove();cardHost.appendChild(fileCardButton(item.path,item.path,'file','Workspace file · Open preview'))});
 }
 function pvNote(text){const n=document.createElement('div');n.className='ap-note';n.textContent=text;return n}
 function pvInfo(a,message){
@@ -2645,7 +2682,7 @@ function pvInfo(a,message){
  const title=document.createElement('strong');title.textContent=pvName(a);
  const detail=document.createElement('span');detail.textContent=message||((a.mime||artifactLang(a))+(a.size?' · '+pvSize(a.size):'')+' · No inline preview is available for this file type.');
  box.append(title,detail);
- if(a.url){const link=document.createElement('a');link.className='ap-btn';link.href=a.url;link.download=pvName(a);link.textContent='Download file';box.appendChild(link)}
+ if(a.url){const link=document.createElement('a');link.className='ap-btn';link.href=a.download_url||a.url+(a.url.includes('?')?'&':'?')+'download=1';link.download=pvName(a);link.textContent='Download file';box.appendChild(link)}
  return box;
 }
 function pvTerm(text,ok){
@@ -2877,7 +2914,7 @@ function copyActiveArtifact(){
 }
 function downloadActiveArtifact(){
  const current=state.activeArtifact;
- if(current&&current.url&&!state.activeArtifactContent){const anchor=document.createElement('a');anchor.href=current.url;anchor.download=pvName(current);document.body.appendChild(anchor);anchor.click();anchor.remove();return}
+ if(current&&current.url&&!state.activeArtifactContent){const anchor=document.createElement('a');anchor.href=current.download_url||current.url+(current.url.includes('?')?'&':'?')+'download=1';anchor.download=pvName(current);document.body.appendChild(anchor);anchor.click();anchor.remove();return}
  const text=state.activeArtifactContent||'';if(!text){toast('Nothing to download');return}
  let name=String(state.activeArtifactName||'kurt-file').replace(/[^\w.\-]+/g,'_');if(!name.includes('.'))name+='.txt';
  const url=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'}));
@@ -3474,19 +3511,20 @@ function agentOverall(){
 }
 function agentSummaryCopy(){
  const a=state.agent,c=agentCounts(),lead=a.agents.get('lead');
- if(a.finished)return{title:'Project completed',body:'The lead has submitted its final report. Review the completion summary below.',tone:'done'};
- if(a.pollError)return{title:'Status updates interrupted',body:'Kurt could not refresh the team state: '+a.pollError+'. The team may still be running; try again shortly.',tone:'warn'};
- if(a.approvals.size){const item=[...a.approvals.values()][0];return{title:'Your approval is needed',body:(item.agent||'An agent')+' is waiting for approval: '+(item.title||'requested action')+'. Review the request below.',tone:'warn'};}
+ if(a.finished)return{title:'Completed',body:'Final report ready',tone:'done'};
+ if(a.pollError)return{title:'Updates paused',body:'Retrying status connection',tone:'warn'};
+ if(a.approvals.size){const item=[...a.approvals.values()][0];return{title:'Approval needed',body:(item.agent||'Agent')+' · '+(item.title||'Review action'),tone:'warn'};}
  const wait=Math.ceil(a.cooldown-agNow());
- if(wait>0)return{title:'Waiting to retry',body:'The model request failed ('+(a.reason||'temporary error')+'). The team will retry in about '+wait+' seconds.',tone:'warn'};
- if(a.idlePaused)return{title:'Waiting for your next instruction',body:'No subagent is currently working, and the lead has paused rather than claiming the project is complete. Send the lead another instruction to continue.',tone:'info'};
- if(c.block)return{title:'A subagent is blocked',body:c.block+' subagent'+(c.block===1?' has':'s have')+' reported a blocker. The lead needs to resolve or reassign the task.',tone:'warn'};
- if(c.work)return{title:'The team is working',body:c.work+' subagent'+(c.work===1?' is':'s are')+' active. The lead is coordinating tasks and reviewing reports.'+(a.continuous?' Continuous mode is on, so the run will stay open and will not auto-finish.':''),tone:'live'};
- if(lead&&['orchestrating','working'].includes(lead.status))return{title:'The lead is working',body:(lead.current&&lead.current!=='Thinking…'?lead.current:'The lead is planning, delegating, or checking the project before assigning more work.')+(a.continuous?' Continuous mode is on, so the run will stay open and will not auto-finish.':''),tone:'live'};
- if(lead&&lead.status==='watching')return{title:'The lead is monitoring',body:(c.total?'Subagents are idle. The lead is waiting for a report or the next review.':'No subagents have been assigned yet. The lead is deciding the next useful step.')+(a.continuous?' Continuous mode is on, so it will keep working and will not send a final completion report until you turn it off.':''),tone:'info'};
- if(!c.total)return{title:'The lead is getting started',body:'The lead is reviewing your request. Subagents will appear here when tasks are delegated.',tone:'live'};
- return{title:'The team is between tasks',body:'All current subagent tasks are idle. The lead will review their reports and decide what happens next.'+(a.continuous?' Continuous mode is on, so the run remains open rather than auto-finishing.':''),tone:'info'};
+ if(wait>0)return{title:'Retrying',body:'Next attempt in '+wait+'s',tone:'warn'};
+ if(a.idlePaused)return{title:'Waiting for instruction',body:'The lead is idle · send a follow-up',tone:'info'};
+ if(c.block)return{title:'Blocked',body:c.block+' agent'+(c.block===1?'':'s')+' need attention',tone:'warn'};
+ if(c.work)return{title:'Team working',body:c.work+' active · '+(lead&&lead.current&&lead.current!=='Thinking…'?lead.current:'Lead coordinating'),tone:'live'};
+ if(lead&&['orchestrating','working'].includes(lead.status))return{title:'Lead working',body:lead.current&&lead.current!=='Thinking…'?lead.current:'Planning or reviewing',tone:'live'};
+ if(lead&&lead.status==='watching')return{title:'Lead reviewing',body:c.total?'Waiting for agent reports':'Choosing the next step',tone:'info'};
+ if(!c.total)return{title:'Starting',body:'Lead is preparing the task',tone:'live'};
+ return{title:'Between tasks',body:'Lead is reviewing the latest results',tone:'info'};
 }
+
 function agentNowText(ag){
  if(ag.status==='blocked')return{text:ag.blocked||ag.current||'Blocked',quiet:false};
  if(ag.status==='done')return{text:ag.current||'Finished: waiting for the lead',quiet:true};
@@ -3502,7 +3540,7 @@ function renderStatusLine(){
 function renderHead(){
  const a=state.agent;renderStatusLine();$('agentStop').disabled=!a.running;
  const box=$('adContinuous');if(box.checked!==a.continuous)box.checked=a.continuous;
- $('adModeHelp').textContent=a.continuous?'Keeps working after milestones and will not auto-finish. Turn it off when you want a final report.':'Stops automatically after the lead verifies the goal and submits a final report.';
+ $('adModeHelp').textContent=a.continuous?'Keeps running until stopped':'Stops when complete';
  const goal=$('adGoal');goal.hidden=!a.goal;if(a.goal){$('adGoalText').textContent=a.goal;goal.classList.toggle('open',a.goalOpen)}
  const summary=agentSummaryCopy(),card=$('adSummary');card.className='ad-summary '+(summary.tone==='done'?'is-done':summary.tone==='warn'?'is-warn':'');
  $('adSummaryTitle').textContent=summary.title;$('adSummaryBody').textContent=summary.body;
@@ -3524,18 +3562,15 @@ function renderBanners(){
   const detail=approval.command||approval.detail||approval.path||'';if(detail)box.appendChild(agEl('pre','',detail));
   const row=agEl('div','row');
   const decide=async(approved,always)=>{row.querySelectorAll('button').forEach(b=>b.disabled=true);try{await api('/api/approval/respond',{chat_id:state.chatId,approval_id:approval.id,approved,always:!!always});if(always){state.settings.always_allow=true;syncAlwaysAllow();hint()}}catch(error){toast(error.message)}};
-  [['Approve',()=>decide(true,false),false],['Always allow',()=>decide(true,true),false],['Decline',()=>decide(false,false),false]].forEach(([label,fn])=>{const b=agEl('button','ad-btn small',label);b.type='button';b.onclick=fn;row.appendChild(b)});
+  [['Approve',()=>decide(true,false)],['Always allow',()=>decide(true,true)],['Decline',()=>decide(false,false)]].forEach(([label,fn])=>{const b=agEl('button','ad-btn small',label);b.type='button';b.onclick=fn;row.appendChild(b)});
   box.appendChild(row);host.appendChild(box);
  });
- if(a.pollError){host.appendChild(agentBanner('warn','Live updates are unavailable',a.pollError+' The team may still be running; the panel will retry automatically.'))}
- if(a.running&&a.cooldown-agNow()>0){const box=agentBanner('warn','Model request failed ('+(a.reason||'error')+')','');const p=agEl('p','');box.appendChild(p);a.cdNode=p;p.textContent='The team will retry automatically.';host.appendChild(box)}
- if(a.running&&a.idlePaused)host.appendChild(agentBanner('info','No tasks are running','The lead has paused because it has no active work. This is not a completion signal. Send the lead another instruction to continue.'));
- if(a.finished){
-  const box=agentBanner('ok','Final report','The lead stopped after verifying the goal and submitting its final report.');
-  if(a.finishSummary){const detail=agEl('div','ad-finish-summary',a.finishSummary);box.appendChild(detail)}
-  host.appendChild(box);
- }else if(a.exists&&!a.running){host.appendChild(agentBanner('off','Team stopped','The run is no longer active. Send a message in Agent mode to resume the saved team.'))}
+ if(a.pollError)host.appendChild(agentBanner('warn','Reconnecting','Status updates will retry automatically.'));
+ if(a.running&&a.cooldown-agNow()>0){const box=agentBanner('warn','Retrying','');const p=agEl('p','');box.appendChild(p);a.cdNode=p;p.textContent='Next attempt in '+Math.ceil(a.cooldown-agNow())+'s';host.appendChild(box)}
+ if(a.finished){const box=agentBanner('ok','Final report ready','');if(a.finishSummary){const details=agEl('details','ad-report');details.appendChild(agEl('summary','','View report'));details.appendChild(agEl('div','ad-finish-summary',a.finishSummary));box.appendChild(details)}host.appendChild(box)}
+ else if(a.exists&&!a.running)host.appendChild(agentBanner('off','Stopped','Send another message to resume.'));
 }
+
 
 /* ---------- render: roster ---------- */
 function agentRow(name){
@@ -3552,16 +3587,14 @@ function renderLeadCard(){
  const status=lead?(AG_STATUS[lead.status]||lead.status):(a.finished?'Finished':a.running?'Starting':'Not started');
  $('adLeadBadge').textContent=status;
  const card=agEl('div','ad-lead-avatar','L'),main=agEl('div'),name=agEl('div','ad-lead-name','Lead');
- name.appendChild(agEl('span','ad-lead-role','Lead orchestrator'));
- const pill=agEl('span','ad-lead-status',status);pill.classList.add(lead&&['orchestrating','working','watching'].includes(lead.status)?'live':a.finished?'done':lead&&['waiting','retrying','blocked'].includes(lead.status)?'warn':'');
- const current=agEl('div','ad-lead-current',lead?(lead.current||'Ready to coordinate the team'):(a.finished?'Final report submitted':'Waiting for the lead to start'));
- const report=agEl('div','ad-lead-report',lead&&lead.summary?lead.summary:(a.finishSummary?'Final report available':'Coordinates the project and communicates with you and the subagents'));
- main.append(name);host.append(card,main,pill,current,report);
+ const pill=agEl('span','ad-lead-status',status),tone=lead&&['orchestrating','working','watching'].includes(lead.status)?'live':a.finished?'done':lead&&['waiting','retrying','blocked'].includes(lead.status)?'warn':'';if(tone)pill.classList.add(tone);
+ const current=agEl('div','ad-lead-current',lead?(lead.current||'Ready'):(a.finished?'Final report ready':'Starting'));
+ main.append(name);host.append(card,main,pill,current);
 }
 function renderRoster(){
  const a=state.agent,host=$('adRoster');renderLeadCard();
  const list=[...a.agents.values()].filter(x=>!x.lead&&x.name!=='lead'&&x.status!=='retired');
- $('adTeamCount').textContent=list.length?(list.length+' assigned · '+agentCounts().work+' working'):'None assigned';
+ $('adTeamCount').textContent=list.length?(agentCounts().work+' active · '+list.length+' total'):'None yet';
  const keep=new Set(list.map(x=>x.name));
  a.rows.forEach((row,name)=>{if(!keep.has(name)){row.root.remove();a.rows.delete(name)}});
  list.forEach((ag,index)=>{
@@ -3574,8 +3607,6 @@ function renderRoster(){
   row.meta.replaceChildren();
   if(ag.result){row.meta.appendChild(agEl('span','ag-res '+ag.result,ag.result))}
   const files=(ag.files||[]).length;if(files)row.meta.appendChild(agEl('span','',files+(files===1?' file':' files')));
-  if(ag.turns)row.meta.appendChild(agEl('span','',ag.turns+(ag.turns===1?' step':' steps')));
-  if(ag.report_ts){const reported=agEl('span','ag-ago','reported '+agAgo(ag.report_ts));reported.dataset.ts=ag.report_ts;row.meta.appendChild(reported)}
   row.meta.hidden=!row.meta.children.length;
   if(host.children[index]!==r)host.insertBefore(r,host.children[index]||null);
  });
@@ -3587,9 +3618,9 @@ function agentActivityNode(item){
  const d=item.d,node=agEl('div','ad-item k-'+d.kind+(d.ok===false?' bad':'')),ic=agEl('span','ad-ic'),text=agEl('div','ad-text'),time=agEl('time','ad-time',agClock(d.ts));
  agTint(node,d.agent);ic.innerHTML=agIcon(d.kind);
  if(d.agent&&d.agent!=='system'){text.appendChild(agEl('span','ad-who',d.agent));text.appendChild(document.createTextNode(' '))}
- text.appendChild(document.createTextNode(d.text||''));
+ const copy=agEl('div','ad-activity-copy');copy.innerHTML=renderMarkdown(String(d.text||''));text.appendChild(copy);
  node.append(ic,text,time);
- if(d.detail){node.classList.add('has-detail');node.appendChild(agEl('pre','ad-detail',d.detail));node.onclick=()=>node.classList.toggle('open')}
+ if(d.detail){node.classList.add('has-detail');const detail=agEl('div','ad-detail');detail.innerHTML=renderMarkdown(String(d.detail));node.appendChild(detail);node.onclick=()=>node.classList.toggle('open')}
  return node;
 }
 function agentMessageNode(d){
@@ -3608,7 +3639,7 @@ function agentMessageNode(d){
  const routeLine=agEl('div','ad-msg-route');routeLine.append(agEl('span','ad-route-pill '+routeClass,route),agEl('span','ad-route-kind',routeKind));
  if(d.kind==='assignment')routeLine.appendChild(agEl('span','ad-route-kind','· task assignment'));
  if(d.human_intent&&requested&&requested!=='user')routeLine.appendChild(agEl('span','ad-route-kind','· originally addressed to '+requested));
- const body=agEl('div','ad-msgtext',d.text||'');text.append(routeLine,body);
+ const body=agEl('div','ad-msgtext');body.innerHTML=renderMarkdown(String(d.text||''));text.append(routeLine,body);
  node.append(ic,text,time);node.classList.add('has-detail');node.onclick=()=>node.classList.toggle('open');node.title=hint||route;
  return node;
 }
@@ -3654,7 +3685,7 @@ function renderFocus(){
  det.appendChild(agEl('summary','','Live output ('+entries.length+')'));
  const raw=agEl('div','ad-raw');
  if(!entries.length)raw.appendChild(agEl('div','','Nothing yet.'));
- entries.forEach(e=>{const box=agEl('div','k-'+e.kind);box.appendChild(agEl('small','',e.kind==='output'?'reply':e.kind));box.appendChild(document.createTextNode(String(e.text).slice(-1800)));raw.appendChild(box)});
+ entries.forEach(e=>{const box=agEl('div','k-'+e.kind);box.appendChild(agEl('small','',e.kind==='output'?'reply':e.kind));const body=agEl('div','ad-raw-text');body.innerHTML=renderMarkdown(String(e.text).slice(-1800));box.appendChild(body);raw.appendChild(box)});
  det.appendChild(raw);card.appendChild(det);host.appendChild(card);
 }
 
@@ -3675,9 +3706,14 @@ function renderPlan(){
 function renderFiles(){
  const a=state.agent,host=$('adFiles');host.replaceChildren();
  const rows=[...a.files.values()].sort((x,y)=>y.ts-x.ts);$('adNFiles').textContent=String(rows.length);
- if(!rows.length){const empty=agEl('div','ad-empty');empty.append(agEl('b','','No files written yet'),agEl('span','','Files the team creates show up here.'));host.appendChild(empty);return}
- rows.forEach(f=>{const r=agEl('div','ad-file'),ic=agEl('span','ad-ic'),main=agEl('div'),name=agEl('strong','',f.path);name.title=f.path;ic.innerHTML=agIcon('file');agTint(r,f.by);
-  const sub=agEl('small','');sub.append(agEl('span','ad-who',f.by||'team'),document.createTextNode(' · '+agClock(f.ts)));main.append(name,sub);r.append(ic,main,agEl('span','sz',agSize(f.size)));host.appendChild(r)});
+ if(!rows.length){const empty=agEl('div','ad-empty');empty.append(agEl('b','','No files yet'));host.appendChild(empty);return}
+ const paths=rows.map(f=>f.path).filter(Boolean);
+ if(paths.length>3){
+  host.appendChild(fileCardButton('Download all '+paths.length+' files',paths,'zip','ZIP archive · '+agSize(rows.reduce((n,f)=>n+(Number(f.size)||0),0))));
+  const details=agEl('details','ad-file-list');details.appendChild(agEl('summary','','View individual files ('+rows.length+')'));
+  const list=agEl('div','ad-file-grid');rows.forEach(f=>list.appendChild(fileCardButton(f.path,f.path,'file',agSize(f.size)+' · '+(f.by||'team'))));details.appendChild(list);host.appendChild(details);return;
+ }
+ const list=agEl('div','ad-file-grid');rows.forEach(f=>list.appendChild(fileCardButton(f.path,f.path,'file',agSize(f.size)+' · '+(f.by||'team'))));host.appendChild(list);
 }
 function renderStrip(){
  const a=state.agent,strip=$('agentStrip');if(!a||!agentVisible())return;
@@ -6015,6 +6051,62 @@ class KurtWebApp:
             result["content"] = target.read_text(encoding="utf-8", errors="replace")
         return result
 
+    def stage_download(self, chat_id, name, payload, mime_type=None):
+        if not re.fullmatch(r"[0-9a-fA-F]{32}", str(chat_id or "")) or not self.get_chat(chat_id):
+            raise ValueError("Conversation not found.")
+        data = bytes(payload or b"")
+        if not data or len(data) > 100 * 1024 * 1024:
+            raise ValueError("Download artifacts must be between 1 byte and 100 MB.")
+        safe = re.sub(r"[^\w.\- ]+", "_", os.path.basename(str(name or "file").replace("\\", "/"))).strip(" .")[:100] or "file"
+        digest = hashlib.sha256(safe.encode("utf-8") + b"\0" + data).hexdigest()[:20]
+        base = (CONFIG_DIR / "web_previews" / str(chat_id)).resolve()
+        folder = base / digest
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / safe
+        if not target.is_file():
+            target.write_bytes(data)
+        try:
+            os.utime(folder, None)
+            cutoff = time.time() - 2 * 86400
+            for child in base.iterdir():
+                if child != folder and child.is_dir() and child.stat().st_mtime < cutoff:
+                    shutil.rmtree(child, ignore_errors=True)
+        except OSError:
+            pass
+        url = "/preview/{}/{}".format(self.preview_cap_for(folder), quote(safe))
+        return {"name": safe, "url": url, "download_url": url + "?download=1", "size": len(data),
+                "mime": mime_type or preview_mime(safe).split(";")[0]}
+
+    def export_agent_files(self, chat_id, paths):
+        if not self.get_chat(chat_id):
+            raise ValueError("Conversation not found.")
+        if not isinstance(paths, list) or not paths or len(paths) > 200:
+            raise ValueError("Select between 1 and 200 workspace files.")
+        root = self.preview_root(chat_id, "work")
+        selected, seen, total = [], set(), 0
+        for value in paths:
+            rel = self._preview_rel(root, value)
+            if rel in seen:
+                continue
+            seen.add(rel)
+            target = self._preview_target(root, rel)
+            total += target.stat().st_size
+            if total > 100 * 1024 * 1024:
+                raise ValueError("Selected files exceed the 100 MB export limit.")
+            selected.append((rel, target))
+        if not selected:
+            raise ValueError("No valid files were selected.")
+        if len(selected) == 1:
+            info = self.open_preview_file(chat_id, "work", selected[0][0], include_text=False)
+            info["download_url"] = info["url"] + "?download=1"
+            return info
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            for rel, target in selected:
+                archive.write(target, rel)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        return self.stage_download(chat_id, "kurt-files-{}.zip".format(stamp), buffer.getvalue(), "application/zip")
+
     def stage_preview(self, chat_id, name, content):
         if not re.fullmatch(r"[0-9a-fA-F]{32}", str(chat_id or "")) or not self.get_chat(chat_id):
             raise ValueError("Conversation not found.")
@@ -6929,6 +7021,8 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/artifact/open":
                 self._json(self.app.open_preview_file(str(data.get("chat_id") or ""), data.get("area"), data.get("path"),
                                                       include_text=data.get("include_text", True) is not False))
+            elif parsed.path == "/api/artifact/export":
+                self._json(self.app.export_agent_files(str(data.get("chat_id") or ""), data.get("paths")))
             elif parsed.path == "/api/artifact/preview":
                 self._json(self.app.stage_preview(str(data.get("chat_id") or ""), data.get("name"), data.get("content")))
             elif parsed.path == "/api/artifact/run":
@@ -7038,7 +7132,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Content-Security-Policy", csp)
                 self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Content-Disposition", "inline")
+                download_requested = parse_qs(parsed.query).get("download", [""])[0] == "1"
+                disposition = "attachment; filename*=UTF-8''{}".format(quote(target.name)) if download_requested else "inline"
+                self.send_header("Content-Disposition", disposition)
                 if status == 206:
                     self.send_header("Content-Range", "bytes {}-{}/{}".format(start, end, size))
                 self.end_headers()
