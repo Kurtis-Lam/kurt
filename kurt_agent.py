@@ -159,7 +159,17 @@ def detect_continuous(text):
 
 FUNC_CALL_RE = re.compile(r"<function=\s*([A-Za-z_][\w.-]*)\s*>(.*?)(?:</function>|\Z)", re.S | re.I)
 FUNC_PARAM_RE = re.compile(r"<parameter=\s*([A-Za-z_][\w.-]*)\s*>\s*(.*?)\s*(?:</parameter>|(?=<parameter=)|\Z)", re.S | re.I)
-WRAPPER_TAG_RE = re.compile(r"</?\s*(?:tool_call|tool_calls|function_calls|function|parameter|invoke)\b[^>]*>", re.I)
+# Some providers wrap a plain shell command in a namespaced tag, e.g.
+# <ernie:tool_call>python3 --version</ernie:tool_call>.  These are still
+# model-proposed actions, not trusted tool output: convert them to RUN blocks
+# so the normal workspace and approval checks remain in force.
+TOOL_CALL_TAG_RE = re.compile(
+    r"<(?:(?:[A-Za-z][\w.-]*):)?tool_call\b[^>]*>(.*?)</(?:(?:[A-Za-z][\w.-]*):)?tool_call\s*>",
+    re.I | re.S,
+)
+WRAPPER_TAG_RE = re.compile(
+    r"</?\s*(?:(?:[A-Za-z][\w.-]*):)?(?:tool_call|tool_calls|function_calls|function|parameter|invoke)\b[^>]*>", re.I
+)
 FUNC_ALIASES = {
     "READ_FILE": "READ", "VIEW": "READ", "CAT": "READ", "OPEN": "READ",
     "LIST_DIR": "LIST", "LIST_FILES": "LIST", "LS": "LIST", "LIST_DIRECTORY": "LIST",
@@ -232,16 +242,31 @@ def _function_to_block(name, raw_params):
 
 
 def normalize_function_calls(text):
-    """Rewrite <function=NAME><parameter=key>value</parameter></function> calls as @@@ blocks."""
+    """Normalize provider tool-call wrappers into the agent's guarded action syntax."""
     text = str(text or "")
+
+    def convert_tool_call(match):
+        body = match.group(1).strip()
+        if not body:
+            return "\n"
+        # Preserve an action block if the provider already emitted one inside the tag.
+        if re.search(r"^\s*@\s*@\s*@\s*[A-Z_]+\b", body, re.I):
+            return "\n" + body + "\n"
+        # Namespaced tool_call tags used by some providers contain a shell command
+        # directly. Route it through RUN; _tool() still enforces workspace scope
+        # and requests approval for commands that are not classified read-only.
+        return "\n@@@ RUN\n" + body + "\n@@@ END\n"
+
+    text = TOOL_CALL_TAG_RE.sub(convert_tool_call, text)
     if "<function" not in text.lower():
         return text
 
-    def convert(match):
+    def convert_function(match):
         params = [(item.group(1), item.group(2)) for item in FUNC_PARAM_RE.finditer(match.group(2))]
-        return "\n" + _function_to_block(match.group(1), params) + "\n"
+        block = _function_to_block(match.group(1), params)
+        return "\n" + block + "\n" if block else "\n"
 
-    return FUNC_CALL_RE.sub(convert, text)
+    return FUNC_CALL_RE.sub(convert_function, text)
 
 
 def strip_markup(text):
@@ -606,7 +631,7 @@ Use ONLY this @@@ block format. Never write <function=...>, <parameter=...>, <to
 Plain text outside blocks is a one-line private note that appears in your own panel and is delivered to no one. To tell anyone anything, use SAY. Keep notes to a sentence or two.
 
 Verbs available to every agent:
-- SAY <target>   Body is the message. Targets: lead, all, a teammate's name{user_target}. Every message is visible to the whole team and to the user. Send one only when you need something or have a result worth sharing; no greetings, thanks or acknowledgements.
+- SAY <target>   Body is the message. Targets: lead, all, a teammate's exact name{user_target}. Routing is strict: SAY user sends a human-facing reply (only the lead can deliver it; a subagent's request to user is routed to lead for relay); SAY lead is internal to the lead; SAY <name> goes only to that subagent; SAY all broadcasts to the team. The channel is visible in the team workspace, but internal messages are not human-facing replies. Send one only when you need something or have a result worth sharing.
 - NOTE <key>     Body is a fact, decision, interface contract, file map or result to keep in the shared notes that every teammate reads. Reusing a key overwrites it. Keep notes short and current.
 - READ <path>    Read a text file. Paths resolve inside the project workspace.
 - LIST <path>    List a folder. An empty path lists the project workspace.
@@ -629,6 +654,12 @@ MODE_FINITE = """8. FINISHING. This is a normal run: the team stops when the wor
 MODE_CONTINUOUS = """8. CONTINUOUS MODE. The human asked the team to keep running until they stop it. Never use FINISH. When a milestone is complete, define the next useful improvement (more tests, bug hunting, polish, performance, docs) and assign it. If there is truly nothing useful left to do, WAIT."""
 
 LEAD_SYSTEM = """You are LEAD, the orchestrator of Kurt's agent team. You are always reachable: the human can message you at any moment and you answer them first.
+
+AUDIENCE AND ROUTING ARE NOT INTERCHANGEABLE:
+- The human is the person using Kurt. A direct reply to them must use SAY user. Never assume an internal team message has reached the human.
+- A subagent is a teammate. Use SAY <exact-agent-name> to brief or question one teammate, and use ASSIGN for a new task. Use SAY all only for information every subagent needs.
+- Messages from a subagent marked as intended for the human are routed to you. Decide whether to relay them with SAY user; do not treat them as a human instruction unless the channel says the sender is user.
+- Treat channel fields (from, to, audience, kind) as authoritative. Before replying, check whether the message came from user, lead, or a subagent and whether it is addressed to you, a teammate, the whole team, or the human.
 
 The ONLY goal is the one under GOAL in the shared context. Everything the team does must serve it. Reject scope creep: no extra features, rewrites or side projects the human did not ask for.
 
@@ -661,7 +692,7 @@ How you work:
 2. Work in small steps with tools. Own your files; ask the owner (SAY <name>) before changing someone else's.
 3. Verify your own work with tools (READ the file back, RUN a check) before you report. A claim without evidence is rejected.
 4. Publish contracts, file maps and key decisions with NOTE so teammates stay in sync.
-5. Report to lead, never to the human. Messages are short and only when you need something or have a result.
+5. Report to lead; never deliver directly to the human. If a decision or missing input from the human is genuinely required, use SAY user to mark it as a human request. Kurt routes it to the lead, and only the lead may relay it with SAY user. Messages are short and only when you need something or have a result.
 
 Finishing your task (pick exactly one, in a reply of its own, after you have seen the results of your last action):
 - DONE    Body: first line "RESULT: PASS" (everything asked is complete and works), "RESULT: FAIL" (you found problems; list them) or "RESULT: PARTIAL". Then what you did, the files you touched and the evidence (commands run and what they printed, lines you checked). The system rejects DONE without real tool use and DONE that mentions files that do not exist.
@@ -1133,9 +1164,12 @@ class AgentSwarm:
             return None, "empty"
         target = str(target or "all").strip()
         lowered = target.lower()
-        if lowered in ("user", "human") and sender != "lead":
+        human_intent = lowered in ("user", "human")
+        requested_target = "user" if human_intent else target
+        if human_intent and sender != "lead":
             lowered = "lead"
-            text = "(for the user) " + text
+            text = "(for the user; please relay if appropriate) " + text
+            kind = "human_request"
         recipient = None
         if lowered in ("all", "everyone", "team", "*"):
             lowered = "all"
@@ -1144,16 +1178,23 @@ class AgentSwarm:
         else:
             recipient = self._find(lowered)
             if recipient is None:
+                if sender == "lead":
+                    # A typo in a private handoff must never turn into an accidental
+                    # team-wide broadcast. Return a rejection to the lead instead.
+                    return None, "No active agent named '{}'; the message was not delivered. Check the roster and use the exact agent name.".format(target)
                 text = "(undeliverable: no active agent named '{}') {}".format(target, text)
-                lowered = "lead" if sender != "lead" else "all"
-                recipient = self._find(lowered) if lowered != "all" else None
+                lowered = "lead"
+                recipient = self._find("lead")
         if lowered == "user" and kind != "quick" and self._is_repeat_for_user(text):
             return None, "That message repeats what the human was already told."
         if checked and sender not in ("user", "system"):
             reason = self._chatter_block(sender, lowered, text)
             if reason:
                 return None, reason
-        message = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "from": sender, "to": lowered, "text": text, "kind": kind}
+        audience = "human" if human_intent else ("team" if lowered == "all" else ("lead" if lowered == "lead" else "agent"))
+        message = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "from": sender, "to": lowered,
+                   "requested_to": requested_target, "audience": audience, "human_intent": bool(human_intent and sender != "lead"),
+                   "text": text, "kind": kind}
         with self.lock:
             self.channel.append(message)
             if len(self.channel) > MAX_CHANNEL:
@@ -1162,9 +1203,17 @@ class AgentSwarm:
         if lowered == "user":
             self._deliver_to_user(text, sender)
         elif lowered == "all":
+            # A broadcast is delivered to every active teammate except its sender.
+            # A subagent broadcast also wakes the lead so it can coordinate the result.
             if sender != "lead":
                 self.lead.inbox.append(message)
                 self.lead.wake.set()
+            with self.lock:
+                recipients = [item for item in self.agents.values()
+                              if not item.lead and not item.retired and item.name != sender]
+            for item in recipients:
+                item.inbox.append(message)
+                item.wake.set()
         elif recipient is not None:
             recipient.inbox.append(message)
             recipient.wake.set()
@@ -1241,7 +1290,7 @@ class AgentSwarm:
         self.idle_reviews = 0
         notice = ("MODE CHANGED by the human: CONTINUOUS is now ON. Do not FINISH; keep improving the work until the human stops you." if value else
                   "MODE CHANGED by the human: CONTINUOUS is now OFF. Finish the project once it is complete and verified, then use FINISH.")
-        self.lead.inbox.append({"from": "system", "text": notice, "ts": time.time()})
+        self.lead.inbox.append({"from": "system", "to": "lead", "audience": "lead", "kind": "mode", "text": notice, "ts": time.time()})
         self.lead.wake.set()
         self._persist(force=True)
 
@@ -1273,7 +1322,8 @@ class AgentSwarm:
             self.set_continuous(continuous)
         self.idle_paused = False
         self.idle_reviews = 0
-        message = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "from": "user", "to": "lead", "text": text, "kind": "user"}
+        message = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "from": "user", "to": "lead",
+                   "requested_to": "lead", "audience": "lead", "human_intent": False, "text": text, "kind": "user"}
         with self.lock:
             self.channel.append(message)
         self._emit("chat", message=record)
@@ -1514,10 +1564,21 @@ class AgentSwarm:
     def _format_inbox(self, items):
         lines = []
         for item in items:
+            sender = str(item.get("from") or "unknown")
+            target = str(item.get("to") or "")
+            audience = str(item.get("audience") or "")
+            kind = str(item.get("kind") or "message")
+            route = ""
+            if item.get("human_intent") or audience == "human":
+                route = " [intended for the human; routed to lead for relay]"
+            elif target and target not in ("lead", sender):
+                route = " [to {}]".format(target)
+            elif target == "all":
+                route = " [team broadcast]"
             extra = ""
             if item.get("quick_reply"):
                 extra = "\n(Already answered by a quick status reply: {})".format(clip(item["quick_reply"], 600))
-            lines.append("from {}: {}{}".format(item.get("from"), clip(item.get("text"), 3000), extra))
+            lines.append("from {}{} ({}): {}{}".format(sender, route, kind, clip(item.get("text"), 3000), extra))
         return "\n\n".join(lines)
 
     @staticmethod
@@ -1539,7 +1600,7 @@ class AgentSwarm:
             mode = MODE_CONTINUOUS if self.continuous else MODE_FINITE
             system = LEAD_SYSTEM.replace("{max_agents}", str(MAX_SUBAGENTS)).replace("{mode_block}", mode).replace("{syntax}", syntax)
         else:
-            syntax = COMMON_SYNTAX.replace("{user_target}", "").replace("{max_actions}", str(MAX_ACTIONS_PER_TURN))
+            syntax = COMMON_SYNTAX.replace("{user_target}", ", user").replace("{max_actions}", str(MAX_ACTIONS_PER_TURN))
             system = AGENT_SYSTEM.replace("{name}", agent.name).replace("{role}", agent.role).replace("{syntax}", syntax)
         return [{"role": "system", "content": system}, {"role": "system", "content": self.shared_context(agent)}]
 
@@ -1836,7 +1897,8 @@ class AgentSwarm:
         text = "\n".join(lines).strip()
         self.finish_summary = text
         self._activity(agent, "finish", "The lead finished the project", detail=text, ok=not unverified)
-        message = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "from": "lead", "to": "user", "text": text, "kind": "final"}
+        message = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "from": "lead", "to": "user",
+                   "requested_to": "user", "audience": "human", "human_intent": False, "text": text, "kind": "final"}
         with self.lock:
             self.channel.append(message)
         self._emit("channel", message=message)
@@ -1994,8 +2056,9 @@ class AgentSwarm:
         self._note_work(agent)
         self._set_status(agent, "done", current="Finished: waiting for the lead")
         self._activity(agent, "done", "Reported done" + (" ({})".format(agent.last_result) if agent.last_result else ""), detail=text, ok=not problems and agent.last_result != "FAIL")
+        # A subagent reports to the lead only. The lead decides what, if anything,
+        # should be relayed to the human through SAY user.
         self.post(agent.name, "lead", "[DONE] " + text)
-        self._deliver_to_user(clip(text, 1200), sender=agent.name)
         return ""
 
     def _block(self, agent, reason, auto=False):
@@ -2006,8 +2069,8 @@ class AgentSwarm:
         self._note_work(agent)
         self._set_status(agent, "blocked", current="Blocked: " + clip(reason, 100))
         self._activity(agent, "blocked", "Blocked" + (" (stopped automatically)" if auto else ""), detail=reason, ok=False)
+        # Blockers are internal team reports; the lead owns human communication.
         self.post(agent.name, "lead", "[BLOCKED] " + reason)
-        self._deliver_to_user("Blocked: " + clip(reason, 1000), sender=agent.name)
 
     def _spawn(self, agent, args, body):
         name_part, _sep, role_part = args.partition("|")
