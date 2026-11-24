@@ -30,6 +30,7 @@ routing, workspace files, commands, approvals, usage) are reached through the
 
 import difflib
 import hashlib
+import json
 import os
 import re
 import threading
@@ -76,6 +77,10 @@ PINGPONG_LIMIT = 6
 DUPLICATE_RATIO = 0.88
 STALL_SECONDS = 420
 IDLE_REVIEW_LIMIT = 3
+MAX_AUTO_RECOVERIES = 3
+LEAD_BLOCK_PUSHES = 3
+BLOCK_REVIEW_LIMIT = 12
+BLOCK_HEARTBEAT = 20
 FILE_SCAN_LIMIT = 400
 FILE_LIST_LIMIT = 60
 SCAN_DEPTH = 5
@@ -159,7 +164,22 @@ def detect_continuous(text):
 
 FUNC_CALL_RE = re.compile(r"<function=\s*([A-Za-z_][\w.-]*)\s*>(.*?)(?:</function>|\Z)", re.S | re.I)
 FUNC_PARAM_RE = re.compile(r"<parameter=\s*([A-Za-z_][\w.-]*)\s*>\s*(.*?)\s*(?:</parameter>|(?=<parameter=)|\Z)", re.S | re.I)
-WRAPPER_TAG_RE = re.compile(r"</?\s*(?:tool_call|tool_calls|function_calls|function|parameter|invoke)\b[^>]*>", re.I)
+WRAPPER_TAG_RE = re.compile(
+    r"</?\s*(?:[A-Za-z0-9]+_)?(?:tool_calls?|function_calls?|calls|tool_use|tool_code|function|parameter|invoke)\b[^>]*>", re.I)
+SPECIAL_TOKEN_RE = re.compile(r"<\|[^|<>\n]{1,48}\|>")
+DSML_PREFIX_RE = re.compile(r"<[\u200b\s]*(/?)[\u200b\s]*[\uff5c|]\s*DSML\s*[\uff5c|]\s*(?=[A-Za-z])", re.I)
+INVOKE_RE = re.compile(r"<invoke\s+name\s*=\s*[\"']([^\"']+)[\"']\s*>(.*?)(?:</invoke\s*>|(?=<invoke\s)|\Z)", re.S | re.I)
+NAMED_PARAM_RE = re.compile(r"<parameter\s+name\s*=\s*[\"']([^\"']+)[\"'][^>]*>\s*(.*?)\s*(?:</parameter\s*>|(?=<parameter\s)|\Z)", re.S | re.I)
+# Tool-call dialects other than '@@@' that models fall back on:
+#   <|tool_call_begin|> RUN ls <|tool_call_end|>            (Kimi / DeepSeek style special tokens)
+#   <dots_function_call> ls -la \n\n description </...>      (a bare command, optionally followed by a description)
+TOKEN_CALL_RE = re.compile(
+    r"<\|tool_call_(?:begin|start)\|>(.*?)(?:<\|tool_call_end\|>|(?=<\|tool_call_(?:begin|start)\|>)|\Z)", re.S | re.I)
+TAG_CALL_RE = re.compile(
+    r"<((?:[A-Za-z0-9]+_)?(?:function_call|tool_call|tool_use|tool_code))\s*>(.*?)(?:</\1\s*>|(?=<\1\s*>)|\Z)", re.S | re.I)
+FOREIGN_MARKER_RE = re.compile(r"DSML|<invoke\s|<\|tool_call_(?:begin|start)\|>|<(?:[A-Za-z0-9]+_)?(?:function_call|tool_call|tool_use|tool_code)\s*>|<function\b", re.I)
+FENCE_RE = re.compile(r"```[A-Za-z0-9_-]*[ \t]*\n(.*?)\n[ \t]*```", re.S)
+FENCED_TOOL_LINE_RE = re.compile(r"^\s*(RUN|READ|LIST|SEARCH)[ \t]+(\S.*?)\s*$")
 FUNC_ALIASES = {
     "READ_FILE": "READ", "VIEW": "READ", "CAT": "READ", "OPEN": "READ",
     "LIST_DIR": "LIST", "LIST_FILES": "LIST", "LS": "LIST", "LIST_DIRECTORY": "LIST",
@@ -196,12 +216,29 @@ def _oneline(value):
     return " ".join(str(value or "").split())
 
 
+def _guess_verb(params):
+    """Which action an unknown tool name most likely meant, judging by its parameters ('' when unclear)."""
+    keys = set(params)
+    if keys & {"command", "cmd", "script"}:
+        return "RUN"
+    if keys & {"query", "q"}:
+        return "SEARCH"
+    path = next((str(params[key]).strip() for key in ("path", "file", "file_path", "filepath", "filename", "directory", "dir") if key in params), "")
+    if path and keys & {"content", "contents", "file_text", "text", "data"}:
+        return "WRITE"
+    if path:
+        return "LIST" if path.endswith(("/", "\\")) else "READ"
+    return ""
+
+
 def _function_to_block(name, raw_params):
     verb = re.sub(r"[^A-Za-z_]", "_", name).upper()
     verb = FUNC_ALIASES.get(verb, verb)
-    if verb not in VERBS:
-        return ""
     params = {key.lower(): value for key, value in raw_params}
+    if verb not in VERBS:
+        verb = _guess_verb(params)
+        if verb not in VERBS:
+            return ""
     if verb in ("READ", "LIST"):
         args, body = _oneline(_param(params, "path")), ""
     elif verb == "SEARCH":
@@ -231,22 +268,108 @@ def _function_to_block(name, raw_params):
     return "@@@ {} {}\n{}\n@@@ END".format(verb, args, body).replace("@@@ {} \n".format(verb), "@@@ {}\n".format(verb), 1)
 
 
-def normalize_function_calls(text):
-    """Rewrite <function=NAME><parameter=key>value</parameter></function> calls as @@@ blocks."""
-    text = str(text or "")
-    if "<function" not in text.lower():
+def _block_text(verb, first, rest=""):
+    first, rest = str(first or "").strip(), str(rest or "").strip("\n")
+    head = "@@@ {} {}".format(verb, first).rstrip()
+    return "{}\n{}\n@@@ END".format(head, rest) if rest.strip() else head + "\n@@@ END"
+
+
+def _shell_block(inner):
+    """A bare command, optionally followed by a blank line and a one-line description of it."""
+    paragraphs = [part.strip("\n") for part in re.split(r"\n[ \t]*\n", inner.strip()) if part.strip()]
+    if not paragraphs:
+        return ""
+    if len(paragraphs) > 1 and "\n" not in paragraphs[-1].strip() and len(paragraphs[-1]) <= 160:
+        paragraphs = paragraphs[:-1]
+    return _block_text("RUN", "", "\n\n".join(paragraphs))
+
+
+def _foreign_call_to_block(inner):
+    """Convert the inside of one non-@@@ tool call to an @@@ block ('' when it holds nothing to run)."""
+    inner = SPECIAL_TOKEN_RE.sub(lambda m: "\x00" if "argument_begin" in m.group(0) else "", str(inner or "")).strip()
+    if not inner:
+        return ""
+    if re.search(r"^\s*@@@\s*[A-Za-z_]+", inner, re.M):
+        return inner
+    if "\x00" in inner:
+        name, _sep, argument = inner.partition("\x00")
+        name = re.sub(r"^functions?\.|:\d+$", "", name.strip())
+        try:
+            data = json.loads(argument.strip())
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            return _function_to_block(name, list(data.items()))
+        inner = (name + " " + argument).strip()
+    if inner.startswith("{"):
+        try:
+            data = json.loads(inner)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            name = data.get("name") or data.get("tool") or data.get("function")
+            arguments = data.get("arguments") or data.get("parameters") or data.get("args") or {}
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except ValueError:
+                    arguments = {"command": arguments}
+            if isinstance(name, str) and isinstance(arguments, dict):
+                return _function_to_block(name, list(arguments.items()))
+    match = re.match(r"^([A-Za-z_]+)\b[ \t]*(.*)$", inner, re.S)
+    if match and match.group(1).isupper():
+        # Only an UPPERCASE first word is a verb: a lowercase 'ls' or 'cat' is a shell command, not LIST or READ.
+        verb = FUNC_ALIASES.get(match.group(1), match.group(1))
+        if verb in VERBS:
+            first, _sep, rest = match.group(2).partition("\n")
+            return _block_text(verb, first, rest)
+    return _shell_block(inner)
+
+
+def _fenced_tool_lines(text):
+    """A code fence holding only 'RUN cmd' / 'READ path' lines is an action the model forgot to wrap in '@@@'."""
+    if re.search(r"^\s*@@@\s*[A-Za-z_]+", text, re.M):
         return text
 
     def convert(match):
-        params = [(item.group(1), item.group(2)) for item in FUNC_PARAM_RE.finditer(match.group(2))]
-        return "\n" + _function_to_block(match.group(1), params) + "\n"
+        lines = [line for line in match.group(1).split("\n") if line.strip()]
+        found = [FENCED_TOOL_LINE_RE.match(line) for line in lines]
+        if not lines or not all(found):
+            return match.group(0)
+        return "\n" + "\n".join(_block_text(item.group(1), item.group(2)) for item in found) + "\n"
 
-    return FUNC_CALL_RE.sub(convert, text)
+    return FENCE_RE.sub(convert, text)
+
+
+def normalize_function_calls(text):
+    """Rewrite foreign tool-call syntaxes (<function=..>, <|tool_call_begin|>, <dots_function_call>, fenced RUN lines) as @@@ blocks."""
+    text = str(text or "")
+    if FOREIGN_MARKER_RE.search(text):
+        def convert(match):
+            params = [(item.group(1), item.group(2)) for item in FUNC_PARAM_RE.finditer(match.group(2))]
+            return "\n" + _function_to_block(match.group(1), params) + "\n"
+
+        text = FUNC_CALL_RE.sub(convert, text)
+        if "DSML" in text:
+            text = DSML_PREFIX_RE.sub(r"<\1", text)
+        if "<invoke" in text.lower():
+            def invoke(match):
+                params = [(item.group(1), item.group(2)) for item in NAMED_PARAM_RE.finditer(match.group(2))]
+                return "\n" + _function_to_block(match.group(1), params) + "\n"
+
+            text = INVOKE_RE.sub(invoke, text)
+        text = TOKEN_CALL_RE.sub(lambda m: "\n" + _foreign_call_to_block(m.group(1)) + "\n", text)
+        text = TAG_CALL_RE.sub(lambda m: "\n" + _foreign_call_to_block(m.group(2)) + "\n", text)
+        text = SPECIAL_TOKEN_RE.sub("", text)
+    if "```" in text:
+        text = _fenced_tool_lines(text)
+    return text
 
 
 def strip_markup(text):
     """Remove leftover tool-call tags, empty code fences and stray @@@ lines from text meant for people."""
-    text = WRAPPER_TAG_RE.sub("", str(text or ""))
+    text = DSML_PREFIX_RE.sub(r"<\1", str(text or ""))
+    text = SPECIAL_TOKEN_RE.sub("", WRAPPER_TAG_RE.sub("", text))
     lines = [line for line in text.split("\n") if not BLOCK_END_RE.match(line)]
     text = "\n".join(lines)
     text = re.sub(r"```[A-Za-z0-9_-]*[ \t]*\n?\s*```", "", text)
@@ -636,10 +759,15 @@ How you run the team:
 1. PLAN: turn the goal into a short ordered plan (3 to 7 steps, each with an owner and a status) and keep it current.
 2. SPAWN only the specialists the goal truly needs, usually 2 to 4 (hard limit {max_agents}). Each mission states the goal, the files the agent owns, the interfaces it must respect and its definition of done.
 3. Sequence dependent work. Do not start a tester or reviewer before there is something to test: spawn or ASSIGN them after the builder reports DONE, and give them the exact file names.
-4. React to reports. DONE reports start with RESULT: PASS, FAIL or PARTIAL and give evidence. Accept PASS only when the evidence is concrete (files written, command output, specific lines checked). A BLOCKED agent needs a decision from you: unblock it, reassign it or RETIRE it. Send failures back to the owner with ASSIGN.
+4. React to reports. DONE reports start with RESULT: PASS, FAIL or PARTIAL and give evidence. Accept PASS only when the evidence is concrete (files written, command output, specific lines checked). Send failures back to the owner with ASSIGN.
+   A BLOCKED agent is YOUR problem to solve, and you never leave it stopped. Keep trying until it works:
+   a. Diagnose first. Read its blocker and last actions, then reproduce the failing step yourself with RUN or READ and look at the real error (missing package, wrong path, bad command, unsupported API, malformed reply).
+   b. Fix the cause (install the package, correct the path, write the helper script, find the right API) and ASSIGN the same agent a rewritten, smaller, concrete task that includes the exact commands and the fix.
+   c. If it blocks again, change approach: try a different library or method, split the task in two, or RETIRE it and SPAWN a fresh specialist with a cleaner brief. You may also do the step yourself with RUN and WRITE.
+   d. Ask the human only for something no tool can produce (credentials, a missing input file, a decision about what they want), and keep every other part of the work moving while you wait. Never report a technical obstacle to the human as the end result.
 5. Verify with your own tools when it matters: LIST the workspace, READ the key files, RUN a check. Do not repeat a teammate's claim as fact until the live state (WORKSPACE FILES, team reports) supports it.
 6. Message the human (SAY user) only when they asked something, at a real milestone, or when you are blocked on something only a human can give (a decision about what they want, credentials, files you cannot create). Never ask the human to advise on technical obstacles: pick a way around it yourself (for example have the tester use RUN tty, or test the logic headlessly) and ASSIGN it. Answer with real facts from the live team state, briefly, and never repeat a status you already gave. If their message contains an instruction, act on it and say what you changed.
-7. Do the work through the team, not alone. Use READ, LIST, SEARCH and RUN only to inspect and verify.
+7. Do the work through the team. Use READ, LIST, SEARCH and RUN to inspect, verify and debug; do a step yourself only when that is the fastest way to unblock someone.
 {mode_block}
 
 Lead-only verbs:
@@ -665,7 +793,7 @@ How you work:
 
 Finishing your task (pick exactly one, in a reply of its own, after you have seen the results of your last action):
 - DONE    Body: first line "RESULT: PASS" (everything asked is complete and works), "RESULT: FAIL" (you found problems; list them) or "RESULT: PARTIAL". Then what you did, the files you touched and the evidence (commands run and what they printed, lines you checked). The system rejects DONE without real tool use and DONE that mentions files that do not exist.
-- BLOCKED Body: what stops you and exactly what you need. Use it when you cannot continue.
+- BLOCKED Body: what stops you and exactly what you need. Last resort: first read the error, fix your command and try at least two different approaches (another library, a smaller step, a helper script). The lead will debug the blocker with you, so include the exact error text and what you already tried.
 Do not repeat yourself or chat for its own sake. If you have nothing to do, finish with DONE or BLOCKED.
 Extra verbs: DONE and BLOCKED, as described above.
 {syntax}"""
@@ -676,9 +804,18 @@ DEGENERATE_NOTICE = ("SYSTEM: your previous reply got stuck repeating the same t
                      "Reply again with a short, fresh reply: one or two action blocks at most. If you were writing a long file, write a smaller first part.")
 FABRICATED_NOTICE = ("[SYSTEM] Your reply contained text that imitated a tool result. Everything from that point on was removed and NOT executed. "
                      "Results only come from the system, in the next message: send your action blocks and then stop.")
-NUDGE = ("NO ACTION RECEIVED. Your reply contained no action block, so nothing happened. Reply with an action block now: "
-         "READ, LIST, WRITE, RUN or SEARCH to keep working on your task, SAY to ask a teammate, DONE (with RESULT and evidence) if your task is complete, "
+NUDGE = ("NO ACTION RECEIVED. Your reply contained no action block the system could run, so nothing happened. Reply with an action block now, "
+         "written exactly like this (no <|tool_call|> tokens, no <function> tags, no code fence instead of the block):\n"
+         "@@@ RUN\nls -la\n@@@ END\n"
+         "Use READ, LIST, WRITE, RUN or SEARCH to keep working on your task, SAY to ask a teammate, DONE (with RESULT and evidence) if your task is complete, "
          "or BLOCKED if you cannot continue.")
+RECOVERY_FORMAT = "Write every action as an @@@ block, for example:\n@@@ RUN\npython3 script.py\n@@@ END"
+RECOVERY_HINTS = (
+    ("without taking any action", "The system could not find a valid action block in your replies, so nothing ran. " + RECOVERY_FORMAT),
+    ("repeating the same action", "Do not run the same action again. Read its output, fix the real cause (wrong path, missing module, syntax error, wrong API) "
+                                  "or take a different route, such as a smaller step or a helper script."),
+    ("repeated text", "Keep replies short: one or two action blocks at a time, and split long files into smaller parts."),
+)
 
 
 class Agent:
@@ -709,6 +846,9 @@ class Agent:
         self.last_activity = time.time()
         self.temperature = None
         self.suppress_think = False
+        self.recoveries = 0
+        self.restarted = False
+        self.last_answer = ""
         self.reset_task()
 
     def reset_task(self):
@@ -754,6 +894,7 @@ class AgentSwarm:
         self.finish_rejects = 0
         self.idle_paused = False
         self.idle_reviews = 0
+        self.block_reviews = 0
         self.review_signature = None
         self.user_paths = set()
         self.file_state = {}
@@ -949,7 +1090,7 @@ class AgentSwarm:
                 "current": agent.current, "summary": clip(agent.summary, 800), "turns": agent.turns,
                 "retry_at": agent.retry_at, "lead": agent.lead, "files": files, "result": agent.last_result,
                 "blocked": clip(agent.blocked_reason, 400), "report_ts": agent.last_report_ts,
-                "strikes": agent.strikes, "entries": [self._entry_view(item, text_cap) for item in items]}
+                "strikes": agent.strikes, "recoveries": agent.recoveries, "entries": [self._entry_view(item, text_cap) for item in items]}
 
     def files_view(self):
         with self.lock:
@@ -1594,12 +1735,21 @@ class AgentSwarm:
         """Reason for an unprompted lead review, or None when nothing needs the lead (saves model calls)."""
         if self.continuous:
             return "scheduled review"
-        if self.idle_paused:
-            return None
         with self.lock:
             members = [a for a in self.agents.values() if not a.lead and a.status != "retired"]
         now = time.time()
         working = [a for a in members if a.status in WORKING_STATES]
+        blocked = [a for a in members if a.status == "blocked"]
+        if blocked and not working:
+            self.block_reviews += 1
+            if self.block_reviews <= BLOCK_REVIEW_LIMIT:
+                self.idle_paused = False
+                self.lead.heartbeat = min(self.lead.heartbeat, BLOCK_HEARTBEAT)
+                return "blocked agents still need fixing: " + ", ".join(a.name for a in blocked)
+        elif not blocked:
+            self.block_reviews = 0
+        if self.idle_paused:
+            return None
         if working:
             stalled = [a.name for a in working if a.status == "working" and now - a.last_activity > STALL_SECONDS]
             return "stalled agents: " + ", ".join(stalled) if stalled else None
@@ -1702,13 +1852,14 @@ class AgentSwarm:
 
     def _agent_turn(self, agent, reason):
         agent.busy = True
+        agent.restarted = False
         try:
             inbox = self._drain(agent)
             self._trace("turn_start", agent, reason=reason, inbox=[
                 {"from": item.get("from"), "to": item.get("to"), "kind": item.get("kind"), "text": item.get("text"), "ts": item.get("ts")}
                 for item in inbox if isinstance(item, dict)])
             if agent.lead:
-                agent.heartbeat = LEAD_HEARTBEAT
+                agent.heartbeat = BLOCK_HEARTBEAT if self._blocked_workers() else LEAD_HEARTBEAT
                 self._set_status(agent, "orchestrating", current="Reviewing the team")
                 base = self._lead_prompt(reason, inbox)
                 max_rounds = LEAD_TOOL_ROUNDS
@@ -1718,6 +1869,7 @@ class AgentSwarm:
                 max_rounds = MAX_TOOL_ROUNDS
             extra = []
             nudges = 0
+            pushes = 0
             for _round in range(max_rounds):
                 self._check_alive(agent)
                 prompt = base + ("\n\n" + "\n".join(extra) if extra else "")
@@ -1727,6 +1879,7 @@ class AgentSwarm:
                 gen = self._generate(agent, messages, think=not agent.suppress_think, temperature=agent.temperature)
                 reasoning, answer = gen
                 agent.turns += 1
+                agent.last_answer = answer or ""
                 if gen.degenerate:
                     if agent.history and agent.history[-1].get("role") == "user":
                         agent.history.pop()
@@ -1753,6 +1906,15 @@ class AgentSwarm:
                         agent.summary = clip(turn.prose, 600)
                     if self.finished or self.stop_event.is_set():
                         break
+                    if self._blocked_workers() and pushes < LEAD_BLOCK_PUSHES and _round < max_rounds - 1:
+                        # A blocked teammate is still stopped: the lead must not end its turn until it has acted on it.
+                        pushes += 1
+                        late = self._drain(agent)
+                        base = ("TOOL RESULTS:\n" + "\n\n".join(results) + "\n\n" if results else "") + self._blocker_section(reminder=True)
+                        if late:
+                            base += "\n\nNEW MESSAGES FOR YOU:\n" + self._format_inbox(late)
+                            inbox = inbox + late
+                        continue
                     used_tools = any(item.verb in TOOL_VERBS for item in turn.actions)
                     failed = any(("rejected" in item or "failed" in item) for item in results)
                     if stop_turn or not results or not (used_tools or failed):
@@ -1803,8 +1965,27 @@ class AgentSwarm:
             else:
                 parts.append("No new messages. Check the team state and the FINISH CHECK. If the goal is met and verified, FINISH. "
                              "If something is missing, assign exactly that. If the team is busy, WAIT.")
+        blockers = self._blocker_section()
+        if blockers:
+            parts.append(blockers)
         parts.append("Decide your next actions now.")
         return "\n\n".join(parts)
+
+    def _blocker_section(self, reminder=False):
+        """The lead's standing orders about stopped teammates ('' when nobody is blocked)."""
+        blocked = self._blocked_workers()
+        if not blocked:
+            return ""
+        rows = []
+        for member in blocked:
+            rows.append("- {} ({}): {} | task: {} | automatic restarts used: {}/{}".format(
+                member.name, clip(member.role, 60), clip(member.blocked_reason, 500).replace("\n", " "),
+                clip(member.task, 220).replace("\n", " "), member.recoveries, MAX_AUTO_RECOVERIES))
+        head = ("STILL BLOCKED: you have not unblocked these yet. Act on them now." if reminder else
+                "BLOCKED TEAMMATES: fixing these is your first job this turn.")
+        return (head + "\n" + "\n".join(rows) + "\nDiagnose with RUN or READ, fix the cause, then ASSIGN the agent a rewritten concrete task "
+                "(exact commands, paths and the fix). If it already failed that way, change approach: RETIRE it and SPAWN a fresh specialist, "
+                "or do the step yourself. Do not wait, and do not hand a technical obstacle to the human.")
 
     # -- finishing ------------------------------------------------------------
 
@@ -1979,6 +2160,8 @@ class AgentSwarm:
                         agent.heartbeat = max(5, min(900, int(float(args.split()[0]))))
                     except (ValueError, IndexError):
                         agent.heartbeat = LEAD_HEARTBEAT
+                    if self._blocked_workers():
+                        agent.heartbeat = min(agent.heartbeat, LEAD_HEARTBEAT)
                     self._set_current(agent, "Waiting for the team", force=True)
                 elif verb in TOOL_VERBS:
                     if not item.closed and verb == "WRITE":
@@ -1996,10 +2179,10 @@ class AgentSwarm:
             except Exception as exc:
                 self._trace("action_error", agent, verb=verb, args=args, body=body, error=exc)
                 results.append("[{} failed] {}".format(verb, clip(exc, 800)) + self._missing_hint(verb))
-            if self.finished or (agent.status == "blocked" and not agent.lead):
+            if self.finished or agent.restarted or (agent.status == "blocked" and not agent.lead):
                 break
         results = [item for item in results if item]
-        if agent.status == "blocked" and not finished and not agent.lead and agent.blocked_reason:
+        if agent.restarted or (agent.status == "blocked" and not finished and not agent.lead and agent.blocked_reason):
             finished = True
         return results, finished, said_to_user, stop_turn
 
@@ -2050,6 +2233,7 @@ class AgentSwarm:
         agent.summary = text
         agent.last_report_ts = time.time()
         agent.blocked_reason = ""
+        agent.recoveries = 0
         self._note_work(agent)
         self._set_status(agent, "done", current="Finished: waiting for the lead")
         self._activity(agent, "done", "Reported done" + (" ({})".format(agent.last_result) if agent.last_result else ""), detail=text, ok=not problems and agent.last_result != "FAIL")
@@ -2057,16 +2241,67 @@ class AgentSwarm:
         self._deliver_to_user(clip(text, 1200), sender=agent.name)
         return ""
 
+    def _blocked_workers(self):
+        with self.lock:
+            return [a for a in self.agents.values() if not a.lead and a.status == "blocked"]
+
+    @staticmethod
+    def _recovery_hint(reason):
+        lowered = str(reason or "").lower()
+        for needle, hint in RECOVERY_HINTS:
+            if needle in lowered:
+                return hint
+        return "Read the last results carefully, fix the cause, and try a different approach instead of repeating what failed."
+
+    def _blocker_brief(self, agent, reason):
+        """What the lead needs to debug a blocker: the reason, the agent's latest actions and its last raw reply."""
+        lines = [reason.strip() or "No reason given.", "", "Restarts so far: {} of {} automatic.".format(agent.recoveries, MAX_AUTO_RECOVERIES)]
+        with self.lock:
+            recent = [item for item in list(self.activity)[-80:] if item.get("agent") == agent.name][-6:]
+        if recent:
+            lines.append("Its latest actions:")
+            for item in recent:
+                lines.append("- {}{}: {}".format(item.get("kind"), " (failed)" if item.get("ok") is False else "", clip(item.get("text"), 160)))
+        if agent.last_answer.strip():
+            lines.append("Its last raw reply:\n" + clip(agent.last_answer.strip(), 600))
+        return "\n".join(lines)
+
+    def _auto_recover(self, agent, reason):
+        """Restart a stuck subagent on the same task with a clean history and a concrete fix, without bothering anyone."""
+        agent.recoveries += 1
+        number = agent.recoveries
+        task = agent.task
+        note = ("RECOVERY {}/{}: your previous attempt stopped automatically ({}). {}\n"
+                "Continue the task from where you were; check WORKSPACE FILES and do not redo what already worked.\nYOUR TASK: {}").format(
+            number, MAX_AUTO_RECOVERIES, clip(reason, 240), self._recovery_hint(reason), clip(task, 1500))
+        agent.reset_task()
+        agent.history = []
+        agent.inbox = []
+        agent.temperature = RETRY_TEMPERATURE
+        agent.restarted = True
+        self._note_work(agent)
+        self._activity(agent, "recover", "{} hit a problem and was restarted automatically ({}/{})".format(agent.name, number, MAX_AUTO_RECOVERIES),
+                       detail=note, ok=None)
+        self._set_status(agent, "working", current="Recovering (attempt {} of {})".format(number, MAX_AUTO_RECOVERIES))
+        agent.inbox.append({"from": "system", "text": note, "ts": time.time()})
+        agent.wake.set()
+
     def _block(self, agent, reason, auto=False):
+        if auto and not agent.lead and agent.recoveries < MAX_AUTO_RECOVERIES:
+            self._auto_recover(agent, reason)
+            return
         agent.blocked_reason = reason
         agent.summary = "BLOCKED: " + reason
         agent.last_report_ts = time.time()
         agent.last_result = ""
         self._note_work(agent)
         self._set_status(agent, "blocked", current="Blocked: " + clip(reason, 100))
-        self._activity(agent, "blocked", "Blocked" + (" (stopped automatically)" if auto else ""), detail=reason, ok=False)
-        self.post(agent.name, "lead", "[BLOCKED] " + reason)
-        self._deliver_to_user("Blocked: " + clip(reason, 1000), sender=agent.name)
+        self._activity(agent, "blocked", "{} is blocked: the lead is working on a fix".format(agent.name) + (" (after automatic restarts)" if auto else ""),
+                       detail=reason, ok=False)
+        self.post(agent.name, "lead", "[BLOCKED] " + self._blocker_brief(agent, reason))
+        self.lead.heartbeat = min(self.lead.heartbeat, BLOCK_HEARTBEAT)
+        self.idle_paused = False
+        self.idle_reviews = 0
 
     def _spawn(self, agent, args, body):
         name_part, _sep, role_part = args.partition("|")
@@ -2098,6 +2333,9 @@ class AgentSwarm:
         text = body.strip()
         if not text:
             return "[ASSIGN rejected] The instruction is empty."
+        if target.status == "blocked":
+            target.history = []  # a blocked agent's history holds the very mistakes that stopped it: start it clean
+            target.temperature = RETRY_TEMPERATURE
         target.reset_task()
         self._set_status(target, "working", task=clip(text, 1500), current="Starting")
         self._activity(agent, "assign", "Gave {} a task".format(target.name), detail=text)
@@ -2233,7 +2471,8 @@ class AgentSwarm:
             self._activity(agent, "write", "Wrote {} ({})".format(rel, human_size(size)), detail=clip(content, 1800), ok=True)
             return "[WRITE succeeded] {}".format(outcome.get("message") or resolved)
         if verb == "RUN":
-            command = (body.strip() or args.strip())
+            # '@@@ RUN python3 -c "' followed by a body: the first line is part of the command, never discard it.
+            command = "\n".join(part for part in (args.strip(), body.strip()) if part)
             tty = None
             first_word = args.strip().split(None, 1)
             if first_word and first_word[0].lower() == "tty":
