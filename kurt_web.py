@@ -155,6 +155,15 @@ KURT WEB INTERFACE RULES:
 - SEARCH may request external web research when needed. Do not invent search results.
 - Uploaded ZIP archives and folders are unpacked into the conversation workspace. Images are
   passed to compatible vision models when supported.
+- DELIVERABLE-FIRST: identify the actual end result and requested format before choosing tools.
+  When the user asks for an image (for example PNG), document, spreadsheet, or other finished
+  artifact, create and verify that exact deliverable. A Python script, source file, prompt, or
+  intermediate render is not the answer unless the user asked for source code. Put helper scripts
+  and temporary assets under .tmp/ and do not surface them as final results. Before finishing,
+  verify that the deliverable exists, is non-empty, and has the requested format; preview it when
+  supported. Present the finished result prominently and keep progress files out of the result list.
+- Keep file listings compact: show the parent directory once, then relative child paths such as
+  ./image.png. Never dump a full absolute-path listing or an entire project tree unless requested.
 - Treat private material and credentials as sensitive. Do not reveal secrets in responses.
 - Live desktop capture and GUI mouse/keyboard control are not provided. Ask for a screenshot
   when visual inspection of the desktop is needed.
@@ -192,6 +201,10 @@ KURT ACTION BLOCK SYNTAX:
   unrelated to the task, or run commands unrelated to the request. Never invent file paths: use a
   path only if the user named it, a LIST/tree/find result showed it, or these rules state it.
 - Relative paths and commands run inside the session working root named in this prompt.
+- For a requested final artifact, do not stop after creating a helper script or intermediate file.
+  Run the required conversion/render/export step, verify the final file and return that result.
+  Use .tmp/ for implementation helpers; expose only requested deliverables and directly relevant
+  supporting files. For directory output, print one parent path followed by compact ./child paths.
 """
 
 FILE_ACTION_INSTRUCTIONS = r"""
@@ -630,6 +643,9 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .stage{display:grid;grid-template-rows:auto 2px auto;align-content:start;min-width:0;min-height:100vh;min-height:100dvh}
 .topbar{display:flex;align-items:center;gap:6px;padding:8px 16px;min-height:52px;background:var(--bg)}
 .titles{flex:1;min-width:0;padding-left:4px}
+.title-line{display:flex;align-items:center;gap:10px;min-width:0}
+.chat-path{flex:none;max-width:min(48vw,560px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:10.5px var(--mono)}
+.chat-path:empty{display:none}
 .chat-title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chat-meta{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
 .chat-meta:empty{display:none}
@@ -652,6 +668,13 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .message.assistant .bubble{width:100%;min-width:0}
 .bubble{min-width:0}
 .content{overflow-wrap:anywhere;font-family:var(--serif);font-size:16.5px;line-height:1.7}
+.content .md-table-wrap{max-width:100%;overflow-x:auto;margin:12px 0 18px;border:1px solid var(--line2);border-radius:10px}
+.content table.md-table{width:100%;border-collapse:separate;border-spacing:0;font:13px/1.5 var(--sans);min-width:max-content}
+.content .md-table th,.content .md-table td{padding:9px 12px;border-bottom:1px solid var(--line);border-right:1px solid var(--line);vertical-align:top}
+.content .md-table th:last-child,.content .md-table td:last-child{border-right:0}
+.content .md-table th{background:var(--raise);font-weight:650;color:var(--text)}
+.content .md-table td{background:var(--panel)}
+.content .md-table tr:last-child td{border-bottom:0}
 .content:empty{display:none}
 .content.err{font-family:var(--sans);font-size:14.5px;color:var(--danger)}
 .content p{margin:0 0 12px}
@@ -1433,6 +1456,11 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 .ad-tabs .n{padding:0 7px;border-radius:999px;background:var(--raise);color:var(--muted);font-size:10.5px;line-height:17px}
 .ad-body{position:relative;flex:1 1 0;min-height:0;overflow:auto;padding:12px 12px 20px;overscroll-behavior:contain}
 .ad-pane[hidden]{display:none}
+.ad-term-card{border:1px solid var(--line2);border-radius:11px;background:var(--panel);overflow:hidden;margin:0 0 10px}
+.ad-term-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--muted)}
+.ad-term-head strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font:600 11.5px var(--mono)}
+.ad-term-state{flex:none;color:var(--ag-ok)}.ad-term-state.live{color:var(--ag-info)}.ad-term-state.fail{color:var(--ag-bad)}
+.ad-term-code{margin:0;padding:10px;max-height:52vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text);background:var(--bg);font:11.5px/1.55 var(--mono);tab-size:2}
 .ad-roster{display:grid;gap:12px;align-content:start}
 .ac{--hc:hsl(var(--h) 58% var(--ag-l));min-width:0;border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden;transition:border-color .15s}
 .ac.active{border-color:hsl(var(--h) 50% 50%/.55)}
@@ -1548,6 +1576,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 .ad-file:hover{background:var(--ag-soft)}
 .ad-file strong{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
 .ad-file small{color:var(--muted);font-size:11.5px}
+.ad-files-note{padding:7px 10px;color:var(--muted);font:10.5px var(--mono)}
 .ad-file .sz{color:var(--muted);font-size:11.5px;white-space:nowrap}
 .ad-jump{position:sticky;bottom:4px;display:none;margin:8px auto 0;padding:5px 13px;border:1px solid var(--line2);border-radius:999px;background:var(--panel);color:var(--text);font:600 12px var(--sans);box-shadow:var(--shadow);cursor:pointer}
 .ad-jump.show{display:block}
@@ -1841,7 +1870,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="stage">
 <header class="topbar">
 <button class="icon-btn menu-btn" id="menuBtn" aria-label="Open menu"><svg class="ic"><use href="#i-menu"/></svg></button>
-<div class="titles"><div id="chatTitle" class="chat-title">New chat</div><div id="chatMeta" class="chat-meta"></div></div>
+<div class="titles"><div class="title-line"><div id="chatTitle" class="chat-title">New chat</div><span id="chatPath" class="chat-path" title=""></span></div><div id="chatMeta" class="chat-meta"></div></div>
 
 <button class="icon-btn" id="exportChatBtn" title="Download chat history" aria-label="Download chat history"><svg class="ic"><use href="#i-download"/></svg></button>
 <button class="icon-btn" id="themeBtn" title="Switch colour theme" aria-label="Switch colour theme"><svg class="ic"><use href="#i-theme"/></svg></button>
@@ -1877,12 +1906,13 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <label class="ad-mode" id="adModeBox"><input type="checkbox" id="adContinuous"><span class="ad-track"></span><span><b>Run continuously</b><small id="adModeHelp"></small></span></label>
 </header>
 <div class="ad-banners" id="adBanners"></div>
-<nav class="ad-tabs" id="adTabs" role="tablist" aria-label="Team details"><button type="button" role="tab" data-tab="agents" class="on">Agents <span class="n" id="adNAgents">0</span></button><button type="button" role="tab" data-tab="timeline">Timeline</button><button type="button" role="tab" data-tab="plan">Plan</button><button type="button" role="tab" data-tab="files">Files <span class="n" id="adNFiles">0</span></button></nav>
+<nav class="ad-tabs" id="adTabs" role="tablist" aria-label="Team details"><button type="button" role="tab" data-tab="agents" class="on">Agents <span class="n" id="adNAgents">0</span></button><button type="button" role="tab" data-tab="timeline">Timeline</button><button type="button" role="tab" data-tab="plan">Plan</button><button type="button" role="tab" data-tab="files">Files <span class="n" id="adNFiles">0</span></button><button type="button" role="tab" data-tab="terminal">Terminal</button></nav>
 <div class="ad-body" id="adBody">
 <div class="ad-pane" id="adPaneAgents"><div class="ad-empty" id="adAgentsEmpty"><b>No agents yet</b><span>Send a message to the lead. Its helpers appear here with their live thinking.</span></div><div class="ad-roster" id="adRoster"></div></div>
 <div class="ad-pane" id="adPaneTimeline" hidden><div class="ad-chips" id="adChips"></div><div class="ad-feed" id="adFeed"></div><button type="button" class="ad-jump" id="adJump">Jump to latest</button></div>
 <div class="ad-pane" id="adPanePlan" hidden><div id="adPlan"></div><div id="adNotes"></div></div>
 <div class="ad-pane" id="adPaneFiles" hidden><div id="adFiles"></div></div>
+<div class="ad-pane" id="adPaneTerminal" hidden><div id="adTerminal"></div></div>
 </div>
 </aside>
 <aside class="artifact-pane" id="artifactPane" aria-label="Selected file preview">
@@ -1982,7 +2012,7 @@ body.modal-open .status-dot,body.modal-open .welcome .mark.xl,body.modal-open .m
 <div class="chat-context-menu" id="chatContextMenu" role="menu"></div>
 <div class="dialog-backdrop" id="appDialogBackdrop"><form class="app-dialog" id="appDialogForm"><h2 id="appDialogTitle"></h2><p class="dialog-message" id="appDialogMessage"></p><div class="dialog-fields" id="appDialogFields"></div><div class="dialog-actions"><button type="button" id="appDialogCancel">Cancel</button><button type="submit" class="primary" id="appDialogConfirm">Save</button></div></form></div>
 <script>
-const TOKEN='__TOKEN__';const HINT='Kurt can read any file your account can access. File changes, deletions, and commands ask for approval. Link a folder to work directly in it.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],mcpServers:[],mcpTools:[],skills:[],chats:[],chatId:null,projectRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],uploadPromise:null,contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',editingGroup:null,selectingChats:false,selectedChatIds:[],linkedFolder:'',activeArtifactContent:'',activeArtifact:null};
+const TOKEN='__TOKEN__';const HINT='Kurt can read any file your account can access. File changes, deletions, and commands ask for approval. Link a folder to work directly in it.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],mcpServers:[],mcpTools:[],skills:[],chats:[],chatId:null,projectRoot:'',workingRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],uploadPromise:null,contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',editingGroup:null,selectingChats:false,selectedChatIds:[],linkedFolder:'',activeArtifactContent:'',activeArtifact:null};
 const $=id=>document.getElementById(id);const api=async(path,body)=>{const res=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:body?JSON.stringify(body):undefined});const data=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(data.error||res.statusText);return data};
 function toast(msg){const el=$('toast');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600)}
 
@@ -2123,6 +2153,13 @@ function stripUnsupportedActions(src){let text=String(src||'');const opener=/<th
 const ACTION_START_RE=/@\s*@\s*@\s*(?:RUN|SEARCH|READ|LIST|WRITE|EDIT|SYSTEM_PROMPT|AGENT_RUN|AGENT_READ|AGENT_LIST|AGENT_WRITE|SUBAGENT|EXEC|BASH|SHELL)\b/i;
 function safeLiveDraft(src){const text=String(src||'');const action=ACTION_START_RE.exec(text);const head=action?text.slice(0,action.index):text.replace(/\s*@{1,3}[ \t]*[A-Za-z_]{0,12}$/,'');return stripUnsupportedActions(head)}
 function inline(s){const spans=[];s=s.replace(/`([^`\n]+)`/g,(_,c)=>{spans.push('<code>'+c+'</code>');return '\u0001'+(spans.length-1)+'\u0001'});s=s.replace(/\*\*([^*\n]+?)\*\*/g,'<strong>$1</strong>').replace(/(^|[^*\w])\*([^*\n]+?)\*(?![*\w])/g,'$1<em>$2</em>').replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');return s.replace(/\u0001(\d+)\u0001/g,(_,i)=>spans[+i])}
+function mdTableCells(line){
+ let value=String(line||'').trim();if(value.startsWith('|'))value=value.slice(1);if(value.endsWith('|'))value=value.slice(0,-1);
+ const cells=[];let cell='',escaped=false,code=false;
+ for(let i=0;i<value.length;i++){const ch=value[i];if(escaped){cell+=ch;escaped=false;continue}if(ch==='\\'){escaped=true;continue}if(ch==='`')code=!code;if(ch==='|'&&!code){cells.push(cell.trim());cell='';continue}cell+=ch}
+ if(escaped)cell+='\\';cells.push(cell.trim());return cells
+}
+function mdTableSeparator(line){const cells=mdTableCells(line);return cells.length>1&&cells.every(cell=>/^:?-{3,}:?$/.test(cell))}
 function mdBlocks(text){
  const math=[];
  const mathToken=tex=>{const index=math.push(String(tex||'').trim())-1;return '\n\u0002KURTMATH'+index+'\u0002\n'};
@@ -2136,7 +2173,19 @@ function mdBlocks(text){
  const flushP=()=>{if(para.length){html+='<p>'+inline(para.join('\n')).replace(/\n/g,'<br>')+'</p>';para=[]}};
  const flushL=()=>{if(list){html+='<'+list.t+'>'+list.items.map(i=>'<li>'+inline(i)+'</li>').join('')+'</'+list.t+'>';list=null}};
  const flushQ=()=>{if(quote.length){html+='<blockquote>'+inline(quote.join('<br>'))+'</blockquote>';quote=[]}};
- for(const line of lines){let m;
+ for(let i=0;i<lines.length;i++){const line=lines[i];let m;
+  if(i+1<lines.length&&line.includes('|')&&mdTableSeparator(lines[i+1])){
+   flushP();flushL();flushQ();
+   const headers=mdTableCells(line),separators=mdTableCells(lines[i+1]);
+   const count=Math.max(headers.length,separators.length),align=Array.from({length:count},(_,index)=>{const cell=separators[index]||'---';return cell.startsWith(':')&&cell.endsWith(':')?'center':cell.endsWith(':')?'right':'left'});
+   const cellHtml=(value,index,tag)=>'<'+tag+' style="text-align:'+align[index]+'">'+inline(value||'')+'</'+tag+'>';
+   html+='<div class="md-table-wrap"><table class="md-table"><thead><tr>'+Array.from({length:count},(_,index)=>cellHtml(headers[index],index,'th')).join('')+'</tr></thead><tbody>';
+   i+=2;
+   while(i<lines.length&&lines[i].includes('|')&&lines[i].trim()){
+    const values=mdTableCells(lines[i]);html+='<tr>'+Array.from({length:count},(_,index)=>cellHtml(values[index]||'',index,'td')).join('')+'</tr>';i++;
+   }
+   html+='</tbody></table></div>';i--;continue;
+  }
   if(m=/^\u0002KURTMATH(\d+)\u0002$/.exec(line)){flushP();flushL();flushQ();html+='<div class="math-display"><strong>\\['+esc(math[Number(m[1])])+'\\]</strong></div>';continue}
   if(!line.trim()){flushP();flushL();flushQ();continue}
   if(m=/^(#{1,6})\s+(.*)$/.exec(line)){flushP();flushL();flushQ();const n=Math.min(m[1].length,3);html+='<h'+n+'>'+inline(m[2])+'</h'+n+'>';continue}
@@ -2273,7 +2322,7 @@ function pushWorkStep(node,text,ok,detail){const entries=node.__worklog||(node._
 let follow=true;
 function scrollEnd(force){if(!force&&!follow)return;const m=$('messages');m.scrollTop=m.scrollHeight}
 function setEmpty(on){$('main').classList.toggle('empty',on);if(on)$('toBottom').classList.remove('show')}
-function setTitle(title,meta){$('chatTitle').textContent=title||'New chat';$('chatMeta').textContent=meta||''}
+function setTitle(title,meta,path){$('chatTitle').textContent=title||'New chat';$('chatMeta').textContent=meta||'';const parent=path!==undefined?String(path||''):String(state.workingRoot||state.linkedFolder||'');const el=$('chatPath');if(el){el.textContent=parent;el.title=parent;el.hidden=!parent}}
 async function downloadChatHistory(){
  const id=state.chatId,button=$('exportChatBtn');
  if(!id){toast('Nothing to download yet. Send a message first.');return}
@@ -2323,7 +2372,7 @@ async function linkSessionFolder(){
  if(state.linkedFolder){
   const unlink=await confirmInApp('Unlink this session folder?',`Stop working directly in ${state.linkedFolder} and return to this chat’s private workspace? No files will be moved or deleted.`,'Unlink folder',true);
   if(!unlink)return;
-  try{await api('/api/workspace/unlink-folder',{chat_id:state.chatId,approved:true});state.linkedFolder='';hint();toast('Session returned to its private workspace')}catch(error){toast(error.message)}
+  try{await api('/api/workspace/unlink-folder',{chat_id:state.chatId,approved:true});state.linkedFolder='';const info=await api('/api/chats/'+encodeURIComponent(state.chatId));state.workingRoot=info.working_root||'';setTitle($('chatTitle').textContent,$('chatMeta').textContent);hint();toast('Session returned to its private workspace')}catch(error){toast(error.message)}
   return;
  }
  let chosen='';
@@ -2331,7 +2380,7 @@ async function linkSessionFolder(){
  if(!chosen){const current=state.linkedFolder||'';const values=await inAppDialog({title:'Link a folder to this session',message:'Enter an absolute folder path. Kurt will use it as this session’s working root. Reads follow your OS permissions; each command and file change still requires separate approval.',confirmText:'Continue',fields:[{name:'path',label:'Absolute folder path',value:current,placeholder:'/Users/you/Projects/my-project',required:true}]});if(!values)return;chosen=String(values.path||'').trim()}
  const approved=await confirmInApp('Approve linked folder',`Link this session to:\n\n${chosen}\n\nKurt can read files your OS account can access. File changes and commands still require individual approval.`, 'Link folder',true);
  if(!approved)return;
- try{const result=await api('/api/workspace/link-folder',{chat_id:state.chatId,path:chosen,approved:true});state.linkedFolder=result.linked_folder||'';hint();toast('Session linked to '+state.linkedFolder);}
+ try{const result=await api('/api/workspace/link-folder',{chat_id:state.chatId,path:chosen,approved:true});state.linkedFolder=result.linked_folder||'';state.workingRoot=state.linkedFolder;setTitle($('chatTitle').textContent,$('chatMeta').textContent);hint();toast('Session linked to '+state.linkedFolder);}
  catch(error){toast(error.message)}
 }
 
@@ -2705,6 +2754,21 @@ function liveRefresh(a,ev){
  const count=$('artifactCount');if(count)count.textContent=artifactLang(a)+' · '+total+' line'+(total===1?'':'s');
  if(stick&&pane)pane.scrollTop=pane.scrollHeight;
 }
+function normalTerminalEvent(node,event){
+ const store=node.__terminals||(node.__terminals=new Map());
+ let item=store.get(event.id);
+ if(!item){item={kind:'terminal_output',path:'Terminal output',name:'Terminal output',content:'',live:true,liveDone:false,approval_required:false,validation:{ok:true,checked:false,message:'Running…'}};store.set(event.id,item);node.__artifacts=node.__artifacts||[];node.__artifacts.push(item)}
+ if(event.type==='terminal_start'){item.path='Terminal · '+String(event.command||'command').split('\n')[0].slice(0,70);item.command=event.command||'';item.content='$ '+item.command+'\n';item.live=true;item.liveDone=false;item.validation.message='Running…'}
+ else if(event.type==='terminal_chunk'){if(event.reset)item.content=String(event.text||'');else item.content+=String(event.text||'');if(item.content.length>24000)item.content=item.content.slice(-24000);item.validation.message='Live terminal output'}
+ else if(event.type==='terminal_done'){item.live=false;item.liveDone=true;item.returncode=Number(event.returncode);item.ok=!!event.ok;item.elapsed=event.elapsed;item.content+='\n[Exit '+item.returncode+' · '+(item.elapsed??'?')+'s]';item.validation.message='Exit '+item.returncode+' · '+(item.elapsed??'?')+'s'}
+ const preview=$('artifactPaneContent'),priorScroll=preview?preview.scrollTop:0,priorMax=preview?preview.scrollHeight-preview.clientHeight:0,stickToBottom=priorMax-priorScroll<72;
+ renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);
+ const trigger=Array.from(node.querySelectorAll('.artifact-trigger')).find(button=>button.dataset.path===item.path);
+ if(trigger){trigger.click();const status=trigger.querySelector('.artifact-trigger-status');if(status)status.textContent='Terminal · '+item.validation.message;
+  const refreshed=$('artifactPaneContent');if(refreshed)refreshed.scrollTop=stickToBottom?refreshed.scrollHeight:Math.min(priorScroll,refreshed.scrollHeight)}
+ if(state.activeArtifact===item&&item.__code){liveRefresh(item,{reset:true});}
+}
+
 function liveFileEvent(node,ev){
  const store=node.__live||(node.__live={});
  let a=store[ev.id];const created=!a;
@@ -2819,7 +2883,7 @@ async function deleteSelectedChats(){
  if(ids.includes(state.chatId))cancelRun();
  try{
   await api('/api/chats/bulk-delete',{ids});
-  if(ids.includes(state.chatId)){state.chatId=null;resetComposer();showWelcome();setTitle('New chat','')}
+  if(ids.includes(state.chatId)){state.chatId=null;state.workingRoot='';state.linkedFolder='';resetComposer();showWelcome();setTitle('New chat','')}
   state.selectedChatIds=[];state.selectingChats=false;await refreshChats();updateChatSelectionToolbar();toast('Selected chats deleted');
  }catch(error){toast(error.message)}
 }
@@ -2891,7 +2955,7 @@ function renderChats(){
 }
 async function renameChat(id,current){const result=await inAppDialog({title:'Rename conversation',message:'Choose a clear title for this chat.',confirmText:'Rename',fields:[{name:'title',label:'Chat title',value:current,required:true,maxLength:100}]});if(!result)return;const title=result.title.trim();if(!title){toast('Chat title cannot be empty');return}try{await api('/api/chats/'+encodeURIComponent(id),{rename:title});await refreshChats();if(id===state.chatId)setTitle(title,$('chatMeta').textContent)}catch(error){toast(error.message)}}
 async function togglePinChat(id,pinned){try{await api('/api/chats/'+encodeURIComponent(id),{pin:!!pinned});await refreshChats()}catch(error){toast(error.message)}}
-async function deleteChat(id){const chat=state.chats.find(item=>item.id===id);if(!await confirmInApp('Delete conversation',`Delete “${chat?.title||'this chat'}” and its temporary workspace? This cannot be undone.`,'Delete chat',true))return;if(state.chatId===id)cancelRun();try{await api('/api/chats/'+encodeURIComponent(id),{delete:true});if(state.chatId===id){state.chatId=null;resetComposer();showWelcome();setTitle('New chat','')}await refreshChats();toast('Chat deleted')}catch(error){toast(error.message)}}
+async function deleteChat(id){const chat=state.chats.find(item=>item.id===id);if(!await confirmInApp('Delete conversation',`Delete “${chat?.title||'this chat'}” and its temporary workspace? This cannot be undone.`,'Delete chat',true))return;if(state.chatId===id)cancelRun();try{await api('/api/chats/'+encodeURIComponent(id),{delete:true});if(state.chatId===id){state.chatId=null;state.workingRoot='';state.linkedFolder='';resetComposer();showWelcome();setTitle('New chat','')}await refreshChats();toast('Chat deleted')}catch(error){toast(error.message)}}
 let bootstrapSig='';
 async function refreshBootstrap(force){const data=await api('/api/bootstrap');const sig=JSON.stringify(data);if(force===true){delete $('systemPrompt').dataset.dirty}else if(sig===bootstrapSig)return false;bootstrapSig=sig;state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.mcpServers=data.mcp_servers||[];state.mcpTools=data.mcp_tools||[];state.skills=data.skills||[];state.settings=data.settings||{};syncAlwaysAllow();state.projectRoot=data.project_root||'';if(!$('systemPrompt').dataset.dirty)$('systemPrompt').value=state.settings.system_prompt||'';fillProviders();fillModels();renderKeys();renderApiKeyChecks(currentApiKeySelection());renderApiModels();renderApiGroups();renderMcpServers();renderSkills();refreshFailoverMemberOptions();enhanceAllSelects();return true}
 function renderMcpServers(){
@@ -3200,12 +3264,12 @@ async function saveFailoverGroup(){
 async function refreshChats(){const d=await api('/api/chats');state.chats=d.chats||[];renderChats()}
 function resetComposer(){$('prompt').value='';autosize();state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.uploadedFiles=[];state.contextCount=0;renderPendingUploads();hint();updateSend()}
 async function ensureChat(initialMessage){
- if(!state.chatId){const body={create:true};if(initialMessage)body.initial_message=initialMessage;const d=await api('/api/chats',body);state.chatId=d.id}
+ if(!state.chatId){const body={create:true};if(initialMessage)body.initial_message=initialMessage;const d=await api('/api/chats',body);state.chatId=d.id;try{const info=await api('/api/chats/'+encodeURIComponent(state.chatId));state.workingRoot=info.working_root||info.linked_folder||'';setTitle($('chatTitle').textContent,$('chatMeta').textContent)}catch(error){}}
  else if(initialMessage){await api('/api/chats/'+encodeURIComponent(state.chatId),{append_user_message:initialMessage})}
  return state.chatId;
 }
-async function newChat(){cancelRun();agentReset();state.chatId=null;state.linkedFolder='';hint();state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();agentReset();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.linkedFolder=data.linked_folder||'';if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=(data.agent_mode||data.agent)?[]:(context.items||[])}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>agentLabelMessage(renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null,attachments:message.attachments||[],media:message.media||[]}),message));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();agentOnChatLoaded(data);setTitle(data.title||'Conversation',[data.model||''].filter(Boolean).join(' · '));renderChats();document.body.classList.remove('nav-open')}
+async function newChat(){cancelRun();agentReset();state.chatId=null;state.linkedFolder='';state.workingRoot='';hint();state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
+async function loadChat(id){cancelRun();agentReset();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.linkedFolder=data.linked_folder||'';state.workingRoot=data.working_root||state.linkedFolder||'';if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=(data.agent_mode||data.agent)?[]:(context.items||[])}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>agentLabelMessage(renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null,attachments:message.attachments||[],media:message.media||[]}),message));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();agentOnChatLoaded(data);setTitle(data.title||'Conversation',[data.model||''].filter(Boolean).join(' · '),state.workingRoot);renderChats();document.body.classList.remove('nav-open')}
 async function linkFolderFromMessage(text){
  const intent=/\b(?:link|connect)\s+(?:this\s+)?(?:session|chat|workspace)\s+to\b/i.test(text);
  if(!intent)return false;
@@ -3216,7 +3280,7 @@ async function linkFolderFromMessage(text){
  if(!chosen){const values=await inAppDialog({title:'Link a folder to this session',message:'Enter the absolute folder path to use as this session’s working root. The folder will not be linked until you approve the next confirmation.',confirmText:'Continue',fields:[{name:'path',label:'Absolute folder path',placeholder:'/Users/you/Projects/my-project',required:true}]});if(!values)return true;chosen=String(values.path||'').trim()}
  const approved=await confirmInApp('Approve linked folder',`Link this session to:\n\n${chosen}\n\nKurt can read files your OS account can access. File changes and commands still follow your approval settings.`,'Link folder',true);
  if(!approved)return true;
- try{const result=await api('/api/workspace/link-folder',{chat_id:state.chatId,path:chosen,approved:true});state.linkedFolder=result.linked_folder||'';hint();toast('Session linked to '+state.linkedFolder);return false}
+ try{const result=await api('/api/workspace/link-folder',{chat_id:state.chatId,path:chosen,approved:true});state.linkedFolder=result.linked_folder||'';state.workingRoot=state.linkedFolder;setTitle($('chatTitle').textContent,$('chatMeta').textContent);hint();toast('Session linked to '+state.linkedFolder);return false}
  catch(error){toast(error.message);return true}
 }
 async function send(){
@@ -3242,7 +3306,7 @@ async function send(){
  follow=true;if(!retryExisting)renderMessage('user',text,null,{attachments:(state.uploadedFiles||[]).map(item=>item.path)});const node=renderMessage('assistant','');node.classList.add('live');node.__t0=performance.now();node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
  $('chatMeta').textContent='Generating…';
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
- const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',blockRationale='',pending=false,thinkStart=0;node.__artifacts=[];const showReasoning=live=>{reasoning=[modelRationale,blockRationale].filter(Boolean).join('\n\n');setReasoning(node,reasoning,live)};
+ const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',blockRationale='',pending=false,thinkStart=0;node.__artifacts=[];node.__terminals=new Map();const showReasoning=live=>{reasoning=[modelRationale,blockRationale].filter(Boolean).join('\n\n');setReasoning(node,reasoning,live)};
  const controller=new AbortController();state.abort=controller;
  const paint=()=>{pending=false;if(run!==state.run)return;const hasAction=ACTION_START_RE.test(raw);const parsed=splitResponseRationale(safeLiveDraft(raw),true);let rationale=parsed.rationale,answer=parsed.answer;if(hasAction){const narration=stripUnsupportedActions(parsed.answer);rationale=[parsed.rationale,narration].filter(Boolean).join('\n\n');answer=''}if(rationale){if(!thinkStart)thinkStart=performance.now();blockRationale=rationale;showReasoning(true)}const safe=stripUnsupportedActions(answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
@@ -3254,7 +3318,8 @@ async function send(){
    while((separator=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,separator);buffer=buffer.slice(separator+2);const line=frame.split('\n').find(value=>value.startsWith('data:'));if(!line)continue;const event=JSON.parse(line.slice(5).trim());
     if(event.type==='phase'){pushWorkStep(node,event.text,event.ok,event.detail);node.querySelector('.assistant-status').textContent=event.status||'Working…'}
     else if(event.type==='approval_required'){appendApprovalPause(node,event);node.querySelector('.assistant-status').textContent='Waiting for your approval…'}
-    else if(event.type==='artifact'){node.__artifacts=node.__artifacts||[];dropLiveFiles(node,event.artifact);node.__artifacts.push(event.artifact);renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);const trigger=Array.from(node.querySelectorAll('.artifact-trigger')).at(-1);if(trigger&&event.artifact?.content!==undefined)trigger.click()}
+    else if(event.type==='artifact'){node.__artifacts=node.__artifacts||[];dropLiveFiles(node,event.artifact);node.__artifacts.push(event.artifact);renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);const trigger=Array.from(node.querySelectorAll('.artifact-trigger')).at(-1);if(trigger&&(event.artifact?.content!==undefined||event.artifact?.kind==='file_ref'))trigger.click()}
+    else if(event.type==='terminal_start'||event.type==='terminal_chunk'||event.type==='terminal_done'){normalTerminalEvent(node,event)}
     else if(event.type==='artifact_update'){const selectedPath=node.querySelector('.artifact-trigger.selected')?.dataset.path;node.__artifacts=(node.__artifacts||[]).map(item=>item.path===event.artifact.path?event.artifact:item);renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);const trigger=Array.from(node.querySelectorAll('.artifact-trigger')).find(b=>b.dataset.path===(selectedPath||event.artifact.target_path||event.artifact.path));if(trigger)trigger.click()}
     else if(event.type==='approval_resolved'){resolveApprovalPause(node,event);node.querySelector('.assistant-status').textContent=event.approved?'Running…':'Continuing…'}
     else if(event.type==='approval_output'){setApprovalOutput(node,event)}
@@ -3265,7 +3330,7 @@ async function send(){
     else if(event.type==='draft'){raw+=event.text||'';if(!node.__live||!Object.keys(node.__live).length)node.querySelector('.assistant-status').textContent='Writing…';queue()}
     else if(event.type==='reasoning'){if(!thinkStart)thinkStart=performance.now();modelRationale+=event.text||'';node.querySelector('.assistant-status').textContent='Thinking…';showReasoning(true)}
     else if(event.type==='reasoning_reset'){const entries=node.__worklog||[];const entry=node.__thinkingEntry;if(entry){const at=entries.indexOf(entry);if(at>=0)entries.splice(at,1);node.__thinkingEntry=null;setThink(node,entries)}modelRationale='';blockRationale=''}
-    else if(event.type==='done'){pending=false;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);bindFileLinks(contentEl);node.dataset.raw=safe;node.__worklog=Array.isArray(event.worklog)?event.worklog.slice():(node.__worklog||[]);node.__thinkingEntry=null;setThink(node,node.__worklog);node.__thinkSeconds=Number(event.thinking_seconds)||Number(event.stats&&event.stats.thought_seconds)||0;setResponseMeta(node,event.stats,event.model);node.__live={};node.__artifacts=event.artifacts||node.__artifacts||[];renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);setTitle(event.title||'Conversation',[event.model||''].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
+    else if(event.type==='done'){pending=false;raw=event.content||'';const parsed=splitResponseRationale(raw,false);reasoning=event.reasoning||modelRationale||parsed.rationale||'';const safe=stripUnsupportedActions(parsed.answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';bindCopy(node);typesetMath(contentEl);bindFileLinks(contentEl);node.dataset.raw=safe;node.__worklog=Array.isArray(event.worklog)?event.worklog.slice():(node.__worklog||[]);node.__thinkingEntry=null;setThink(node,node.__worklog);node.__thinkSeconds=Number(event.thinking_seconds)||Number(event.stats&&event.stats.thought_seconds)||0;setResponseMeta(node,event.stats,event.model);node.__live={};const streamedTerminals=[...(node.__terminals?.values()||[])];node.__artifacts=[...(event.artifacts||[]),...streamedTerminals.filter(item=>!(event.artifacts||[]).some(a=>a.path===item.path))];renderArtifactTriggers(node.querySelector('.message-artifacts'),node.__artifacts);setTitle(event.title||'Conversation',[event.model||''].filter(Boolean).join(' · '));scrollEnd();await refreshChats().catch(error=>console.warn('Could not refresh the chat list after generation:',error))}
     else if(event.type==='error')throw new Error(event.message||'The model request failed');
    }
   }
@@ -3281,6 +3346,7 @@ state.mode='normal';state.agent=null;state.agentSeen=new Set();state.agentTimer=
 
 /* ---------- small helpers ---------- */
 const AG_PATHS={
+ image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',
  write:'<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
  read:'<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
  list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
@@ -3314,9 +3380,9 @@ const AG_STATUS={working:'Working',orchestrating:'Coordinating',watching:'Monito
 const AG_ACTIVE=['working','waiting','retrying'];
 
 /* ---------- state ---------- */
-const AG_TABS=['agents','timeline','plan','files'];
+const AG_TABS=['agents','timeline','plan','files','terminal'];
 function agentNewState(old){return{seq:-1,epoch:'',exists:false,running:false,finished:false,finishSummary:'',continuous:false,prefSet:false,idlePaused:false,
- goal:'',plan:'',notes:{},startedAt:0,skew:0,agents:new Map(),entries:new Map(),cards:new Map(),timeline:[],timelineIds:new Set(),msgs:[],files:new Map(),
+ goal:'',plan:'',notes:{},startedAt:0,skew:0,agents:new Map(),entries:new Map(),cards:new Map(),timeline:[],timelineIds:new Set(),msgs:[],files:new Map(),terminals:new Map(),
  approvals:new Map(),cooldown:0,reason:'',busyPoll:false,selected:'',tab:old&&AG_TABS.includes(old.tab)?old.tab:'agents',goalOpen:false,open:false,
  thoughtOpen:new Set(),taskOpen:new Set(),dirty:{},raf:0,feedQueue:[],cdNode:null,liveNode:null,liveItems:new Map(),liveSeen:new Set(),liveStart:0}}
 function agentReset(){
@@ -3324,7 +3390,7 @@ function agentReset(){
  if(state.agentTick){clearInterval(state.agentTick);state.agentTick=null}
  const old=state.agent;if(old&&old.raf)cancelAnimationFrame(old.raf);
  state.agent=agentNewState(old);state.agentSeen=new Set();
- ['adRoster','adBanners','adFeed','adChips','adPlan','adNotes','adFiles'].forEach(id=>{const el=$(id);if(el)el.replaceChildren()});
+ ['adRoster','adBanners','adFeed','adChips','adPlan','adNotes','adFiles','adTerminal'].forEach(id=>{const el=$(id);if(el)el.replaceChildren()});
  agentSetTab(state.agent.tab);agentSyncPanel();agentDirty('head','banners','roster','chips','feed','plan','files','strip');
 }
 function agentSelect(name){const a=state.agent;a.selected=name;a.dirty.feedFull=true;agentDirty('chips','feed')}
@@ -3550,11 +3616,28 @@ function renderPlan(){
 }
 function renderFiles(){
  const a=state.agent,host=$('adFiles');host.replaceChildren();
- const rows=[...a.files.values()].sort((x,y)=>y.ts-x.ts);$('adNFiles').textContent=String(rows.length);
+ const rows=[...a.files.values()].sort((x,y)=>y.ts-x.ts),outputs=rows.filter(x=>x.output),source=outputs.length?outputs:rows,shown=source.slice(0,24);
+ $('adNFiles').textContent=String(shown.length);
  if(!rows.length){const empty=agEl('div','ad-empty');empty.append(agEl('b','','No files written yet'),agEl('span','','Files the team creates show up here.'));host.appendChild(empty);return}
- rows.forEach(f=>{const r=agEl('div','ad-file'),ic=agEl('span','ad-ic'),main=agEl('div'),name=agEl('strong','',f.path);name.title=f.path;ic.innerHTML=agIcon('file');agTint(r,f.by);
-  const sub=agEl('small','');sub.append(agEl('span','ad-who',f.by==='lead'?'Lead':(f.by||'team')),document.createTextNode(' · '+agClock(f.ts)));main.append(name,sub);r.append(ic,main,agEl('span','sz',agSize(f.size)));host.appendChild(r)});
+ shown.forEach(f=>{const r=agEl('div','ad-file'+(f.output?' openable':'')),ic=agEl('span','ad-ic'),main=agEl('div'),rawPath=String(f.path||''),shownPath=rawPath.startsWith('./')?rawPath:'./'+rawPath.replace(/^\/+/,''),name=agEl('strong','',shownPath);name.title=rawPath;ic.innerHTML=agIcon(f.output?'image':'file');agTint(r,f.by);
+  const sub=agEl('small','');sub.append(agEl('span','ad-who',f.output?'Final result':(f.by==='lead'?'Lead':(f.by||'team'))),document.createTextNode(' · '+agClock(f.ts)));main.append(name,sub);r.append(ic,main,agEl('span','sz',agSize(f.size)));if(f.output){r.title='Open generated result';r.onclick=()=>openWorkspaceFile(rawPath,f.area||'work').catch(error=>toast(error.message))}host.appendChild(r)});
+ const noteText=outputs.length&&outputs.length<rows.length?shown.length+' results · intermediate files hidden':source.length>shown.length?'Showing the latest '+shown.length+' of '+source.length+' '+(outputs.length?'results':'files'):'';
+ if(noteText)host.appendChild(agEl('div','ad-files-note',noteText))
 }
+function renderAgentTerminals(){
+ const a=state.agent,host=$('adTerminal');host.replaceChildren();const rows=[...a.terminals.values()].sort((x,y)=>(y.ts||0)-(x.ts||0));
+ if(!rows.length){host.appendChild(agEl('div','ad-empty','Terminal output appears here while commands run.'));return}
+ rows.forEach(item=>{const card=agEl('section','ad-term-card'),head=agEl('div','ad-term-head'),command=agEl('strong','',item.command||'Terminal'),status=agEl('span','ad-term-state'+(item.live?' live':item.ok===false?' fail':''),item.live?'Running':(item.returncode===undefined?'Finished':('Exit '+item.returncode)));head.append(command,status);const pre=agEl('pre','ad-term-code',item.output||'(Waiting for output…)');card.append(head,pre);host.appendChild(card)});
+ const last=host.lastElementChild?.querySelector('.ad-term-code');if(last&&a.tab==='terminal')last.scrollTop=last.scrollHeight;
+}
+function agentTerminalEvent(event){
+ const a=state.agent;let item=a.terminals.get(event.id)||{id:event.id,command:event.command||'Terminal command',output:'',ts:event.ts||Date.now()/1000,live:true};
+ if(event.action==='start'){item.command=event.command||item.command;item.output='$ '+item.command+'\n';item.live=true;item.ts=event.ts||Date.now()/1000;a.open=true;agentSetTab('terminal');agentSyncPanel()}
+ else if(event.action==='chunk'){if(event.reset)item.output=String(event.text||'');else item.output+=String(event.text||'');if(item.output.length>24000)item.output=item.output.slice(-24000)}
+ else if(event.action==='done'){item.live=false;item.returncode=Number(event.returncode);item.ok=!!event.ok;item.elapsed=event.elapsed;item.output+='\n[Exit '+item.returncode+' · '+(item.elapsed??'?')+'s]';}
+ a.terminals.set(event.id,item);agentDirty('terminal');
+}
+
 function renderStrip(){
  const a=state.agent,strip=$('agentStrip');if(!a||!agentVisible())return;
  const dots=$('agentStripDots');dots.replaceChildren();
@@ -3568,14 +3651,14 @@ function renderStrip(){
 function agentSetTab(tab){
  const a=state.agent;if(!AG_TABS.includes(tab))tab='agents';a.tab=tab;
  document.querySelectorAll('#adTabs button').forEach(b=>{const on=b.dataset.tab===tab;b.classList.toggle('on',on);b.setAttribute('aria-selected',on?'true':'false')});
- $('adPaneAgents').hidden=tab!=='agents';$('adPaneTimeline').hidden=tab!=='timeline';$('adPanePlan').hidden=tab!=='plan';$('adPaneFiles').hidden=tab!=='files';
- const body=$('adBody');if(tab==='timeline')requestAnimationFrame(()=>{body.scrollTop=body.scrollHeight});else body.scrollTop=0;
+ $('adPaneAgents').hidden=tab!=='agents';$('adPaneTimeline').hidden=tab!=='timeline';$('adPanePlan').hidden=tab!=='plan';$('adPaneFiles').hidden=tab!=='files';$('adPaneTerminal').hidden=tab!=='terminal';
+ const body=$('adBody');if(tab==='timeline'||tab==='terminal')requestAnimationFrame(()=>{body.scrollTop=body.scrollHeight});else body.scrollTop=0;
 }
 function agentRender(){
  const a=state.agent;if(!a)return;a.raf=0;const d=a.dirty;a.dirty={};
  agentSyncPanel();
  if(d.head)renderHead();if(d.banners)renderBanners();if(d.roster)renderRoster();if(d.chips)renderChips();
- if(d.feed)renderFeed(!!d.feedFull);if(d.plan)renderPlan();if(d.files)renderFiles();if(d.strip)renderStrip();
+ if(d.feed)renderFeed(!!d.feedFull);if(d.plan)renderPlan();if(d.files)renderFiles();if(d.terminal)renderAgentTerminals();if(d.strip)renderStrip();
 }
 function agentTickRender(){
  const a=state.agent;if(!a||!a.exists)return;
@@ -3710,13 +3793,13 @@ function agentApplySnapshot(s){
  a.timeline=[];a.timelineIds=new Set();a.feedQueue=[];a.msgs=[];
  const items=[];(s.activity||[]).forEach(d=>items.push({t:'act',ts:d.ts,d}));(s.channel||[]).forEach(d=>items.push({t:'msg',ts:d.ts,d}));
  items.sort((x,y)=>x.ts-y.ts).forEach(item=>{a.timeline.push(item);a.timelineIds.add((item.t==='act'?'a':'m')+item.d.id);if(item.t==='msg')a.msgs.push(item.d)});
- a.files=new Map();(s.files||[]).forEach(f=>a.files.set(f.path,f));
+ a.files=new Map();(s.files||[]).forEach(f=>a.files.set(f.path,f));a.terminals=new Map();(s.terminals||[]).forEach(t=>a.terminals.set(t.id,t));
  a.approvals=new Map();(s.approvals||[]).forEach(x=>a.approvals.set(x.id,x));
  a.cooldown=s.cooldown_until||0;a.reason=s.cooldown_reason||'';
  if(a.selected&&!a.agents.has(a.selected))a.selected='';
  (s.chat||[]).forEach(agentRenderChat);
  agentSyncLive();
- a.dirty.feedFull=true;agentDirty('head','banners','roster','chips','feed','plan','files','strip');
+ a.dirty.feedFull=true;agentDirty('head','banners','roster','chips','feed','plan','files','terminal','strip');
 }
 function agentApplyEvent(event){
  const a=state.agent;a.exists=true;
@@ -3727,7 +3810,9 @@ function agentApplyEvent(event){
   case 'channel':agentAddChannel(event.message);break;
   case 'note':a.notes[event.key]=event.note;agentDirty('plan');break;
   case 'plan':a.plan=event.plan||'';agentDirty('plan');break;
-  case 'file':a.files.set(event.file.path,event.file);agentDirty('files');break;
+  case 'file':a.files.set(event.file.path,event.file);agentDirty('files');if(event.file.output)openWorkspaceFile(event.file.path,event.file.area||'work').catch(error=>toast(error.message));break;
+  case 'terminal':agentTerminalEvent(event);break;
+  case 'title':setTitle(event.title,$('chatMeta').textContent);refreshChats().catch(()=>{});break;
   case 'chat':agentRenderChat(event.message);break;
   case 'approval':a.approvals.set(event.approval.id,event.approval);agentDirty('banners','head','strip');break;
   case 'approval_resolved':a.approvals.delete(event.id);agentDirty('banners','head','strip');break;
@@ -4799,8 +4884,8 @@ class KurtWebApp:
 
     def generate_chat_title(self, user_text, assistant_text, model):
         prompt = [
-            {"role": "system", "content": "Create a concise chat title of 3–7 words. Return only the title, with no quotes, numbering, or explanation. Reflect the user's request, not the assistant's reply."},
-            {"role": "user", "content": "User message:\n" + str(user_text)[:1200] + "\n\nAssistant response:\n" + str(assistant_text)[:600]},
+            {"role": "system", "content": "Create a concise semantic conversation title of 3–7 words in the same language as the user's request. Summarize the core task or objective using the whole request. Do NOT copy the opening words, quote the beginning, or merely shorten the first sentence. Prefer a clear subject-plus-outcome title. Return only the title, with no quotes, numbering, or explanation."},
+            {"role": "user", "content": "Full user request:\n" + str(user_text)[:1800] + "\n\nAssistant context (optional):\n" + str(assistant_text)[:500]},
         ]
         try:
             chunks = []
@@ -4815,7 +4900,13 @@ class KurtWebApp:
                 return title[:58].rstrip()
         except Exception:
             pass
-        return re.sub(r"\s+", " ", str(user_text or "")).strip()[:58] or "New conversation"
+        clean = re.sub(r"```[\s\S]*?```|https?://\S+", " ", str(user_text or ""))
+        clean = re.sub(r"(?i)^\s*(?:please\s+)?(?:can you|could you|would you|help me|modify|change|update|fix|make|create|build|write|generate|implement)\b", " ", clean)
+        words = re.findall(r"[A-Za-z0-9][A-Za-z0-9+#.-]*", clean)
+        stop = {"the","a","an","and","or","to","for","of","in","on","with","from","this","that","it","my","me","i","you","your","so","also","please","can","could","would","should","will","be","is","are","was","were","do","does","did","not","don't","doesn't","when","where","what","why","how","as","at","by","into","then","than","just","all","any","use","using","want","need","able","make","made"}
+        useful = [word for word in words if word.lower() not in stop]
+        fallback = " ".join(useful[:6]).strip().title()
+        return fallback[:58].rstrip() or "New conversation"
 
     @property
     def skills_directory(self):
@@ -6099,7 +6190,7 @@ class KurtWebApp:
         """Only built when a command actually needs it; waits for a background prewarm if one is running."""
         return self.prewarm_chat_environment(chat_id, with_pip=with_pip).result()
 
-    def run_command(self, chat_id, command, timeout=120, tty=None):
+    def run_command(self, chat_id, command, timeout=120, tty=None, on_output=None):
         started = time.monotonic()
         active_root = None
         self.trace(chat_id, "command.start", command=command, timeout=timeout, tty=tty)
@@ -6108,7 +6199,7 @@ class KurtWebApp:
             env_root = self.ensure_chat_environment(chat_id, with_pip=self._command_needs_pip(command))
             active_root = self.chat_work_root(chat_id)
             outcome = run_workspace_command(
-                private_workspace, env_root, command, timeout=timeout, tty=tty,
+                private_workspace, env_root, command, timeout=timeout, tty=tty, on_output=on_output,
                 working_directory=active_root,
                 writable_roots=[private_workspace, active_root, env_root,
                                 private_workspace / ".tmp", private_workspace / ".home", Path.home()],
@@ -6245,6 +6336,43 @@ class KurtWebApp:
         except OSError:
             pass
         return found
+
+    USER_OUTPUT_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif", ".svg", ".pdf", ".mp4", ".m4v", ".webm", ".mov", ".csv", ".tsv", ".txt", ".md", ".docx", ".xlsx", ".pptx", ".json"}
+
+    def display_chat_path(self, chat_id, value):
+        try:
+            path = Path(value).expanduser().resolve(strict=False)
+            root = self.chat_work_root(chat_id, create=False).resolve(strict=False)
+            try:
+                rel = path.relative_to(root).as_posix()
+                return "./" if rel in ("", ".") else "./" + rel
+            except ValueError:
+                pass
+            try:
+                return "~/" + path.relative_to(Path.home().resolve()).as_posix()
+            except ValueError:
+                return str(path)
+        except Exception:
+            return str(value or "")
+
+    def collect_user_outputs(self, chat_id, before=None, limit=12):
+        root = self.chat_work_root(chat_id)
+        previous = before or {}
+        after = self._snapshot_outputs(root)
+        results = []
+        for rel in sorted(key for key, signature in after.items()
+                          if previous.get(key) != signature and Path(key).suffix.lower() in self.USER_OUTPUT_EXTENSIONS):
+            try:
+                info = self.open_preview_file(chat_id, "work", rel, include_text=False)
+            except (ValueError, OSError):
+                continue
+            if not info.get("size"):
+                continue
+            results.append({"kind": "file_ref", **info, "workspace_written": True, "approval_required": False,
+                            "validation": {"ok": True, "checked": True, "message": "Generated result · verified on disk"}})
+            if len(results) >= limit:
+                break
+        return results
 
     def run_python_artifact(self, chat_id, name, path=None, content=None, area="work", timeout=120):
         if not self.get_chat(chat_id):
@@ -6766,9 +6894,14 @@ class Handler(BaseHTTPRequestHandler):
                 if not chat:
                     self._json({"error": "Conversation not found."}, 404)
                 else:
+                    try:
+                        working_root = str(self.app.chat_work_root(chat["id"]).resolve())
+                    except Exception:
+                        working_root = str(chat.get("linked_folder") or "")
                     self._json({
                         "id": chat["id"], "title": chat.get("title"), "model": chat.get("model"), "route": chat.get("route", ""),
                         "effort": "thinking" if chat.get("effort") == "flash" else chat.get("effort", "thinking"), "linked_folder": chat.get("linked_folder", ""),
+                        "working_root": working_root,
                         "pinned": bool(chat.get("pinned", False)), "messages": chat.get("messages", []),
                         "agent_mode": isinstance(chat.get("agent"), dict),
                     })
@@ -8371,14 +8504,31 @@ class Handler(BaseHTTPRequestHandler):
                                         results.append("[Command declined] The user declined this command. It was not executed: " + argument)
                                     else:
                                         linked = str(chat.get("linked_folder") or "").strip()
+                                        terminal_id = uuid.uuid4().hex[:12]
                                         try:
-                                            command_result = self.app.run_command(chat_id, argument)
+                                            before_outputs = self.app._snapshot_outputs(self.app.chat_work_root(chat_id))
+                                        except Exception:
+                                            before_outputs = {}
+                                        emit({"type": "terminal_start", "id": terminal_id, "command": argument})
+                                        def stream_terminal(chunk, reset=False):
+                                            emit({"type": "terminal_chunk", "id": terminal_id, "text": str(chunk or ""), "reset": bool(reset)})
+                                        try:
+                                            command_result = self.app.run_command(chat_id, argument, on_output=stream_terminal)
                                         except Exception as exc:
                                             command_result = {"ok": False, "returncode": -1, "output": str(exc), "elapsed": None}
+                                            stream_terminal(str(exc) + "\n")
                                         exit_code = command_result.get("returncode", -1)
                                         command_ok = bool(command_result.get("ok"))
                                         output_text = str(command_result.get("output") or "(No terminal output.)")
                                         duration = command_result.get("elapsed")
+                                        emit({"type": "terminal_done", "id": terminal_id, "returncode": exit_code,
+                                              "ok": command_ok, "elapsed": duration})
+                                        try:
+                                            for generated in self.app.collect_user_outputs(chat_id, before_outputs):
+                                                artifacts_by_path[generated["path"]] = generated
+                                                emit({"type": "artifact", "artifact": generated})
+                                        except Exception as output_error:
+                                            trace("chat.generated_output_scan_failed", error=output_error)
                                         approval_item["output"] = {"text": output_text, "returncode": exit_code, "ok": command_ok, "elapsed": duration}
                                         if auto_run:
                                             log_step("Ran read-only command: " + argument[:160], command_ok, status="Inspecting workspace…", detail="Exit code {}\n{}".format(exit_code, output_text))
@@ -8473,7 +8623,8 @@ class Handler(BaseHTTPRequestHandler):
                                         content = self.app.read_agent_file(str(path))
                                         log_step("Read local file: " + str(path), True, status="Reading local file…",
                                                  detail="Read-only access using the current OS account's existing permissions; no file was changed.")
-                                        results.append("[Local file read]\nPath: {}\n\n{}".format(path, content))
+                                        results.append("[Local file read]\nPath: {}\n\n{}".format(
+                                        self.app.display_chat_path(chat_id, path), content))
                                     except Exception as exc:
                                         log_step("Local file read failed: " + argument, False, status="Could not read local file…", detail=str(exc))
                                         results.append("[Local file read failed]\nPath: {}\nReason: {}".format(argument, exc))
@@ -8481,10 +8632,13 @@ class Handler(BaseHTTPRequestHandler):
                                 try:
                                     path = self.app.resolve_user_read_path(chat_id, argument or ".")
                                     path, entries = self.app.list_agent_directory(str(path))
-                                    lines = ["[Local directory listing]\nPath: " + str(path)]
-                                    for item in entries:
+                                    parent = self.app.display_chat_path(chat_id, path)
+                                    lines = ["[Local directory listing]\nParent: " + parent]
+                                    for item in entries[:80]:
                                         label = "[DIR] " if item["directory"] else "[LINK] " if item.get("symlink") else "[FILE] "
-                                        lines.append(label + item["name"] + (" ({})".format(K.fmt_bytes(item["size"])) if item["size"] else ""))
+                                        lines.append(label + "./" + item["name"] + (" ({})".format(K.fmt_bytes(item["size"])) if item["size"] else ""))
+                                    if len(entries) > 80:
+                                        lines.append("… {} more entries not shown".format(len(entries) - 80))
                                     log_step("Listed local directory: " + str(path), True, status="Browsing local files…",
                                              detail="Read-only listing with the current OS account's existing permissions. Symbolic links are shown but not followed.")
                                     results.append("\n".join(lines))
@@ -8617,7 +8771,7 @@ class Handler(BaseHTTPRequestHandler):
                 artifact["path"] = candidate
                 artifacts_by_path[candidate] = artifact
             artifacts = list(artifacts_by_path.values())
-            if visible and chat.get("title") in (None, "New conversation"):
+            if (visible or artifacts) and chat.get("title") in (None, "", "New conversation"):
                 chat["title"] = self.app.generate_chat_title(user_text, visible, model)
             if (not visible or not re.search(r"\w", visible)) and not artifacts:
                 visible = EMPTY_REPLY_PLACEHOLDER_PREFIX + " or validated file artifact. Check the work log for tool and validation results."
