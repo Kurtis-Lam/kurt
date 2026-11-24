@@ -9,9 +9,12 @@ import json
 import os
 import re
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
+import time as _time
 import venv
 from html.parser import HTMLParser
 from pathlib import Path
@@ -403,6 +406,28 @@ def _mac_sandbox_profile(write_roots, allow_network=False, tty=False):
     return '\n'.join(rules)
 
 
+_NET_CACHE = {'at': 0.0, 'ok': True}
+_NET_PROBES = (('pypi.org', 443), ('github.com', 443), ('1.1.1.1', 443))
+INSTALL_TIMEOUT = 90
+
+
+def internet_reachable(timeout=2.5):
+    now = _time.monotonic()
+    if _NET_CACHE['at'] and now - _NET_CACHE['at'] < 20:
+        return _NET_CACHE['ok']
+    ok = False
+    for host, port in _NET_PROBES:
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                ok = True
+                break
+        except OSError:
+            continue
+    _NET_CACHE['at'] = now
+    _NET_CACHE['ok'] = ok
+    return ok
+
+
 def run_workspace_command(workspace, env_dir, command, timeout=120, project_root=None,
                           working_directory=None, writable_roots=None, tty=None):
     """Run a user-approved shell command under the macOS Seatbelt filesystem sandbox.
@@ -471,6 +496,11 @@ def run_workspace_command(workspace, env_dir, command, timeout=120, project_root
     # Explicit package-manager / repository commands may need outbound access. Other commands
     # receive no network permission, even though local file reads are broad.
     allow_network = bool(re.search(r'(?i)(?:\b(?:pip|pip3|npm|pnpm|yarn|cargo|go)\s+(?:install|add|get)\b|\bpython(?:3)?\s+-m\s+pip\s+install\b|\b(?:git\s+(?:clone|fetch|pull))\b|\b(?:curl|wget)\b)', raw))
+    if allow_network and not re.search(r'(?i)localhost|127\.0\.0\.1|\[::1\]', raw) and not internet_reachable():
+        return {'ok': False, 'returncode': -1, 'elapsed': 0.0, 'working_directory': str(cwd),
+                'sandbox': 'macOS Seatbelt', 'network_allowed': False,
+                'output': 'No internet connection: pypi.org, github.com and 1.1.1.1 could not be reached within a few seconds, so this command was not run. '
+                          'Do not retry installs or downloads. Build the result with what is already available (the Python standard library and system tools).'}
     try:
         profile = _mac_sandbox_profile(normalized_roots, allow_network=allow_network, tty=bool(tty))
     except Exception as exc:
@@ -493,6 +523,14 @@ def run_workspace_command(workspace, env_dir, command, timeout=120, project_root
         'KURT_SESSION_ROOT': str(cwd),
         'LANG': os.environ.get('LANG', 'en_US.UTF-8'),
         'LC_ALL': os.environ.get('LC_ALL', 'en_US.UTF-8'),
+        'PIP_DEFAULT_TIMEOUT': '15',
+        'PIP_RETRIES': '1',
+        'PIP_DISABLE_PIP_VERSION_CHECK': '1',
+        'PIP_NO_INPUT': '1',
+        'NPM_CONFIG_FETCH_TIMEOUT': '20000',
+        'NPM_CONFIG_FETCH_RETRIES': '1',
+        'NPM_CONFIG_FUND': 'false',
+        'NPM_CONFIG_AUDIT': 'false',
     }
     started = time.monotonic()
     if tty:
@@ -510,31 +548,48 @@ def run_workspace_command(workspace, env_dir, command, timeout=120, project_root
         return {'ok': not crashed, 'returncode': outcome['returncode'], 'output': text[:16000],
                 'elapsed': round(time.monotonic() - started, 2), 'working_directory': str(cwd),
                 'sandbox': 'macOS Seatbelt', 'network_allowed': allow_network, 'tty': True}
+    limit = max(1, min(int(timeout), 180))
+    if allow_network:
+        limit = min(limit, INSTALL_TIMEOUT)
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             [sandbox_exec, '-p', profile, shell, '-c', raw],
-            cwd=str(cwd), env=env, capture_output=True, text=True,
-            timeout=max(1, min(int(timeout), 180)), check=False, shell=False,
+            cwd=str(cwd), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            shell=False, start_new_session=True,
         )
-        output = ((result.stdout or '') + (result.stderr or '')).strip()
-        if result.returncode < 0 and not output:
+        try:
+            stdout, stderr = process.communicate(timeout=limit)
+        except subprocess.TimeoutExpired:
             try:
-                signal_name = __import__('signal').Signals(-result.returncode).name
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                process.kill()
+            try:
+                process.communicate(timeout=5)
+            except Exception:
+                pass
+            hint = ' The network looks too slow or unreachable: stop retrying downloads and use what is already installed.' if allow_network else ''
+            return {'ok': False, 'returncode': -1, 'elapsed': round(time.monotonic() - started, 2), 'working_directory': str(cwd),
+                    'sandbox': 'macOS Seatbelt', 'network_allowed': allow_network,
+                    'output': 'Command timed out after {} seconds and was stopped.{}'.format(limit, hint)}
+        returncode = process.returncode
+        output = ((stdout or '') + (stderr or '')).strip()
+        if returncode < 0 and not output:
+            try:
+                signal_name = signal.Signals(-returncode).name
             except (ValueError, AttributeError):
-                signal_name = 'signal {}'.format(-result.returncode)
-            output = ('The sandboxed command was terminated by {} (signal {}). This indicates an OS sandbox/process abort, not a normal mkdir permission error.'.format(signal_name, -result.returncode))
+                signal_name = 'signal {}'.format(-returncode)
+            output = ('The sandboxed command was terminated by {} (signal {}). This indicates an OS sandbox/process abort, not a normal mkdir permission error.'.format(signal_name, -returncode))
         if len(output) > 16000:
             output = output[:16000] + '\n[Output truncated]'
         return {
-            'ok': result.returncode == 0,
-            'returncode': result.returncode,
-            'output': output or ('Command completed successfully.' if result.returncode == 0 else 'Command exited without output.'),
+            'ok': returncode == 0,
+            'returncode': returncode,
+            'output': output or ('Command completed successfully.' if returncode == 0 else 'Command exited without output.'),
             'elapsed': round(time.monotonic() - started, 2),
             'working_directory': str(cwd),
             'sandbox': 'macOS Seatbelt',
             'network_allowed': allow_network,
         }
-    except subprocess.TimeoutExpired:
-        return {'ok': False, 'returncode': -1, 'output': 'Command timed out after {} seconds.'.format(min(int(timeout), 180))}
     except OSError as exc:
         return {'ok': False, 'returncode': -1, 'output': 'Could not start the sandboxed command: ' + str(exc)}
