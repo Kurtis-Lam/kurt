@@ -754,6 +754,13 @@ Verbs available to every agent:
 - RUN            Body is one shell command, run in the project workspace. It runs without a terminal: no keyboard, no screen, and the command must finish by itself.
 - RUN tty        For anything that needs a terminal (curses, input(), games, TUIs). Body is the command; optional extra line "KEYS: w a s d ENTER SPACE UP q" types those keys one by one. The program runs in a real 80x24 pseudo terminal and is stopped after about 10 seconds, and you get the final screen back. A game still running when it is stopped is normal: judge it by the screen. Typical test: RUN tty with "python3 game.py" and "KEYS: d d s q".
 
+DELIVERABLE-FIRST RULES
+- Identify the exact final result requested (for example a PNG, PDF, spreadsheet, website or source-code change) before doing the work. Optimise for that result, not for files that only help create it.
+- Helper scripts, generated source files used only to create another deliverable, debug logs and intermediate assets are progress files, not final results. Put temporary work in a hidden .tmp/ folder and do not feature those files in your final report unless the human explicitly asked for source code.
+- If the human asks for an image, create and verify the actual image file (.png, .jpg, etc.). Do not present the Python/JavaScript script that generated it as the result. Run the script, inspect the output, and report the image path. Apply this rule to every requested output format.
+- Verify the final result exists, is non-empty, and has the requested format before claiming completion. Prefer opening or inspecting the actual result when the tools support it. If generation fails, say so instead of substituting an intermediate file.
+- Keep final file lists focused on deliverables; do not mix progress files with the files the human needs to use.
+
 GROUND RULES (the system checks these and refuses or cuts off violations)
 - The WORKSPACE FILES list in the shared context is the live truth about what exists. Only read, edit or mention files that are listed there or that you have just written. Never invent file names, APIs, command output, test results or progress.
 - Results of READ, LIST, SEARCH, RUN and WRITE are produced only by the system and arrive in your next message. Never write a result yourself ("TOOL RESULTS", "[RUN result]", "[READ ...]"), never guess what a file contains or what a command printed, and never say an action worked before its result says so. Anything you write after a pretend result is cut off and ignored.
@@ -918,6 +925,8 @@ class AgentSwarm:
         self.review_signature = None
         self.user_paths = set()
         self.file_state = {}
+        self.terminals = []
+        self.title_pending = False
         self.last_change_ts = 0.0
         self.last_writer = ""
         self.sent_log = {}
@@ -971,7 +980,12 @@ class AgentSwarm:
         for row in data.get("files") or []:
             if isinstance(row, dict) and row.get("path"):
                 self.file_state[str(row["path"])] = {"by": str(row.get("by") or ""), "ts": float(row.get("ts") or 0),
-                                                     "size": int(row.get("size") or 0), "rel": str(row["path"])}
+                                                     "size": int(row.get("size") or 0), "rel": str(row["path"]),
+                                                     "output": bool(row.get("output")), "mime": str(row.get("mime") or ""),
+                                                     "area": str(row.get("area") or "work")}
+        terminals = data.get("terminals")
+        if isinstance(terminals, list):
+            self.terminals = [dict(item) for item in terminals if isinstance(item, dict)][-8:]
         self.lead.summary = str((data.get("lead") or {}).get("summary") or "")
 
     def start(self, first_message, message_id="", continuous=None):
@@ -1132,7 +1146,8 @@ class AgentSwarm:
 
     def files_view(self):
         with self.lock:
-            rows = [{"path": item.get("rel") or key, "by": item.get("by", ""), "ts": item.get("ts", 0), "size": item.get("size", 0)}
+            rows = [{"path": item.get("rel") or key, "by": item.get("by", ""), "ts": item.get("ts", 0), "size": item.get("size", 0),
+                     "output": bool(item.get("output")), "mime": item.get("mime", ""), "area": item.get("area", "work")}
                     for key, item in self.file_state.items()]
         rows.sort(key=lambda row: row["ts"], reverse=True)
         return rows[:200]
@@ -1147,7 +1162,8 @@ class AgentSwarm:
             return {"running": self.running, "finished": self.finished, "finish_summary": self.finish_summary,
                     "continuous": self.continuous, "idle_paused": self.idle_paused, "goal": self.goal, "plan": self.plan,
                     "notes": notes, "channel": channel, "activity": activity, "files": self.files_view(), "agents": agents,
-                    "approvals": approvals, "cooldown_until": self.cooldown_until, "cooldown_reason": self.cooldown_reason,
+                    "approvals": approvals, "terminals": list(self.terminals)[-8:],
+                    "cooldown_until": self.cooldown_until, "cooldown_reason": self.cooldown_reason,
                     "model": self.model_name, "seq": self.seq, "started_at": self.started_at, "now": time.time(),
                     "chat": chat_history(self.host, self.chat_id)}
 
@@ -1175,7 +1191,7 @@ class AgentSwarm:
             return {"goal": self.goal, "plan": self.plan, "notes": notes, "channel": list(self.channel)[-120:],
                     "activity": list(self.activity)[-120:], "agents": agents, "running": self.running,
                     "finished": self.finished, "finish_summary": self.finish_summary, "continuous": self.continuous,
-                    "files": self.files_view(), "updated": time.time(),
+                    "files": self.files_view(), "terminals": list(self.terminals)[-8:], "updated": time.time(),
                     "lead": {"summary": self.lead.summary, "entries": lead_entries}}
 
     def _persist(self, force=False):
@@ -1252,7 +1268,7 @@ class AgentSwarm:
         rows = []
         for rel, size, _mtime in items[:limit]:
             by = " by {}".format(written[rel]) if rel in written else ""
-            rows.append("- {} ({} bytes{})".format(rel, size, by))
+            rows.append("- ./{} ({} bytes{})".format(rel, size, by))
         if len(items) > limit or truncated:
             rows.append("- … more files not shown")
         return "\n".join(rows)
@@ -1457,20 +1473,49 @@ class AgentSwarm:
         self.lead.wake.set()
         self._persist(force=True)
 
+    def _generate_title_for_prompt(self, text):
+        entered = False
+        try:
+            self.host.agent_gate.enter()
+            entered = True
+            title = self.host.generate_chat_title(text, "", self.model_name)
+        except Exception:
+            title = ""
+        finally:
+            if entered:
+                self.host.agent_gate.exit()
+        if title:
+            chat = self.host.get_chat(self.chat_id)
+            if chat is not None:
+                with self.host.lock:
+                    changed = chat.get("title") in (None, "", "New conversation")
+                    if changed:
+                        chat["title"] = title
+                        chat["updated"] = time.time()
+                if changed:
+                    self.host.save_chats()
+                    self._emit("title", title=title)
+        with self.lock:
+            self.title_pending = False
+
     def user_message(self, text, message_id="", continuous=None):
         text = str(text or "").strip()
         if not text:
             return
         chat = self.host.get_chat(self.chat_id)
         record = {"role": "user", "content": text, "agent_mode": True, "message_id": message_id or uuid.uuid4().hex}
+        create_title = False
         if chat is not None:
             with self.host.lock:
                 chat["messages"].append(record)
                 chat["updated"] = time.time()
-                if chat.get("title") in (None, "", "New conversation"):
-                    flat = " ".join(str(text).split())
-                    chat["title"] = flat if len(flat) <= 60 else flat[:59].rstrip() + "\u2026"
+                if chat.get("title") in (None, "", "New conversation") and not self.title_pending:
+                    self.title_pending = True
+                    create_title = True
             self.host.save_chats()
+        if create_title:
+            threading.Thread(target=self._generate_title_for_prompt, args=(text,),
+                             name="kurt-agent-title", daemon=True).start()
         if not self.goal:
             self.goal = clip(text, 4000)
         elif self.restored_finished and self.restored:
@@ -2569,17 +2614,63 @@ class AgentSwarm:
             except Exception:
                 pass
             before = self._signature()
-            if tty is not None:
-                try:
-                    outcome = host.run_command(self.chat_id, command, tty=tty)
-                except TypeError:
-                    outcome = host.run_command(self.chat_id, command)
-            else:
-                outcome = host.run_command(self.chat_id, command)
+            try:
+                before_outputs = host._snapshot_outputs(host.chat_work_root(self.chat_id))
+            except Exception:
+                before_outputs = {}
+            terminal_id = uuid.uuid4().hex[:12]
+            terminal = {"id": terminal_id, "command": command, "output": "$ " + command + "\n",
+                        "ts": time.time(), "live": True}
+            with self.lock:
+                self.terminals.append(terminal)
+                self.terminals = self.terminals[-8:]
+            self._emit("terminal", action="start", id=terminal_id, command=command, ts=terminal["ts"])
+
+            def stream_terminal(chunk, reset=False):
+                text_chunk = str(chunk or "")
+                with self.lock:
+                    for item in reversed(self.terminals):
+                        if item.get("id") == terminal_id:
+                            item["output"] = text_chunk if reset else str(item.get("output") or "") + text_chunk
+                            item["output"] = item["output"][-24000:]
+                            break
+                self._emit("terminal", action="chunk", id=terminal_id, text=text_chunk, reset=bool(reset))
+
+            try:
+                if tty is not None:
+                    outcome = host.run_command(self.chat_id, command, tty=tty, on_output=stream_terminal)
+                else:
+                    outcome = host.run_command(self.chat_id, command, on_output=stream_terminal)
+            except TypeError as exc:
+                if "on_output" not in str(exc):
+                    raise
+                outcome = host.run_command(self.chat_id, command, **({"tty": tty} if tty is not None else {}))
+                if outcome.get("output"):
+                    stream_terminal(outcome.get("output"))
             if self._signature() != before:
                 self._mark_change(agent)
             agent.evidence += 1
             ok = bool(outcome.get("ok"))
+            exit_code = outcome.get("returncode", -1)
+            elapsed = outcome.get("elapsed")
+            with self.lock:
+                for item in reversed(self.terminals):
+                    if item.get("id") == terminal_id:
+                        item.update({"live": False, "ok": ok, "returncode": exit_code, "elapsed": elapsed})
+                        item["output"] = (str(item.get("output") or "") + "\n[Exit {} · {}s]".format(exit_code, elapsed if elapsed is not None else "?"))[-24000:]
+                        break
+            self._emit("terminal", action="done", id=terminal_id, returncode=exit_code,
+                       ok=ok, elapsed=elapsed)
+            try:
+                for generated in host.collect_user_outputs(self.chat_id, before_outputs):
+                    row = {"by": agent.name, "ts": time.time(), "size": generated.get("size", 0),
+                           "rel": generated.get("path", ""), "output": True, "mime": generated.get("mime", ""),
+                           "area": generated.get("area", "work")}
+                    with self.lock:
+                        self.file_state[generated["path"]] = row
+                    self._emit("file", file={"path": generated["path"], **row})
+            except Exception:
+                pass
             self._trace("command", agent, command=command, readonly=readonly, tty=tty, ok=ok, returncode=outcome.get("returncode", -1),
                         output=outcome.get("output") or "")
             text = "[RUN result]\nCommand: {}\nExit code: {}\nStatus: {}\nOutput:\n{}".format(
@@ -2594,21 +2685,30 @@ class AgentSwarm:
         return ""
 
     def _list_dir(self, path, label):
+        try:
+            rel = self._rel(path)
+        except Exception:
+            rel = str(path)
+        parent = "./" if rel in ("", ".") else "./" + str(rel).lstrip("/")
+        try:
+            entries = sorted(path.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.casefold()))
+        except OSError as exc:
+            return "[{} failed] {}".format(label, exc)
         rows = []
-        for item in sorted(path.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.casefold())):
+        for item in entries[:80]:
             try:
+                shown = "./" + item.name
                 if item.is_symlink():
-                    rows.append("{} (symlink)".format(item.name))
+                    rows.append("{} (symlink)".format(shown))
                 elif item.is_dir():
-                    rows.append("{}/".format(item.name))
+                    rows.append("{}/".format(shown))
                 else:
-                    rows.append("{} ({} bytes)".format(item.name, item.stat().st_size))
+                    rows.append("{} ({} bytes)".format(shown, item.stat().st_size))
             except OSError:
                 continue
-            if len(rows) >= 300:
-                rows.append("… truncated at 300 entries")
-                break
-        text = "[{} {}]\n{}".format(label, path, "\n".join(rows) or "(empty)")
+        if len(entries) > len(rows):
+            rows.append("… {} more entries not shown".format(len(entries) - len(rows)))
+        text = "[{}]\nParent: {}\n{}".format(label, parent, "\n".join(rows) or "(empty)")
         if not rows:
             text += ("\nThis folder is empty: nothing has been created here yet. Do NOT search other folders or invent files. "
                      "If your task depends on a teammate's output, report BLOCKED and say who you are waiting for; otherwise create what your task needs.")
