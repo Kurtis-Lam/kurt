@@ -5,6 +5,7 @@ environment is used for package isolation, never as a substitute for OS confinem
 """
 
 import ast
+import codecs
 import json
 import os
 import re
@@ -273,7 +274,7 @@ class _Screen:
         return '\n'.join(lines)
 
 
-def run_in_pty(argv, cwd, env, timeout=10, keys=None):
+def run_in_pty(argv, cwd, env, timeout=10, keys=None, on_output=None):
     """Run argv attached to a pseudo terminal, type optional keys, return the final screen.
 
     The process is stopped when it exits or when the timeout passes. A program that is
@@ -305,6 +306,21 @@ def run_in_pty(argv, cwd, env, timeout=10, keys=None):
     raw = b''
     status = None
     killed = False
+    decoder = codecs.getincrementaldecoder('utf-8')('replace')
+    screen = _Screen()
+
+    def notify(text, reset=False):
+        if not on_output or not text:
+            return
+        try:
+            on_output(text, reset=reset)
+        except TypeError:
+            try:
+                on_output(text)
+            except Exception:
+                pass
+        except Exception:
+            pass
     try:
         while True:
             now = time.monotonic()
@@ -326,6 +342,10 @@ def run_in_pty(argv, cwd, env, timeout=10, keys=None):
                 if not chunk:
                     break
                 raw += chunk
+                decoded = decoder.decode(chunk, final=False)
+                if decoded:
+                    screen.feed(decoded)
+                    notify(screen.text(), reset=True)
                 if len(raw) > 2_000_000:
                     killed = True
                     break
@@ -362,8 +382,10 @@ def run_in_pty(argv, cwd, env, timeout=10, keys=None):
         code = -os.WTERMSIG(status)
     else:
         code = -1
-    screen = _Screen()
-    screen.feed(raw.decode('utf-8', 'replace'))
+    tail = decoder.decode(b'', final=True)
+    if tail:
+        screen.feed(tail)
+        notify(screen.text(), reset=True)
     final = screen.text() or '(the program drew nothing)'
     return {'returncode': code, 'killed': killed, 'screen': final, 'seconds': round(time.monotonic() - started, 1),
             'keys': len(keys or [])}
@@ -429,7 +451,7 @@ def internet_reachable(timeout=2.5):
 
 
 def run_workspace_command(workspace, env_dir, command, timeout=120, project_root=None,
-                          working_directory=None, writable_roots=None, tty=None):
+                          working_directory=None, writable_roots=None, tty=None, on_output=None):
     """Run a user-approved shell command under the macOS Seatbelt filesystem sandbox.
 
     Reads are permitted wherever the current OS account has read access. Writes are allowed
@@ -537,7 +559,8 @@ def run_workspace_command(workspace, env_dir, command, timeout=120, project_root
         try:
             outcome = run_in_pty([sandbox_exec, '-p', profile, shell, '-c', raw], cwd, env,
                                  timeout=tty.get('timeout', 10) if isinstance(tty, dict) else 10,
-                                 keys=tty.get('keys') if isinstance(tty, dict) else None)
+                                 keys=tty.get('keys') if isinstance(tty, dict) else None,
+                                 on_output=on_output)
         except OSError as exc:
             return {'ok': False, 'returncode': -1, 'output': 'Could not start the sandboxed terminal command: ' + str(exc)}
         note = ('The program was still running after {} s and was stopped. That is normal for a game or server: judge it by the screen below.'
@@ -554,36 +577,105 @@ def run_workspace_command(workspace, env_dir, command, timeout=120, project_root
     try:
         process = subprocess.Popen(
             [sandbox_exec, '-p', profile, shell, '-c', raw],
-            cwd=str(cwd), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            shell=False, start_new_session=True,
+            cwd=str(cwd), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=False, bufsize=0, shell=False, start_new_session=True,
         )
+        import selectors
+        selector = selectors.DefaultSelector()
+        if process.stdout is not None:
+            selector.register(process.stdout, selectors.EVENT_READ)
+        decoder = codecs.getincrementaldecoder('utf-8')('replace')
+        captured = []
+        captured_length = 0
+        output_truncated = False
+        timed_out = False
+
+        def deliver(chunk):
+            if not chunk:
+                return
+            nonlocal captured_length, output_truncated
+            captured.append(chunk)
+            captured_length += len(chunk)
+            if captured_length > 16000:
+                joined = ''.join(captured)
+                joined = joined[-16000:]
+                captured[:] = [joined]
+                captured_length = len(joined)
+                output_truncated = True
+            if on_output:
+                try:
+                    on_output(chunk, reset=False)
+                except TypeError:
+                    try:
+                        on_output(chunk)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+        deadline = started + limit
         try:
-            stdout, stderr = process.communicate(timeout=limit)
-        except subprocess.TimeoutExpired:
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 and process.poll() is None:
+                    timed_out = True
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except OSError:
+                        process.kill()
+                    deadline = time.monotonic() + 4
+                ready = selector.select(min(0.12, max(0.01, remaining)) if not timed_out else 0.12)
+                for key, _mask in ready:
+                    try:
+                        data = os.read(key.fd, 8192)
+                    except OSError:
+                        data = b''
+                    if not data:
+                        try:
+                            selector.unregister(key.fileobj)
+                        except Exception:
+                            pass
+                        continue
+                    deliver(decoder.decode(data, final=False))
+                if timed_out and time.monotonic() >= deadline and selector.get_map():
+                    break
+            if process.poll() is None:
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1)
+        finally:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except OSError:
-                process.kill()
-            try:
-                process.communicate(timeout=5)
+                selector.close()
             except Exception:
                 pass
+            try:
+                if process.stdout:
+                    process.stdout.close()
+            except Exception:
+                pass
+        tail = decoder.decode(b'', final=True)
+        if tail:
+            deliver(tail)
+        output = ''.join(captured).strip()
+        returncode = process.returncode if process.returncode is not None else -1
+        if timed_out:
             hint = ' The network looks too slow or unreachable: stop retrying downloads and use what is already installed.' if allow_network else ''
-            return {'ok': False, 'returncode': -1, 'elapsed': round(time.monotonic() - started, 2), 'working_directory': str(cwd),
-                    'sandbox': 'macOS Seatbelt', 'network_allowed': allow_network,
-                    'output': 'Command timed out after {} seconds and was stopped.{}'.format(limit, hint)}
-        returncode = process.returncode
-        output = ((stdout or '') + (stderr or '')).strip()
+            output = (output + '\n' if output else '') + 'Command timed out after {} seconds and was stopped.{}'.format(limit, hint)
+            deliver('\nCommand timed out after {} seconds and was stopped.{}'.format(limit, hint))
+            returncode = -1
         if returncode < 0 and not output:
             try:
                 signal_name = signal.Signals(-returncode).name
             except (ValueError, AttributeError):
                 signal_name = 'signal {}'.format(-returncode)
             output = ('The sandboxed command was terminated by {} (signal {}). This indicates an OS sandbox/process abort, not a normal mkdir permission error.'.format(signal_name, -returncode))
-        if len(output) > 16000:
-            output = output[:16000] + '\n[Output truncated]'
+            deliver(output)
+        if output_truncated:
+            output = '[Earlier output omitted]\n' + output
         return {
-            'ok': returncode == 0,
+            'ok': returncode == 0 and not timed_out,
             'returncode': returncode,
             'output': output or ('Command completed successfully.' if returncode == 0 else 'Command exited without output.'),
             'elapsed': round(time.monotonic() - started, 2),
