@@ -54,6 +54,9 @@ MAX_ACTIVITY = 800
 MAX_HISTORY = 14
 MAX_TOOL_ROUNDS = 30
 LEAD_TOOL_ROUNDS = 6
+LEAD_SOLO_ROUNDS = 24
+RETRY_STEPS = (8, 15, 30, 60)
+CONTINUE_REASON = "continuing your last turn"
 LEAD_HEARTBEAT = 90
 GENERATION_TOKENS = 6144
 QUICK_REPLY_TOKENS = 1024
@@ -165,7 +168,9 @@ def detect_continuous(text):
 FUNC_CALL_RE = re.compile(r"<function=\s*([A-Za-z_][\w.-]*)\s*>(.*?)(?:</function>|\Z)", re.S | re.I)
 FUNC_PARAM_RE = re.compile(r"<parameter=\s*([A-Za-z_][\w.-]*)\s*>\s*(.*?)\s*(?:</parameter>|(?=<parameter=)|\Z)", re.S | re.I)
 WRAPPER_TAG_RE = re.compile(
-    r"</?\s*(?:[A-Za-z0-9]+_)?(?:tool_calls?|function_calls?|calls|tool_use|tool_code|function|parameter|invoke)\b[^>]*>", re.I)
+    r"</?\s*(?:[A-Za-z0-9]+_)?(?:tool_calls?|function_calls?|calls|tool_use|tool_code|function|parameter|invoke|arg_key|arg_value)\b[^>]*>", re.I)
+ARG_TAG_RE = re.compile(r"</?\s*arg_(?:key|value)\s*>", re.I)
+ARG_PAIR_RE = re.compile(r"<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>\s*(.*?)\s*(?:</arg_value>|(?=<arg_key>)|\Z)", re.S | re.I)
 SPECIAL_TOKEN_RE = re.compile(r"<\|[^|<>\n]{1,48}\|>")
 DSML_PREFIX_RE = re.compile(r"<[\u200b\s]*(/?)[\u200b\s]*[\uff5c|]\s*DSML\s*[\uff5c|]\s*(?=[A-Za-z])", re.I)
 INVOKE_RE = re.compile(r"<invoke\s+name\s*=\s*[\"']([^\"']+)[\"']\s*>(.*?)(?:</invoke\s*>|(?=<invoke\s)|\Z)", re.S | re.I)
@@ -290,7 +295,16 @@ def _foreign_call_to_block(inner):
     if not inner:
         return ""
     if re.search(r"^\s*@@@\s*[A-Za-z_]+", inner, re.M):
-        return inner
+        return ARG_TAG_RE.sub("", inner)
+    pairs = [(item.group(1), item.group(2)) for item in ARG_PAIR_RE.finditer(inner)]
+    if pairs:
+        name = re.sub(r"^functions?\.|:\d+$", "", re.split(r"<arg_key>", inner, maxsplit=1, flags=re.I)[0].strip())
+        block = _function_to_block(name, pairs)
+        if block:
+            return block
+    inner = ARG_TAG_RE.sub("", inner).strip()
+    if not inner:
+        return ""
     if "\x00" in inner:
         name, _sep, argument = inner.partition("\x00")
         name = re.sub(r"^functions?\.|:\d+$", "", name.strip())
@@ -361,6 +375,8 @@ def normalize_function_calls(text):
         text = TOKEN_CALL_RE.sub(lambda m: "\n" + _foreign_call_to_block(m.group(1)) + "\n", text)
         text = TAG_CALL_RE.sub(lambda m: "\n" + _foreign_call_to_block(m.group(2)) + "\n", text)
         text = SPECIAL_TOKEN_RE.sub("", text)
+    if "arg_" in text:
+        text = ARG_TAG_RE.sub("", text)
     if "```" in text:
         text = _fenced_tool_lines(text)
     return text
@@ -849,6 +865,7 @@ class Agent:
         self.recoveries = 0
         self.restarted = False
         self.last_answer = ""
+        self.carry = ""
         self.reset_task()
 
     def reset_task(self):
@@ -883,6 +900,9 @@ class AgentSwarm:
         self.pending = {}
         self.cooldown_until = 0.0
         self.cooldown_reason = ""
+        self.failure_streak = 0
+        self.lead_trace = []
+        self.lead_think_seconds = 0.0
         self.file_lock = threading.Lock()
         self.last_persist = 0.0
         self.started_at = time.time()
@@ -1045,11 +1065,29 @@ class AgentSwarm:
         self._entry_emit(agent, entry, done=True)
         return entry
 
+    def _trace_lead_thinking(self, reasoning, seconds):
+        text = str(reasoning or "").strip()
+        if not text:
+            return
+        with self.lock:
+            self.lead_trace.append({"kind": "thinking", "text": "Thinking", "ok": None, "detail": clip_tail(text, 8000)})
+            del self.lead_trace[:-40]
+            self.lead_think_seconds += max(0.0, float(seconds))
+
+    def _take_lead_trace(self):
+        with self.lock:
+            items, seconds = list(self.lead_trace), self.lead_think_seconds
+            self.lead_trace, self.lead_think_seconds = [], 0.0
+        return items, seconds
+
     def _activity(self, agent, kind, text, detail="", ok=None):
         item = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "agent": agent.name if agent else "system",
                 "kind": kind, "text": clip(text, 260), "detail": clip(detail, 2500), "ok": ok}
         with self.lock:
             self.activity.append(item)
+            if agent is not None and agent.lead and kind in ("run", "read", "write", "list", "search"):
+                self.lead_trace.append({"text": item["text"], "detail": item["detail"], "ok": ok})
+                del self.lead_trace[:-40]
         if agent is not None:
             agent.last_activity = time.time()
         self._emit("activity", item=item)
@@ -1326,7 +1364,7 @@ class AgentSwarm:
                 del self.channel[:-MAX_CHANNEL]
         self._emit("channel", message=message)
         if lowered == "user":
-            self._deliver_to_user(text, sender)
+            self._deliver_to_user(text, sender, attach=kind != "quick")
         elif lowered == "all":
             if sender != "lead":
                 self.lead.inbox.append(message)
@@ -1385,10 +1423,18 @@ class AgentSwarm:
             del self.recent_user_posts[:-12]
         return False
 
-    def _deliver_to_user(self, text, sender="lead"):
+    def _deliver_to_user(self, text, sender="lead", attach=True):
         chat = self.host.get_chat(self.chat_id)
         record = {"role": "assistant", "content": text, "model": self.model_name, "route": self.route_info.get("route", ""),
                   "agent_mode": True, "agent": sender, "message_id": uuid.uuid4().hex}
+        if attach and sender == "lead":
+            worklog, seconds = self._take_lead_trace()
+            if worklog:
+                record["worklog"] = worklog
+                record["reasoning"] = "\n\n".join(item["detail"] for item in worklog if item.get("kind") == "thinking")
+                record["thinking_seconds"] = round(seconds, 1)
+        elif not attach:
+            record["quick"] = True
         if chat is not None:
             with self.host.lock:
                 chat["messages"].append(record)
@@ -1467,28 +1513,33 @@ class AgentSwarm:
     def _on_failure(self, agent, exc, entry=None):
         detail = clip(str(exc), 600)
         reason = "rate limit" if RATE_LIMIT_RE.search(detail) else "error"
-        self._trace("model_failure", agent, reason=reason, retry_in_seconds=RETRY_SECONDS, error=exc)
         with self.lock:
-            fresh = self.cooldown_until < time.time() + 5
-            self.cooldown_until = max(self.cooldown_until, time.time() + RETRY_SECONDS)
+            wait = RETRY_SECONDS if reason == "rate limit" else RETRY_STEPS[min(self.failure_streak, len(RETRY_STEPS) - 1)]
+            self.failure_streak += 1
+        self._trace("model_failure", agent, reason=reason, retry_in_seconds=wait, error=exc)
+        with self.lock:
+            fresh = self.cooldown_until < time.time() + 2
+            self.cooldown_until = max(self.cooldown_until, time.time() + wait)
             self.cooldown_reason = reason
             agent.retry_at = self.cooldown_until
-        self._note_entry(agent, "error", "The model request hit a {}: {}\nRetrying in {} seconds.".format(reason, detail, RETRY_SECONDS))
+        self._note_entry(agent, "error", "The model request hit a {}: {}\nRetrying in {} seconds.".format(reason, detail, wait))
         if fresh:
-            self._activity(agent, "alert", "The model request hit a {}. All agents wait {} seconds, then retry.".format(reason, RETRY_SECONDS), detail=detail, ok=False)
+            self._activity(agent, "alert", "The model request hit a {}. All agents wait {} seconds, then retry.".format(reason, wait), detail=detail, ok=False)
         self._set_status(agent, "retrying", current="Model {}: retrying soon".format(reason))
         self._emit("state", running=True, cooldown_until=self.cooldown_until, cooldown_reason=reason)
 
     # -- generation -------------------------------------------------------
 
     def _generate(self, agent, messages, max_tokens=GENERATION_TOKENS, entries=True, think=True, temperature=None):
-        """Return a Generation (reasoning, answer). Retries forever, one minute after each failure."""
+        """Return a Generation (reasoning, answer). Retries forever with a growing pause after each failure."""
         while True:
             if self.stop_event.is_set():
                 raise StopRequested()
             self._wait_cooldown(agent)
             try:
-                return self._generate_once(agent, messages, max_tokens, entries, think, temperature)
+                result = self._generate_once(agent, messages, max_tokens, entries, think, temperature)
+                self.failure_streak = 0
+                return result
             except StopRequested:
                 raise
             except Exception as exc:
@@ -1599,6 +1650,8 @@ class AgentSwarm:
                         pass
                     self._trace("model_response", agent, model=candidate.get("model"), entry=candidate.get("member_label"),
                                 seconds=round(time.monotonic() - started, 3), reasoning=reasoning, answer=answer)
+                    if agent.lead and entries:
+                        self._trace_lead_thinking(reasoning, time.monotonic() - started)
                     return Generation(reasoning, answer)
                 except StopRequested:
                     raise
@@ -1775,7 +1828,7 @@ class AgentSwarm:
                     break
                 lead.wake.clear()
                 if triggered or lead.inbox:
-                    reason = "new messages"
+                    reason = CONTINUE_REASON if lead.carry and not lead.inbox else "new messages"
                 else:
                     reason = self._scheduled_review()
                     if reason is None:
@@ -1862,7 +1915,10 @@ class AgentSwarm:
                 agent.heartbeat = BLOCK_HEARTBEAT if self._blocked_workers() else LEAD_HEARTBEAT
                 self._set_status(agent, "orchestrating", current="Reviewing the team")
                 base = self._lead_prompt(reason, inbox)
-                max_rounds = LEAD_TOOL_ROUNDS
+                if agent.carry:
+                    base += "\n\nUNFINISHED WORK FROM YOUR PREVIOUS TURN. Continue from these results:\n" + agent.carry
+                    agent.carry = ""
+                max_rounds = LEAD_TOOL_ROUNDS if self._has_workers() else LEAD_SOLO_ROUNDS
             else:
                 self._set_status(agent, "working", current="Starting")
                 base = self._worker_prompt(agent, inbox)
@@ -1939,7 +1995,11 @@ class AgentSwarm:
                     base += "\n\nNEW MESSAGES FOR YOU:\n" + self._format_inbox(late)
                     inbox = inbox + late
             else:
-                if not agent.lead:
+                if agent.lead:
+                    if base.startswith("TOOL RESULTS") and not self.finished and not self.stop_event.is_set():
+                        agent.carry = clip(base, RESULT_LIMIT)
+                        agent.wake.set()
+                else:
                     agent.summary = "Reached the per-task round limit."
                     self._set_status(agent, "idle", current="Round limit reached")
                     self.post(agent.name, "lead", "[LIMIT] Reached my round limit on the current task. Send follow-up work if more is needed.")
@@ -1951,6 +2011,10 @@ class AgentSwarm:
                 elif not agent.inbox and agent.status in WORKING_STATES:
                     self._set_status(agent, "idle", current="Waiting for work")
 
+    def _has_workers(self):
+        with self.lock:
+            return any(not a.lead and a.status != "retired" for a in self.agents.values())
+
     def _lead_prompt(self, reason, inbox):
         parts = ["TURN REASON: {}".format(reason)]
         users = [item for item in inbox if item.get("from") == "user"]
@@ -1959,7 +2023,9 @@ class AgentSwarm:
             parts.append("THE HUMAN WROTE (reply with SAY user unless a quick reply already covered it, then act on any instruction):\n" + self._format_inbox(users))
         if others:
             parts.append("TEAM MESSAGES:\n" + self._format_inbox(others))
-        if not inbox:
+        if reason == CONTINUE_REASON and not inbox:
+            parts.append("No new messages. You were in the middle of a task: carry on with it now.")
+        elif not inbox:
             if self.continuous:
                 parts.append("No new messages. Review progress. Use WAIT if the team is busy and nothing needs you; otherwise assign the next useful work.")
             else:
