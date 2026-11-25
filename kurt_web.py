@@ -578,7 +578,7 @@ HTML_PAGE = r'''<!doctype html>
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Kurt</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-5 -6 30 28'%3E%3Crect x='-5' y='-6' width='30' height='28' rx='6' fill='%23262624'/%3E%3Cpath fill='%23d97757' d='M0 0h6v4h-6zM14 0h6v2h-6zM11 2h6v2h-6zM0 4h1v12h-1zM2 4h2v12h-2zM5 4h1v12h-1zM8 4h6v2h-6zM6 6h5v4h-5zM1 8h1v8h-1zM4 8h1v8h-1zM8 10h6v2h-6zM11 12h6v2h-6zM14 14h6v2h-6z'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-5 -6 30 28'%3E%3Crect x='-5' y='-6' width='30' height='28' rx='6' fill='%23262624'/%3E%3Cpath fill='%233dd66e' d='M0 0h6v4h-6zM14 0h6v2h-6zM11 2h6v2h-6zM0 4h1v12h-1zM2 4h2v12h-2zM5 4h1v12h-1zM8 4h6v2h-6zM6 6h5v4h-5zM1 8h1v8h-1zM4 8h1v8h-1zM8 10h6v2h-6zM11 12h6v2h-6zM14 14h6v2h-6z'/%3E%3C/svg%3E">
 <script>try{if(localStorage.getItem('kurt-side-collapsed')==='1')document.documentElement.classList.add('side-collapsed')}catch(e){}</script>
 <script>try{document.documentElement.dataset.theme=localStorage.getItem('kurt-theme')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark')}catch(e){document.documentElement.dataset.theme='dark'}</script>
 <style>
@@ -594,7 +594,7 @@ HTML_PAGE = r'''<!doctype html>
  --bg:#faf9f5;--side:#f4f3ec;--panel:#fff;--raise:#f0eee6;--raise2:#e8e6dc;--code:#f5f4ee;
  --line:rgba(31,30,29,.10);--line2:rgba(31,30,29,.18);
  --text:#1f1e1d;--muted:#6f6e68;--faint:#9a988f;
- --accent:#c15f3c;--accent-hover:#ad5232;--accent-ink:#fff;--accent-text:#b24f2c;--accent-soft:rgba(193,95,60,.10);
+ --accent:#1f8a4c;--accent-hover:#187540;--accent-ink:#fff;--accent-text:#1a7a43;--accent-soft:rgba(31,138,76,.11);
  --ok:#2f7d4f;--info:#2f6fb0;--warn:#a86a00;--bad:#c0392b;--danger:#c0392b;--amber:#a86a00;
  --ok-soft:rgba(47,125,79,.12);--info-soft:rgba(47,111,176,.12);--warn-soft:rgba(168,106,0,.12);--bad-soft:rgba(192,57,43,.10);
  --shadow-sm:0 1px 2px rgba(31,30,29,.05),0 4px 16px rgba(31,30,29,.06);
@@ -611,7 +611,7 @@ HTML_PAGE = r'''<!doctype html>
  --bg:#262624;--side:#1f1e1d;--panel:#30302e;--raise:#3a3936;--raise2:#45443f;--code:#1f1e1d;
  --line:rgba(250,249,245,.09);--line2:rgba(250,249,245,.17);
  --text:#f0eee6;--muted:#a6a49b;--faint:#77756d;
- --accent:#d27150;--accent-hover:#e07f5d;--accent-ink:#fff;--accent-text:#e8956f;--accent-soft:rgba(217,119,87,.14);
+ --accent:#2c9a5a;--accent-hover:#38ae69;--accent-ink:#fff;--accent-text:#6fd49a;--accent-soft:rgba(61,214,110,.14);
  --ok:#6cc08a;--info:#6aaee8;--warn:#e2b747;--bad:#ef7b72;--danger:#ef7b72;--amber:#e2b747;
  --ok-soft:rgba(108,192,138,.14);--info-soft:rgba(106,174,232,.14);--warn-soft:rgba(226,183,71,.14);--bad-soft:rgba(239,123,114,.13);
  --shadow-sm:0 1px 2px rgba(0,0,0,.2),0 4px 18px rgba(0,0,0,.2);
@@ -740,6 +740,12 @@ html.side-collapsed .sidebar{opacity:0;pointer-events:none;border-right-color:tr
 .profile:hover{background:var(--raise)}
 .avatar{display:grid;place-items:center;flex:none;width:32px;height:32px;border-radius:50%;background:var(--accent);color:var(--accent-ink)}
 .avatar svg{width:16px;height:12.8px}
+.avatar img{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block}
+.avatar.big{width:72px;height:72px}
+.avatar.big svg{width:30px;height:24px}
+.profile-edit{display:flex;gap:18px;align-items:flex-start;margin:8px 0 22px}
+.profile-fields{flex:1;min-width:0}
+.profile-fields .field{margin-bottom:10px}
 .profile-text{display:grid;min-width:0;line-height:1.3}
 .profile-text b{font-size:13.5px;font-weight:600}
 .profile-text small{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;white-space:nowrap}
@@ -1569,7 +1575,7 @@ body.modal-open .status-dot,body.modal-open .message,body.modal-open .message.li
 <div class="chat-select-bar" id="chatSelectBar" hidden><label><input id="selectAllChats" type="checkbox"> All</label><span id="selectedChatCount">0 selected</span><button id="deleteSelectedChats" type="button" class="danger" disabled>Delete</button><button id="cancelChatSelect" type="button" class="ghost">Done</button></div>
 <div id="chatList" class="chat-list"></div>
 <div class="side-bottom">
-<button class="profile" id="sidebarSettings" type="button" aria-label="Open settings"><span class="avatar"><svg viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg></span><span class="profile-text"><b>Kurt</b><small><span class="status-dot"></span>Local workspace</small></span></button>
+<button class="profile" id="sidebarSettings" type="button" aria-label="Open settings"><span class="avatar" id="profileAvatar"><svg viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg></span><span class="profile-text"><b id="profileName">Kurt</b><small><span class="status-dot"></span>Local workspace</small></span></button>
 <button class="icon-btn" id="themeBtn" type="button" title="Switch colour theme" aria-label="Switch colour theme"><svg class="ic"><use id="themeIcon" href="#i-moon"/></svg></button>
 </div>
 </aside>
@@ -1643,6 +1649,7 @@ body.modal-open .status-dot,body.modal-open .message,body.modal-open .message.li
 </nav>
 <div class="settings-panel-area">
 <section class="settings-panel active" data-settings-panel="general">
+<h3>Profile</h3><div class="profile-edit"><span class="avatar big" id="profilePreview"><svg viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg></span><div class="profile-fields"><div class="field"><label for="profileNameInput">Your name</label><input id="profileNameInput" maxlength="60" autocomplete="off" placeholder="What should Kurt call you?"></div><div class="row"><input type="file" id="profileAvatarFile" accept="image/*" hidden><button type="button" id="profileAvatarBtn">Upload picture</button><button type="button" class="ghost" id="profileAvatarRemove">Remove picture</button><button type="button" class="primary" id="saveProfile">Save name</button></div></div></div>
 <h3>General</h3><div class="inline-note">Each conversation gets a private workspace. Kurt can read any file accessible to your macOS account and can propose changes to any of them. Use Link folder in the composer to make a chosen folder this session’s working root. File changes, deletions, and commands ask for approval unless Always allow is on.</div>
 <div class="always-allow-row"><input type="checkbox" id="alwaysAllow"><label for="alwaysAllow"><b>Always allow</b><small>Kurt writes, modifies, and deletes files and runs commands anywhere your account can, without asking each time. Turn this off to be asked again.</small></label></div>
 <div class="settings-grid"><div class="field"><label>Default chat route</label><select id="settingsModel"></select></div><div class="field"><label>Default working environment</label><input value="Private isolated workspace per chat" disabled><div class="inline-note">Link a folder from the bottom of the composer to work directly in that folder. Unlinking returns this chat to its private workspace.</div></div></div>
@@ -1707,7 +1714,7 @@ body.modal-open .status-dot,body.modal-open .message,body.modal-open .message.li
 <div class="mcp-form">
 <h4 id="skillFormTitle">Create a skill</h4>
 <input id="skillId" type="hidden" value="">
-<div class="settings-grid"><div class="field"><label>Name</label><input id="skillName" placeholder="Storyboard planner" maxlength="80"></div><div class="field"><label>Description</label><input id="skillDescription" placeholder="Plan a sequence of shots" maxlength="200"></div></div>
+<div class="settings-grid"><div class="field"><label>Name</label><input id="skillName" placeholder="Code reviewer" maxlength="80"></div><div class="field"><label>Description</label><input id="skillDescription" placeholder="Review a diff for bugs and style" maxlength="200"></div></div>
 <div class="field"><label>Instructions</label><textarea class="skill-instructions" id="skillInstructions" placeholder="Write the reusable instructions Kurt should follow…"></textarea></div>
 <div class="row"><button id="saveSkill" class="primary" type="button">Save skill</button><button id="cancelSkillEdit" type="button" hidden>Cancel</button></div>
 </div>
@@ -2130,8 +2137,8 @@ function syncAlwaysAllow(){const box=$('alwaysAllow');if(box)box.checked=!!(stat
 function hint(){
  const count=state.contextCount?state.contextCount+' uploaded item(s). ':'';
  const folder=state.linkedFolder?(String(state.linkedFolder).replace(/[\\/]+$/,'').split(/[\\/]/).pop()||String(state.linkedFolder)):'';
- const access=state.settings&&state.settings.always_allow?'Always allow is on: Kurt changes files and runs commands without asking.':'Kurt can read files your account can access. File changes, deletions and commands ask for approval.';
- $('composeHint').textContent=(state.mode==='agent'?'Agent mode: a lead and subagents keep working until the project is done. You can message the lead any time. ':'')+count+access;
+ const access=state.settings&&state.settings.always_allow?'':'Kurt can read files your account can access. File changes, deletions and commands ask for approval.';
+ $('composeHint').textContent=count+access;
  $('linkFolderBtn').classList.toggle('linked',!!state.linkedFolder);
  $('linkFolderBtn').querySelector('span').textContent=folder||'Link folder';
  $('linkFolderBtn').title=state.linkedFolder?'Linked folder: '+state.linkedFolder+'. Click to change or unlink it':'Link a folder';
@@ -2631,8 +2638,24 @@ function downloadActiveArtifact(){
 
 
 const SUGGESTIONS=[['Understand my project','Inspect the current project structure and explain its architecture.','i-search'],['Build a feature','Help me plan and implement a new feature. Ask for any missing requirements first.','i-code'],['Generate a file','Write a small utility script and return it as a file card.','i-file'],['Debug code','Help me debug this issue. Start by asking for the relevant error and files.','i-bug']];
-function greeting(){const hour=new Date().getHours();return hour<5?'Working late':hour<12?'Good morning':hour<18?'Good afternoon':'Good evening'}
-function showWelcome(){clearArtifactPane();setEmpty(true);follow=true;$('messages').innerHTML='<div class="welcome"><svg class="mark xl" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><h1>'+greeting()+'. What are we building?</h1></div>';$('chips').innerHTML=SUGGESTIONS.map(s=>'<button class="chip" data-prompt="'+esc(s[1])+'"><svg class="ic" aria-hidden="true"><use href="#'+s[2]+'"/></svg>'+esc(s[0])+'</button>').join('');document.querySelectorAll('#chips [data-prompt]').forEach(b=>b.onclick=()=>{$('prompt').value=b.dataset.prompt;autosize();updateSend();$('prompt').focus()})}
+const GREETINGS={
+ late:['Still up{n}? Let’s build something.','Working late{n}. What’s on the list?','The quiet hours are the best ones{n}. What are we making?','Night owl mode{n}. What are we building?'],
+ morning:['Good morning{n}. What are we building?','Morning{n}. Ready when you are.','Rise and ship{n}. What’s first today?','Fresh start, fresh code{n}. Where do we begin?','Coffee in hand{n}? Let’s get going.','Hello{n}. Big plans this morning?'],
+ afternoon:['Good afternoon{n}. What are we building?','Afternoon{n}. What’s next on the list?','Back at it{n}. What are we tackling?','Hope the day’s going well{n}. What can I help with?','Midday momentum{n}. Where should we pick up?'],
+ evening:['Good evening{n}. What are we building?','Evening{n}. One more thing before the day ends?','Winding down or ramping up{n}? Either way, I’m here.','Welcome back{n}. What’s the plan tonight?','Golden hour for good ideas{n}. What shall we make?'],
+ night:['Late night session{n}? Let’s make it count.','Quiet night{n}. Perfect for focused work.','Evening shift{n}. What are we working on?','Night falls, ideas rise{n}. What are we building?'],
+ any:['Hey{n}. What are we building?','Hi{n}. What’s on your mind?','Welcome back{n}. What are we working on?','Ready when you are{n}.','What are we building{n}?','Let’s make something{n}.','Good to see you{n}. Where do we start?','What’s the next big thing{n}?','Let’s get to work{n}.']
+};
+let lastGreeting='';
+function greetingName(){const name=String((state.settings&&state.settings.user_name)||'').trim();return name?', '+name:''}
+function greeting(){
+ const hour=new Date().getHours();
+ const period=hour<5?'late':hour<12?'morning':hour<17?'afternoon':hour<21?'evening':'night';
+ const pool=GREETINGS[period].concat(GREETINGS.any).filter(text=>text!==lastGreeting);
+ lastGreeting=pool[Math.floor(Math.random()*pool.length)];
+ return lastGreeting.split('{n}').join(greetingName());
+}
+function showWelcome(){clearArtifactPane();setEmpty(true);follow=true;$('messages').innerHTML='<div class="welcome"><svg class="mark xl" viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg><h1>'+esc(greeting())+'</h1></div>';$('chips').innerHTML=SUGGESTIONS.map(s=>'<button class="chip" data-prompt="'+esc(s[1])+'"><svg class="ic" aria-hidden="true"><use href="#'+s[2]+'"/></svg>'+esc(s[0])+'</button>').join('');document.querySelectorAll('#chips [data-prompt]').forEach(b=>b.onclick=()=>{$('prompt').value=b.dataset.prompt;autosize();updateSend();$('prompt').focus()})}
 function syncThemeIcon(){const dark=document.documentElement.dataset.theme!=='light';$('themeIcon').setAttribute('href',dark?'#i-sun':'#i-moon');$('themeBtn').title=dark?'Switch to light theme':'Switch to dark theme'}
 function closeChatMenu(){const menu=$('chatContextMenu');if(!menu.classList.contains('open')&&!menu.childElementCount)return;menu.classList.remove('open');clearTimeout(menu._t);menu._t=setTimeout(()=>{if(!menu.classList.contains('open')){menu.replaceChildren();menu.removeAttribute('data-chat-id')}},220)}
 function openChatMenu(chatId,x,y){const chat=state.chats.find(item=>item.id===chatId);if(!chat)return;const menu=$('chatContextMenu');menu.replaceChildren();menu.dataset.chatId=chatId;const add=(label,action,cls='')=>{const button=document.createElement('button');button.type='button';button.className=cls;button.textContent=label;button.onclick=()=>{closeChatMenu();action()};menu.appendChild(button)};add(chat.pinned?'Unpin chat':'Pin chat',()=>togglePinChat(chatId,!chat.pinned));add('Rename chat',()=>renameChat(chatId,chat.title||''));const divider=document.createElement('div');divider.className='menu-divider';menu.appendChild(divider);add('Delete chat',()=>deleteChat(chatId),'danger');clearTimeout(menu._t);menu.classList.add('open');const rect={width:menu.offsetWidth,height:menu.offsetHeight};menu.style.left=Math.max(8,Math.min(x,innerWidth-rect.width-8))+'px';menu.style.top=Math.max(8,Math.min(y,innerHeight-rect.height-8))+'px'}
@@ -2745,7 +2768,7 @@ async function renameChat(id,current){const result=await inAppDialog({title:'Ren
 async function togglePinChat(id,pinned){try{await api('/api/chats/'+encodeURIComponent(id),{pin:!!pinned});await refreshChats()}catch(error){toast(error.message)}}
 async function deleteChat(id){const chat=state.chats.find(item=>item.id===id);if(!await confirmInApp('Delete conversation',`Delete “${chat?.title||'this chat'}” and its temporary workspace? This cannot be undone.`,'Delete chat',true))return;if(state.chatId===id)cancelRun();try{await api('/api/chats/'+encodeURIComponent(id),{delete:true});if(state.chatId===id){state.chatId=null;state.workingRoot='';state.linkedFolder='';resetComposer();showWelcome();setTitle('New chat','')}await refreshChats();toast('Chat deleted')}catch(error){toast(error.message)}}
 let bootstrapSig='';
-async function refreshBootstrap(force){const data=await api('/api/bootstrap');const sig=JSON.stringify(data);if(force===true){delete $('systemPrompt').dataset.dirty}else if(sig===bootstrapSig)return false;bootstrapSig=sig;state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.mcpServers=data.mcp_servers||[];state.mcpTools=data.mcp_tools||[];state.skills=data.skills||[];state.settings=data.settings||{};syncAlwaysAllow();state.projectRoot=data.project_root||'';if(!$('systemPrompt').dataset.dirty)$('systemPrompt').value=state.settings.system_prompt||'';fillProviders();fillModels();renderKeys();renderApiKeyChecks(currentApiKeySelection());renderApiModels();renderApiGroups();renderMcpServers();renderSkills();refreshFailoverMemberOptions();enhanceAllSelects();return true}
+async function refreshBootstrap(force){const data=await api('/api/bootstrap');const sig=JSON.stringify(data);if(force===true){delete $('systemPrompt').dataset.dirty}else if(sig===bootstrapSig)return false;bootstrapSig=sig;state.models=data.models||[];state.routes=data.routes||[];state.providers=data.providers||[];state.keys=data.keys||[];state.apiGroups=data.api_groups||[];state.mcpServers=data.mcp_servers||[];state.mcpTools=data.mcp_tools||[];state.skills=data.skills||[];state.settings=data.settings||{};syncAlwaysAllow();applyProfile();state.projectRoot=data.project_root||'';if(!$('systemPrompt').dataset.dirty)$('systemPrompt').value=state.settings.system_prompt||'';fillProviders();fillModels();renderKeys();renderApiKeyChecks(currentApiKeySelection());renderApiModels();renderApiGroups();renderMcpServers();renderSkills();refreshFailoverMemberOptions();enhanceAllSelects();return true}
 function renderMcpServers(){
  const root=$('mcpServerList');if(!root)return;root.replaceChildren();
  if(!state.mcpServers.length){const empty=document.createElement('div');empty.className='empty';empty.textContent='No MCP servers connected yet.';root.append(empty);return}
@@ -3197,7 +3220,6 @@ function setMode(mode,silent){
  document.querySelectorAll('#modeToggle button').forEach(button=>{const on=button.dataset.mode===state.mode;button.classList.toggle('on',on);button.setAttribute('aria-pressed',on?'true':'false')});
  $('prompt').placeholder=state.mode==='agent'?'Give the lead a goal, or message it while the team works':'How can I help you today?';
  hint();agentSyncPanel();
- if(!silent&&state.mode==='agent')toast('Agent mode: the lead runs a team and stops when the project is finished. Use Run continuously to keep it going.');
 }
 
 /* ---------- derived values ---------- */
@@ -3743,6 +3765,22 @@ function activateSettingsTab(tab){if(tab==='usage')renderUsage();document.queryS
 document.querySelectorAll('[data-settings-tab]').forEach(b=>b.onclick=()=>activateSettingsTab(b.dataset.settingsTab));
 async function openSettings(){activateSettingsTab('general');$('settingsModal').classList.add('show');try{await refreshBootstrap()}catch(error){toast('Settings could not be refreshed: '+error.message)}}
 $('refreshUsage').onclick=renderUsage;$('resetUsage').onclick=async()=>{if(!await confirmInApp('Reset usage statistics','Delete all recorded token usage? This cannot be undone.','Reset',true))return;try{await api('/api/usage/reset',{approved:true});await renderUsage();toast('Usage statistics reset')}catch(error){toast(error.message)}};$('connectMcpServer').onclick=saveMcpServer;$('cancelMcpEdit').onclick=resetMcpForm;$('mcpServerTransport').onchange=toggleMcpTransportFields;$('saveSkill').onclick=saveSkillForm;$('cancelSkillEdit').onclick=resetSkillForm;
+function setAvatar(el,src){if(!el)return;el.textContent='';if(src){const img=document.createElement('img');img.alt='';img.src=src;el.appendChild(img)}else{el.innerHTML='<svg viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg>'}}
+function applyProfile(){
+ const settings=state.settings||{};const name=String(settings.user_name||'').trim();const avatar=String(settings.user_avatar||'');
+ setAvatar($('profileAvatar'),avatar);setAvatar($('profilePreview'),avatar);
+ if($('profileName'))$('profileName').textContent=name||'Kurt';
+ const input=$('profileNameInput');if(input&&document.activeElement!==input)input.value=name;
+ if($('profileAvatarRemove'))$('profileAvatarRemove').disabled=!avatar;
+ if(state.profileName!==name){state.profileName=name;if(document.querySelector('.welcome'))showWelcome()}
+}
+async function saveProfile(payload,message){try{const data=await api('/api/settings',payload);state.settings=data.settings||state.settings;applyProfile();toast(message)}catch(error){toast(error.message)}}
+function readAvatar(file){return new Promise((resolve,reject)=>{if(!file||!/^image\//.test(file.type)){reject(new Error('Choose an image file'));return}const url=URL.createObjectURL(file);const image=new Image();image.onload=()=>{const size=256,canvas=document.createElement('canvas');canvas.width=canvas.height=size;const side=Math.min(image.width,image.height);canvas.getContext('2d').drawImage(image,(image.width-side)/2,(image.height-side)/2,side,side,0,0,size,size);URL.revokeObjectURL(url);resolve(canvas.toDataURL('image/webp',.9))};image.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('That image could not be read'))};image.src=url})}
+$('saveProfile').onclick=()=>saveProfile({user_name:$('profileNameInput').value.trim()},'Name saved');
+$('profileNameInput').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();$('saveProfile').click()}};
+$('profileAvatarBtn').onclick=()=>$('profileAvatarFile').click();
+$('profileAvatarFile').onchange=async()=>{const input=$('profileAvatarFile');const file=input.files&&input.files[0];input.value='';if(!file)return;try{const avatar=await readAvatar(file);await saveProfile({user_avatar:avatar},'Profile picture updated')}catch(error){toast(error.message)}};
+$('profileAvatarRemove').onclick=()=>saveProfile({user_avatar:''},'Profile picture removed');
 async function saveSettings(){const payload={system_prompt:$('systemPrompt').value,default_route:$('settingsModel').value};const data=await api('/api/settings',payload);state.settings=data.settings||{};await refreshBootstrap(true);toast('Settings saved')}
 async function browseFiles(){await ensureChat();const path=$('fileFolder').value.trim();const d=await api('/api/files?chat_id='+encodeURIComponent(state.chatId)+'&path='+encodeURIComponent(path));$('fileFolder').value=d.path;const el=$('filePicker');el.innerHTML='';if(d.parent!==null){const b=document.createElement('div');b.className='file-row folder';b.innerHTML='<span>↰</span><label>Parent folder</label>';b.onclick=()=>{$('fileFolder').value=d.parent;browseFiles()};el.appendChild(b)}d.items.forEach(item=>{const row=document.createElement('div');row.className='file-row'+(item.directory?' folder':'');if(item.directory){row.innerHTML=`<span>📁</span><label>${esc(item.name)}/</label><span class="inline-note">Open</span>`;row.onclick=()=>{$('fileFolder').value=item.path;browseFiles()}}else{row.innerHTML=`<input type="checkbox" value="${esc(item.path)}" ${state.selectedFiles.includes(item.path)?'checked':''}><label>${esc(item.name)}</label><small>${esc(item.size)}</small>`;const check=row.querySelector('input');check.onchange=()=>{if(check.checked&&!state.selectedFiles.includes(item.path))state.selectedFiles.push(item.path);else if(!check.checked)state.selectedFiles=state.selectedFiles.filter(x=>x!==item.path);renderPendingUploads()};const remove=document.createElement('button');remove.type='button';remove.className='file-remove danger';remove.textContent='Delete';remove.title='Permanently delete this local file';remove.setAttribute('aria-label','Delete '+item.name);remove.onclick=()=>deleteLocalFile(item);row.appendChild(remove)}el.appendChild(row)})}
 async function deleteLocalFile(item){if(!item||item.directory||!item.path)return;try{const review=await api('/api/files/delete/prepare',{chat_id:state.chatId,path:item.path});const approved=await confirmInApp('Delete local file?',`Permanently delete this one file from your computer?\n\n${review.path}\n\nSize: ${formatFileSize(review.size)}\nThis cannot be undone. No other files or folders will be removed.`,'Delete file',true);if(!approved)return;const result=await api('/api/files/delete',{chat_id:state.chatId,path:review.path,approved:true,expected_sha256:review.sha256,linked_root:review.linked_root,device:review.device,inode:review.inode});state.selectedFiles=state.selectedFiles.filter(path=>path!==item.path);await browseFiles();renderPendingUploads();toast(result.message||'File deleted')}catch(error){toast(error.message)}}
@@ -4421,6 +4459,8 @@ class KurtWebApp:
             self.save_settings()
         self.settings.pop("default_mode", None)
         self.settings.setdefault("always_allow", False)
+        self.settings.setdefault("user_name", "")
+        self.settings.setdefault("user_avatar", "")
         self.settings.setdefault("api_groups", [])
         self.settings.setdefault("mcp_servers", [])
         self.model_lock = threading.RLock()
@@ -5798,6 +5838,9 @@ class KurtWebApp:
         prompt += "\nCurrent session working root: " + str(root)
         prompt += "\nWorking root type: " + ("USER-LINKED FOLDER" if linked else "PRIVATE PER-CHAT ISOLATED WORKSPACE") + " (relative paths resolve here; absolute paths reach anywhere on this computer). " + ("Always allow is ON: file changes, deletions, and commands are approved automatically." if always_allow else "Every file change, deletion, and state-changing command needs the user's approval.")
         prompt += "\nUser home for absolute/relative local read paths: " + str(Path.home())
+        user_name = " ".join(str(self.settings.get("user_name") or "").split())[:60]
+        if user_name:
+            prompt += "\nThe user's name is " + user_name + ". Call them by this name when it feels natural; do not overuse it."
         prompt += "\nSession workspace tree:\n" + self.tree(root)
         prompt += "\nUse READ/LIST or read-only shell commands (grep, ls, cat, find, git status/log/diff) for inspection anywhere on this computer. " + ("File changes, deletions, and commands run without a pause because Always allow is on." if always_allow else "File changes, deletions, and state-changing commands pause for user approval.")
         image_tools = self.image_generation_mcp_tools()
@@ -6662,7 +6705,7 @@ class Handler(BaseHTTPRequestHandler):
                     "keys": self.app.sanitized_keys(), "api_groups": self.app.api_groups_view(),
                     "mcp_servers": self.app.mcp_server_summaries(), "mcp_tools": self.app.mcp_tools_view(),
                     "skills": list_skills(self.app.skills_directory),
-                    "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""), "system_prompt": self.app.editable_system_prompt(), "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False)), "always_allow": bool(self.app.settings.get("always_allow", False))},
+                    "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""), "system_prompt": self.app.editable_system_prompt(), "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False)), "always_allow": bool(self.app.settings.get("always_allow", False)), "user_name": str(self.app.settings.get("user_name") or ""), "user_avatar": str(self.app.settings.get("user_avatar") or "")},
                     "project_root": str(self.app.workspace()),
                 })
             elif parsed.path == "/api/agent/poll":
@@ -7368,6 +7411,16 @@ class Handler(BaseHTTPRequestHandler):
             self.app.settings["default_effort"] = value
         if "always_allow" in data:
             self.app.settings["always_allow"] = bool(data.get("always_allow"))
+        if "user_name" in data:
+            user_name = " ".join(str(data.get("user_name") or "").split())
+            if len(user_name) > 60:
+                raise ValueError("Name must be 60 characters or fewer.")
+            self.app.settings["user_name"] = user_name
+        if "user_avatar" in data:
+            user_avatar = str(data.get("user_avatar") or "")
+            if user_avatar and (len(user_avatar) > 700000 or not re.fullmatch(r"data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+", user_avatar)):
+                raise ValueError("Choose a PNG, JPEG or WebP picture under 500 KB.")
+            self.app.settings["user_avatar"] = user_avatar
 
         key_action = data.get("key_action")
         keys_changed = False
@@ -7554,7 +7607,9 @@ class Handler(BaseHTTPRequestHandler):
                     "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""),
                                  "system_prompt": self.app.editable_system_prompt(),
                                  "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False)),
-                                 "always_allow": bool(self.app.settings.get("always_allow", False))}})
+                                 "always_allow": bool(self.app.settings.get("always_allow", False)),
+                                 "user_name": str(self.app.settings.get("user_name") or ""),
+                                 "user_avatar": str(self.app.settings.get("user_avatar") or "")}})
 
     def _record_agent_audit(self, chat_id, title, detail, ok=True):
         chat = self.app.get_chat(str(chat_id or ""))
