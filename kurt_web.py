@@ -699,7 +699,8 @@ html.side-collapsed .sidebar{opacity:0;pointer-events:none;border-right-color:tr
 .chat-list.swapping{opacity:0;transform:translateY(6px)}
 .chat-empty{padding:18px 10px;color:var(--faint);font-size:13px;text-align:center}
 .chat-group{display:block}
-.chat-date-heading{display:flex;align-items:center;gap:4px;padding:14px 2px 4px 4px;font-size:12px;font-weight:600;color:var(--muted);line-height:1.2;user-select:none}
+.chat-group+.chat-group{margin-top:20px;padding-top:12px;border-top:1px solid var(--line)}
+.chat-date-heading{display:flex;align-items:center;gap:4px;padding:6px 2px 8px 4px;font-size:12px;font-weight:600;color:var(--muted);line-height:1.2;user-select:none}
 .chat-group:first-child .chat-date-heading{padding-top:6px}
 .heading-toggle{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:0;background:transparent;color:var(--muted);font-size:12px;font-weight:600;border-radius:7px}
 .heading-toggle:hover{background:var(--raise);color:var(--text)}
@@ -1429,6 +1430,20 @@ html.side-collapsed .menu-btn{display:inline-grid}
 .key-checks{display:grid;gap:4px;max-height:190px;overflow-y:auto;padding:6px;border:1px solid var(--line2);border-radius:12px;background:var(--panel)}
 .key-check{display:flex;align-items:center;gap:10px;padding:7px 9px;border-radius:8px;cursor:pointer;font-size:13.5px}
 .key-check:hover{background:var(--raise)}
+.key-checks .key-check input[type=checkbox]{flex:none;width:16px;height:16px;min-width:16px;max-width:16px;margin:0;padding:0;border-radius:4px;box-shadow:none}
+.key-check span{min-width:0;display:flex;flex-direction:column;gap:2px;line-height:1.35}
+.key-check span small{display:block;overflow-wrap:anywhere}
+.chat-files-panel{position:fixed;top:56px;right:16px;z-index:60;width:min(380px,calc(100vw - 32px));max-height:min(520px,calc(100vh - 80px));display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line2);border-radius:14px;box-shadow:0 14px 40px rgba(0,0,0,.28)}
+.chat-files-panel[hidden]{display:none}
+.cf-head{display:flex;align-items:center;justify-content:space-between;padding:10px 10px 8px 14px;border-bottom:1px solid var(--line);font-size:13.5px}
+.cf-body{overflow-y:auto;padding:6px 8px 10px}
+.cf-label{padding:10px 8px 4px;font-size:11.5px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
+.cf-row{display:flex;align-items:center;gap:10px;width:100%;padding:7px 8px;border:0;border-radius:8px;background:transparent;color:var(--text);text-align:left;cursor:pointer;font-size:13px}
+.cf-row:hover{background:var(--raise)}
+.cf-row .ic{flex:none;width:16px;height:16px;color:var(--muted)}
+.cf-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cf-size{flex:none;color:var(--muted);font-size:12px}
+.cf-empty{padding:18px 10px;color:var(--muted);font-size:13px;text-align:center}
 .key-check.disabled{opacity:.45;cursor:not-allowed}
 .key-check small{color:var(--muted)}
 .mcp-server-row,.skill-row{display:flex;align-items:center;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)}
@@ -1583,8 +1598,10 @@ body.modal-open .status-dot,body.modal-open .message,body.modal-open .message.li
 <header class="topbar">
 <button class="icon-btn menu-btn" id="menuBtn" type="button" aria-label="Open sidebar" title="Open sidebar"><svg class="ic"><use href="#i-sidebar"/></svg></button>
 <div class="titles"><div class="title-line"><div id="chatTitle" class="chat-title">New chat</div><span id="chatPath" class="chat-path" title=""></span></div><div id="chatMeta" class="chat-meta"></div></div>
+<button class="icon-btn" id="chatFilesBtn" type="button" title="Files in this chat" aria-label="Files in this chat" aria-haspopup="true" aria-expanded="false"><svg class="ic"><use href="#i-folder"/></svg></button>
 <button class="icon-btn" id="exportChatBtn" title="Download chat history" aria-label="Download chat history"><svg class="ic"><use href="#i-download"/></svg></button>
 </header>
+<div class="chat-files-panel" id="chatFilesPanel" role="dialog" aria-label="Files in this chat" hidden><div class="cf-head"><strong>Files in this chat</strong><button class="icon-btn" id="chatFilesClose" type="button" aria-label="Close"><svg class="ic"><use href="#i-close"/></svg></button></div><div class="cf-body" id="chatFilesBody"></div></div>
 <div class="download-strip" title="Background model download"><div id="downloadFill" class="download-fill"></div><div id="downloadCaption" class="download-caption"></div></div>
 <main class="main empty" id="main">
 <section class="chat-area" id="chatArea">
@@ -3708,9 +3725,9 @@ $('prompt').addEventListener('click',renderSlashMenu);
 $('prompt').addEventListener('paste',event=>{
  
  const clipboardItems=Array.from(event.clipboardData?.items||[]);const pastedImages=clipboardItems.filter(item=>String(item.type||'').startsWith('image/')).map(item=>item.getAsFile()).filter(Boolean);
- if(pastedImages.length){event.preventDefault();stageUploadFiles(pastedImages);attachFiles();return}
+ if(pastedImages.length){event.preventDefault();stageUploadFiles(pastedImages);updateSend();return}
  const pastedText=event.clipboardData?.getData('text/plain')||'';
- if(pastedText.length>16000){event.preventDefault();const stamp=new Date().toISOString().replace(/[:.]/g,'-');const file=new File([pastedText],'pasted-text-'+stamp+'.txt',{type:'text/plain'});if(file.size>10*1024*1024){toast('This pasted text exceeds the 10 MB attachment limit. Split it into smaller parts.');return}stageUploadFiles([file]);$('prompt').value='I attached a large pasted text file. Please read it and help me with its contents.';autosize();updateSend();toast('Large paste attached as a .txt file');attachFiles()}
+ if(pastedText.length>16000){event.preventDefault();const stamp=new Date().toISOString().replace(/[:.]/g,'-');const file=new File([pastedText],'pasted-text-'+stamp+'.txt',{type:'text/plain'});if(file.size>10*1024*1024){toast('This pasted text exceeds the 10 MB attachment limit. Split it into smaller parts.');return}stageUploadFiles([file]);$('prompt').value='I attached a large pasted text file. Please read it and help me with its contents.';autosize();updateSend();toast('Large paste attached as a .txt file')}
  });
 $('newChat').onclick=newChat;$('selectAllChats').onchange=()=>selectAllChats($('selectAllChats').checked);$('deleteSelectedChats').onclick=deleteSelectedChats;$('cancelChatSelect').onclick=()=>setChatSelectionMode(false);
 function fmtTokens(value){const n=Number(value)||0;if(n>=1e6)return (n/1e6).toFixed(2)+'M';if(n>=1e4)return (n/1e3).toFixed(1)+'k';return n.toLocaleString()}
@@ -3791,7 +3808,7 @@ function makeUploadCard(item,{uploaded=false,removable=false,compact=false,index
  row.appendChild(fileIconNode(item));const info=document.createElement('span');info.className='attachment-info';
  const name=document.createElement('span');name.className='attachment-name';name.textContent=item.name||String(item.path||'').split('/').pop()||'Uploaded file';name.title=item.path||name.textContent;
  const meta=document.createElement('span');meta.className='attachment-meta';meta.textContent=[formatFileSize(item.size),item.folderRoot?'Folder upload':''].filter(Boolean).join(' · ');
- const status=document.createElement('span');status.className='attachment-status';status.textContent='Ready to add';
+ const status=document.createElement('span');status.className='attachment-status';status.textContent='Added when you send';
  info.append(name,meta);if(!uploaded)info.appendChild(status);row.appendChild(info);
  if(removable){const remove=document.createElement('button');remove.type='button';remove.className='attachment-remove';remove.textContent='×';remove.title='Remove attachment';remove.setAttribute('aria-label','Remove '+name.textContent);remove.onclick=()=>{const removed=state.pendingUploads.splice(index,1)[0];if(removed?.previewUrl)URL.revokeObjectURL(removed.previewUrl);renderPendingUploads()};row.appendChild(remove)}
  return row
@@ -3829,12 +3846,48 @@ async function attachFiles(){
  try{return await state.uploadPromise}catch(error){toast(error.message);return false}finally{state.uploadPromise=null}
 }
 
+function closeChatFiles(){const panel=$('chatFilesPanel');if(panel)panel.hidden=true;const button=$('chatFilesBtn');if(button)button.setAttribute('aria-expanded','false')}
+function chatFileSection(body,label,items,open){
+ if(!items.length)return;
+ const head=document.createElement('div');head.className='cf-label';head.textContent=label+' · '+items.length;body.appendChild(head);
+ items.forEach(item=>{
+  const row=document.createElement('button');row.type='button';row.className='cf-row';row.title=item.path;
+  row.innerHTML='<svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>';
+  const name=document.createElement('span');name.className='cf-name';name.textContent=item.name||item.path;
+  const size=document.createElement('span');size.className='cf-size';size.textContent=formatFileSize(item.size);
+  row.append(name,size);
+  if(open)row.onclick=()=>{closeChatFiles();open(item).catch(error=>toast(error.message))};
+  else row.style.cursor='default';
+  body.appendChild(row)
+ })
+}
+async function renderChatFiles(){
+ const body=$('chatFilesBody');if(!body)return;body.replaceChildren();
+ const waiting=(state.pendingUploads||[]).map(item=>({name:item.name,path:item.path,size:item.size}));
+ let data={uploaded:[],created:[]};
+ if(state.chatId){try{data=await api('/api/chat/files?chat_id='+encodeURIComponent(state.chatId))}catch(error){const bad=document.createElement('div');bad.className='cf-empty';bad.textContent=error.message;body.appendChild(bad);return}}
+ body.replaceChildren();
+ chatFileSection(body,'Waiting to send',waiting,null);
+ chatFileSection(body,'Uploaded by you',data.uploaded||[],item=>openWorkspaceFile(item.path,item.area));
+ chatFileSection(body,'Made by Kurt',data.created||[],item=>openWorkspaceFile(item.path,item.area));
+ if(!body.children.length){const empty=document.createElement('div');empty.className='cf-empty';empty.textContent='No files yet. Files you upload or Kurt creates in this chat will be listed here.';body.appendChild(empty)}
+}
+async function toggleChatFiles(){
+ const panel=$('chatFilesPanel'),button=$('chatFilesBtn');if(!panel)return;
+ if(!panel.hidden){closeChatFiles();return}
+ panel.hidden=false;button.setAttribute('aria-expanded','true');await renderChatFiles();
+}
+function wireChatFiles(){
+ $('chatFilesBtn').onclick=event=>{event.stopPropagation();toggleChatFiles()};$('chatFilesClose').onclick=closeChatFiles;
+ document.addEventListener('click',event=>{if(!event.target.closest('#chatFilesPanel,#chatFilesBtn'))closeChatFiles()});
+ document.addEventListener('keydown',event=>{if(event.key==='Escape')closeChatFiles()});
+}
 function openComposerFilePicker(){const picker=$('composerFiles');if(!picker)return;picker.click()}
-async function handleComposerFiles(){const picker=$('composerFiles');if(!picker.files||!picker.files.length)return;stageLocalFiles(picker);await attachFiles()}
+async function handleComposerFiles(){const picker=$('composerFiles');if(!picker.files||!picker.files.length)return;stageLocalFiles(picker);updateSend();$('prompt').focus()}
 async function startDownload(){const model=$('downloadModel').value.trim();if(!model){toast('Enter a model ID, repository or URL');return}try{const d=await api('/api/download',{model,source:$('downloadSource').value});$('downloadCaption').textContent='Queued: '+model;$('localDownloadStatus').textContent='Download queued: '+model;$('downloadModel').value='';toast('Download started in background');pollDownload()}catch(e){toast(e.message)}}
 async function pollDownload(){try{const d=await api('/api/download/status');const job=d.job;if(!job)return;const percent=job.total?job.completed/job.total*100:0;$('downloadFill').style.width=(job.state==='done'?100:percent)+'%';$('downloadCaption').textContent=job.state==='running'?`${job.model} · ${percent.toFixed(1)}% · ${job.human}`:`${job.model} · ${job.state}${job.error?' · '+job.error:''}`;if(job.state==='done'){await refreshBootstrap();$('localDownloadStatus').textContent=job.model+' installed successfully.';toast('Model download complete')}else if(job.state==='error'){$('localDownloadStatus').textContent=job.error||'Download failed';toast(job.error||'Download failed')}else{$('localDownloadStatus').textContent=job.model+' · '+percent.toFixed(1)+'% · '+job.human;setTimeout(pollDownload,1000)}}catch(e){console.error(e)}}
-$('sidebarSettings').onclick=openSettings;$('chatSearch').oninput=()=>renderChats();wirePlusMenu();$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('alwaysAllow').onchange=async()=>{const box=$('alwaysAllow'),value=box.checked;if(value&&!await confirmInApp('Turn on Always allow?','Kurt will write, modify, and delete files and run commands without asking you first, anywhere your account has permission. You can turn this off at any time.','Always allow',true)){box.checked=false;return}try{await api('/api/settings',{always_allow:value});state.settings.always_allow=value;hint();toast(value?'Always allow is on':'Always allow is off')}catch(error){box.checked=!value;toast(error.message)}};$('reloadSettings').onclick=()=>refreshBootstrap(true).then(()=>toast('Settings reloaded')).catch(error=>toast(error.message));$('systemPrompt').addEventListener('input',()=>{$('systemPrompt').dataset.dirty='1'});$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:'default',label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=attachFiles;$('startDownload').onclick=startDownload;document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout();if(!event.target.closest('#plusMenu,#contextBtn'))closePlusMenu()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout();closePlusMenu()}});
-const toggleSidebar=()=>{if(matchMedia('(max-width:700px)').matches){document.body.classList.toggle('nav-open')}else{const collapsed=document.documentElement.classList.toggle('side-collapsed');try{localStorage.setItem('kurt-side-collapsed',collapsed?'1':'0')}catch(error){}}};$('menuBtn').onclick=toggleSidebar;$('sideToggle').onclick=toggleSidebar;$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',event=>{if(event.target.closest('.chat-item,#newChat,#sidebarSettings'))document.body.classList.remove('nav-open')});$('exportChatBtn').onclick=downloadChatHistory;$('themeBtn').onclick=()=>{const root=document.documentElement;root.classList.add('theme-fade');setTimeout(()=>root.classList.remove('theme-fade'),420);const theme=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=theme;try{localStorage.setItem('kurt-theme',theme)}catch(error){}syncThemeIcon()};syncThemeIcon();enhanceAllSelects();
+$('sidebarSettings').onclick=openSettings;$('chatSearch').oninput=()=>renderChats();wirePlusMenu();$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('alwaysAllow').onchange=async()=>{const box=$('alwaysAllow'),value=box.checked;if(value&&!await confirmInApp('Turn on Always allow?','Kurt will write, modify, and delete files and run commands without asking you first, anywhere your account has permission. You can turn this off at any time.','Always allow',true)){box.checked=false;return}try{await api('/api/settings',{always_allow:value});state.settings.always_allow=value;hint();toast(value?'Always allow is on':'Always allow is off')}catch(error){box.checked=!value;toast(error.message)}};$('reloadSettings').onclick=()=>refreshBootstrap(true).then(()=>toast('Settings reloaded')).catch(error=>toast(error.message));$('systemPrompt').addEventListener('input',()=>{$('systemPrompt').dataset.dirty='1'});$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:'default',label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=()=>{if(!state.chatId&&!state.selectedFiles.length&&!state.selectedFolders.length){$('filesModal').classList.remove('show');updateSend();toast('Files will be added when you send your first message');return}attachFiles()};$('startDownload').onclick=startDownload;document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout();if(!event.target.closest('#plusMenu,#contextBtn'))closePlusMenu()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout();closePlusMenu()}});
+const toggleSidebar=()=>{if(matchMedia('(max-width:700px)').matches){document.body.classList.toggle('nav-open')}else{const collapsed=document.documentElement.classList.toggle('side-collapsed');try{localStorage.setItem('kurt-side-collapsed',collapsed?'1':'0')}catch(error){}}};$('menuBtn').onclick=toggleSidebar;$('sideToggle').onclick=toggleSidebar;$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',event=>{if(event.target.closest('.chat-item,#newChat,#sidebarSettings'))document.body.classList.remove('nav-open')});$('exportChatBtn').onclick=downloadChatHistory;wireChatFiles();$('themeBtn').onclick=()=>{const root=document.documentElement;root.classList.add('theme-fade');setTimeout(()=>root.classList.remove('theme-fade'),420);const theme=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=theme;try{localStorage.setItem('kurt-theme',theme)}catch(error){}syncThemeIcon()};syncThemeIcon();enhanceAllSelects();
 (()=>{const sync=()=>document.body.classList.toggle('modal-open',!!document.querySelector('.modal-backdrop.show,.dialog-backdrop.show'));const observer=new MutationObserver(sync);document.querySelectorAll('.modal-backdrop,.dialog-backdrop').forEach(node=>observer.observe(node,{attributes:true,attributeFilter:['class']}));sync()})();
 $('showApiModelForm').onclick=()=>openApiModelForm(null);$('cancelApiModel').onclick=closeApiModelForm;$('addApiModel').onclick=saveApiModel;
 makeSortable($('failoverMembers'),'.failover-member-row');
@@ -5668,6 +5721,7 @@ class KurtWebApp:
         imported = 0
         total_bytes = 0
         archives = 0
+        recorded = []
         selected_folders = selected_folders if isinstance(selected_folders, list) else []
         selected_files = selected_files if isinstance(selected_files, list) else []
         folders = []
@@ -5686,6 +5740,7 @@ class KurtWebApp:
         for rel, folder in filtered_folders:
             prefix = rel or source_root.name
             count, size, _archive = self._zip_directory_into_workspace(folder, prefix, workspace)
+            recorded.append(prefix.strip('/') + '/')
             imported += count
             total_bytes += size
             if total_bytes > MAX_IMPORT_BYTES:
@@ -5707,6 +5762,7 @@ class KurtWebApp:
             target = self.resolve_chat_path(workspace, rel)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
+            recorded.append(rel)
             imported += 1
         if total_bytes > MAX_IMPORT_BYTES:
             raise ValueError('The total context import exceeds 20 MB.')
@@ -5740,6 +5796,7 @@ class KurtWebApp:
             target = self.resolve_chat_path(workspace, rel)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
+            recorded.append(rel)
             imported += 1
         for folder_name, entries in upload_groups.items():
             archive_dir = workspace / '.kurt_imports'
@@ -5752,8 +5809,10 @@ class KurtWebApp:
             archive_name = re.sub(r'[^A-Za-z0-9._-]+', '_', folder_name)[:48] or 'folder'
             (archive_dir / (archive_name + '-' + uuid.uuid4().hex[:8] + '.zip')).write_bytes(payload)
             count, _size = self._extract_zip_bytes(payload, workspace)
+            recorded.extend(entry_rel for entry_rel, _content in entries)
             imported += count
             archives += 1
+        self._record_uploads(workspace, recorded)
         items = self.context_file_list(chat_id)
         message = f'Added {imported} file(s) to this chat.'
         if archives:
@@ -6431,6 +6490,88 @@ class KurtWebApp:
                 })
         return items
 
+    @staticmethod
+    def _uploads_manifest(workspace):
+        return Path(workspace) / '.kurt_imports' / 'uploads.json'
+
+    def _read_uploads(self, workspace):
+        try:
+            data = json.loads(self._uploads_manifest(workspace).read_text(encoding='utf-8'))
+            return [str(item) for item in data if isinstance(item, str)] if isinstance(data, list) else []
+        except (OSError, ValueError):
+            return []
+
+    def _record_uploads(self, workspace, rels):
+        rels = [str(item) for item in rels if item]
+        if not rels:
+            return
+        merged = self._read_uploads(workspace)
+        for item in rels:
+            if item not in merged:
+                merged.append(item)
+        manifest = self._uploads_manifest(workspace)
+        try:
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(json.dumps(merged[-5000:]), encoding='utf-8')
+        except OSError:
+            pass
+
+    def chat_files(self, chat_id):
+        """Everything in a chat's workspace, split into files the user uploaded and files Kurt created."""
+        chat = self.get_chat(chat_id)
+        if not chat:
+            raise ValueError('Conversation not found.')
+        workspace = self.chat_workspace(chat_id, create=False)
+        recorded = self._read_uploads(workspace)
+        exact = {item for item in recorded if not item.endswith('/')}
+        prefixes = [item for item in recorded if item.endswith('/')]
+
+        def is_upload(rel):
+            return rel in exact or any(rel.startswith(prefix) for prefix in prefixes)
+
+        try:
+            created_at = float(chat.get('created') or 0)
+        except (TypeError, ValueError):
+            created_at = 0.0
+        uploaded, created, seen = [], [], set()
+
+        def describe(root, rel, area):
+            try:
+                stat = (Path(root) / rel).stat()
+            except OSError:
+                return None
+            return {'name': Path(rel).name, 'path': rel, 'area': area, 'size': stat.st_size, 'modified': stat.st_mtime,
+                    'mime': preview_mime(Path(rel).name).split(';')[0]}
+
+        if workspace.is_dir():
+            for rel in sorted(self._snapshot_outputs(workspace, limit=2000)):
+                if rel.startswith('.kurt') or rel.split('/')[0] in ('web_envs',):
+                    continue
+                if is_upload(rel):
+                    row = describe(workspace, rel, 'private')
+                    if row:
+                        uploaded.append(row)
+                        seen.add(('private', rel))
+        try:
+            work_root = self.chat_work_root(chat_id, create=False)
+        except (ValueError, OSError):
+            work_root = workspace
+        if Path(work_root).is_dir():
+            area = 'work'
+            for rel in sorted(self._snapshot_outputs(work_root, limit=2000)):
+                if rel.startswith('.kurt') or (Path(work_root) == workspace and is_upload(rel)):
+                    continue
+                row = describe(work_root, rel, area)
+                if not row:
+                    continue
+                # Files unpacked from an upload keep their old timestamps; anything newer than the chat was made during it.
+                if created_at and row['modified'] + 1 < created_at:
+                    continue
+                created.append(row)
+        created.sort(key=lambda row: row['modified'], reverse=True)
+        uploaded.sort(key=lambda row: row['name'].lower())
+        return {'uploaded': uploaded[:500], 'created': created[:500]}
+
     def reset_chat_workspace(self, chat_id):
         root = self.chat_workspace(chat_id)
         if root.exists():
@@ -6752,6 +6893,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 items = self.app.context_file_list(chat_id)
                 self._json({"files": len(items), "items": items})
+            elif parsed.path == "/api/chat/files":
+                args = parse_qs(parsed.query)
+                self._json(self.app.chat_files(str(args.get("chat_id", [""])[0])))
             elif parsed.path == "/api/context/preview":
                 args = parse_qs(parsed.query)
                 chat_id = str(args.get("chat_id", [""])[0])
