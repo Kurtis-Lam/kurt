@@ -153,8 +153,8 @@ KURT WEB INTERFACE RULES:
   Do not claim a command, file change, or deletion succeeded before the result confirms it.
 - Before file changes or deletions, provide a concise Change summary naming each target and why it changes.
 - SEARCH may request external web research when needed. Do not invent search results.
-- Uploaded ZIP archives and folders are unpacked into the conversation workspace. Images are
-  passed to compatible vision models when supported.
+- Uploaded ZIP files stay as ZIP files in the conversation workspace and are not unpacked; selected
+  folders are unpacked. Images are passed to compatible vision models when supported.
 - DELIVERABLE-FIRST: identify the actual end result and requested format before choosing tools.
   When the user asks for an image (for example PNG), document, spreadsheet, or other finished
   artifact, create and verify that exact deliverable. A Python script, source file, prompt, or
@@ -1720,14 +1720,14 @@ body.modal-open .status-dot,body.modal-open .message,body.modal-open .message.li
 </div>
 </section>
 </div></div></div></div>
-<div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files</h2><button class="icon-btn" data-close="filesModal" aria-label="Close" title="Close"><svg class="ic"><use href="#i-close"/></svg></button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Choose individual files or an entire folder from Finder or File Explorer. Attachments are copied into this chat and do not change their originals. In the local file browser below, use Delete to permanently remove one regular file after a separate confirmation. Only a folder selection is packaged internally as a ZIP, then unpacked automatically. Large pasted text is attached as a .txt file.</p><div class="file-source"><h3>From this computer</h3><div class="file-actions"><button id="chooseLocalFiles" class="primary">Choose files</button><button id="chooseLocalFolder">Choose folder</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList" aria-live="polite">No files selected.</div></div><div class="file-source"><h3>From the configured project</h3><div class="row"><input id="fileFolder" value="" placeholder="Project folder path"><button id="refreshFiles">Open</button><button id="selectCurrentFolder">Add this folder</button></div><div class="file-picker" id="filePicker"></div></div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
+<div class="modal-backdrop" id="filesModal"><div class="modal"><div class="modal-head"><h2>Add files</h2><button class="icon-btn" data-close="filesModal" aria-label="Close" title="Close"><svg class="ic"><use href="#i-close"/></svg></button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Choose individual files or an entire folder from Finder or File Explorer. Attachments are copied into this chat and do not change their originals. In the local file browser below, use Delete to permanently remove one regular file after a separate confirmation. ZIP files are uploaded as-is and are not unpacked. Only a folder selection is packaged internally and unpacked. Large pasted text is attached as a .txt file.</p><div class="file-source"><h3>From this computer</h3><div class="file-actions"><button id="chooseLocalFiles" class="primary">Choose files</button><button id="chooseLocalFolder">Choose folder</button><input id="localFiles" type="file" multiple hidden><input id="localFolder" type="file" webkitdirectory directory multiple hidden></div><div class="upload-list" id="uploadList" aria-live="polite">No files selected.</div></div><div class="file-source"><h3>From the configured project</h3><div class="row"><input id="fileFolder" value="" placeholder="Project folder path"><button id="refreshFiles">Open</button><button id="selectCurrentFolder">Add this folder</button></div><div class="file-picker" id="filePicker"></div></div><div class="row" style="margin-top:12px"><button class="primary" id="attachFiles">Add to chat workspace</button></div></div></div></div>
 <div class="toast" id="toast"></div>
 <div class="pop route-flyout" id="routeFlyout" hidden aria-label="Choose a model"></div>
 <div class="pop plus-menu" id="plusMenu" hidden role="menu" aria-label="Add to chat"><button type="button" class="menu-item" role="menuitem" data-act="files"><svg class="ic" aria-hidden="true"><use href="#i-clip"/></svg>Add files or photos</button><button type="button" class="menu-item" role="menuitem" data-act="folder"><svg class="ic" aria-hidden="true"><use href="#i-folder"/></svg><span id="plusFolderLabel">Link a folder</span></button><button type="button" class="menu-item" role="menuitem" data-act="tools"><svg class="ic" aria-hidden="true"><use href="#i-slash"/></svg>Tools and skills<small>/</small></button></div>
 <div class="chat-context-menu" id="chatContextMenu" role="menu"></div>
 <div class="dialog-backdrop" id="appDialogBackdrop"><form class="app-dialog" id="appDialogForm"><h2 id="appDialogTitle"></h2><p class="dialog-message" id="appDialogMessage"></p><div class="dialog-fields" id="appDialogFields"></div><div class="dialog-actions"><button type="button" id="appDialogCancel">Cancel</button><button type="submit" class="primary" id="appDialogConfirm">Save</button></div></form></div>
 <script>
-const TOKEN='__TOKEN__';const HINT='Kurt can read any file your account can access. File changes, deletions, and commands ask for approval. Link a folder to work directly in it.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],mcpServers:[],mcpTools:[],skills:[],chats:[],chatId:null,projectRoot:'',workingRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],uploadPromise:null,contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',editingGroup:null,selectingChats:false,selectedChatIds:[],linkedFolder:'',activeArtifactContent:'',activeArtifact:null};
+const TOKEN='__TOKEN__';const HINT='Kurt can read any file your account can access. File changes, deletions, and commands ask for approval. Link a folder to work directly in it.';let state={models:[],routes:[],providers:[],keys:[],apiGroups:[],mcpServers:[],mcpTools:[],skills:[],chats:[],chatId:null,projectRoot:'',workingRoot:'',selectedFiles:[],selectedFolders:[],pendingUploads:[],uploadedFiles:[],composerFiles:[],sentPaths:new Set(),uploadPromise:null,contextCount:0,busy:false,abort:null,run:0,settings:{},sort:'newest',keySort:'name',editingGroup:null,selectingChats:false,selectedChatIds:[],linkedFolder:'',activeArtifactContent:'',activeArtifact:null};
 const $=id=>document.getElementById(id);const api=async(path,body)=>{const res=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:body?JSON.stringify(body):undefined});const data=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(data.error||res.statusText);return data};
 function toast(msg){const el=$('toast');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600)}
 
@@ -2132,7 +2132,7 @@ async function downloadChatHistory(){
  finally{button.disabled=false}
 }
 function autosize(){const t=$('prompt');t.style.height='auto';t.style.height=Math.min(t.scrollHeight,220)+'px'}
-function updateSend(){$('sendBtn').disabled=!state.busy&&!$('prompt').value.trim()}
+function updateSend(){$('sendBtn').disabled=!!state.busy||!$('prompt').value.trim()}
 function syncAlwaysAllow(){const box=$('alwaysAllow');if(box)box.checked=!!(state.settings&&state.settings.always_allow)}
 function hint(){
  const count=state.contextCount?state.contextCount+' uploaded item(s). ':'';
@@ -2147,7 +2147,7 @@ function hint(){
 }
 
 
-function setBusy(b){state.busy=b;const btn=$('sendBtn');btn.querySelector('use').setAttribute('href',b?'#i-stop':'#i-up');btn.title=b?'Stop response':'Send message';btn.setAttribute('aria-label',btn.title);updateSend()}
+function setBusy(b){state.busy=b;const btn=$('sendBtn');btn.querySelector('use').setAttribute('href','#i-up');btn.title=b?'Kurt is working. You can send again when it finishes.':'Send message';btn.setAttribute('aria-label',btn.title);updateSend()}
 function cancelRun(){if(state.abort)state.abort.abort();state.abort=null;state.run++;setBusy(false)}
 function responseModelLabel(ref){if(!ref)return'';const item=state.models.find(m=>m.ref===ref);return item?`${item.label||item.name||item.model} · ${item.provider}`:String(ref)}
 function setResponseMeta(node,stats,model){const el=node?.querySelector('.response-metrics');if(!el)return;const parts=[];const seconds=Number(stats?.thought_seconds);const speed=Number(stats?.tokens_per_second);if(Number.isFinite(seconds)&&seconds>0)parts.push(`Generated in ${seconds.toFixed(seconds<10?1:0)}s`);if(Number.isFinite(speed)&&speed>0)parts.push(`${stats?.tokens_estimated?'~':''}${speed.toFixed(speed<10?1:0)} tok/s`);const label=responseModelLabel(model);if(label)parts.push(label);el.textContent=parts.join(' · ');if(stats?.tokens_estimated)el.title='Token rate is estimated from generated text length because the provider did not report output-token usage.'}
@@ -2848,7 +2848,7 @@ async function sendMcpTool(originalText,tool,rawArgs){
  let args;try{args=mcpToolArguments(tool,rawArgs)}catch(error){toast(error.message);return}
  const run=++state.run,messageId=crypto.randomUUID?crypto.randomUUID():Date.now().toString(36);setBusy(true);
  try{if(state.pendingUploads.length){const uploaded=await attachFiles();if(!uploaded){setBusy(false);return}}await ensureChat({id:messageId,content:originalText,route:$('topModel').value})}catch(error){setBusy(false);toast(error.message);return}
- $('prompt').value='';autosize();hideSlashMenu();hint();if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()};follow=true;renderMessage('user',originalText,null,{attachments:(state.uploadedFiles||[]).map(item=>item.path)});const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Calling '+tool.server_name+'…';$('chatMeta').textContent='MCP · Running…';scrollEnd(true);
+ $('prompt').value='';autosize();hideSlashMenu();hint();if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()};follow=true;renderMessage('user',originalText,null,{attachments:takeSentAttachments()});const node=renderMessage('assistant','');node.classList.add('live');node.querySelector('.assistant-status').textContent='Calling '+tool.server_name+'…';$('chatMeta').textContent='MCP · Running…';scrollEnd(true);
  try{const response=await api('/api/mcp/call',{chat_id:state.chatId,server_id:tool.server_id,tool_name:tool.tool_name,arguments:args});if(run!==state.run)return;const content=node.querySelector('.content');content.innerHTML=response.content?renderMarkdown(response.content):'';renderMcpMedia(content,response.media||[]);bindCopy(node);node.dataset.raw=response.content||'';node.querySelector('.assistant-status').textContent='Completed · '+response.server+' / '+response.tool_name;setTitle($('chatTitle').textContent||'Conversation','MCP · '+response.server);await refreshChats().catch(()=>{});scrollEnd(true)}catch(error){if(run===state.run){node.querySelector('.content').classList.add('err');node.querySelector('.content').textContent='MCP error: '+error.message;node.querySelector('.assistant-status').textContent='MCP call failed';toast(error.message)}}finally{node.classList.remove('live');if(run===state.run){setBusy(false);const meta=$('chatMeta');if(meta.textContent.includes('Running…'))meta.textContent='MCP · Ready'}}
 }
 
@@ -3073,14 +3073,14 @@ async function saveFailoverGroup(){
  }catch(error){toast(error.message)}
 }
 async function refreshChats(){const d=await api('/api/chats');state.chats=d.chats||[];renderChats()}
-function resetComposer(){$('prompt').value='';autosize();state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.uploadedFiles=[];state.contextCount=0;renderPendingUploads();hint();updateSend()}
+function resetComposer(){$('prompt').value='';autosize();state.selectedFiles=[];state.selectedFolders=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.uploadedFiles=[];state.composerFiles=[];state.sentPaths=new Set();state.contextCount=0;renderPendingUploads();hint();updateSend()}
 async function ensureChat(initialMessage){
  if(!state.chatId){const body={create:true};if(initialMessage)body.initial_message=initialMessage;const d=await api('/api/chats',body);state.chatId=d.id;try{const info=await api('/api/chats/'+encodeURIComponent(state.chatId));state.workingRoot=info.working_root||info.linked_folder||'';setTitle($('chatTitle').textContent,$('chatMeta').textContent)}catch(error){}}
  else if(initialMessage){await api('/api/chats/'+encodeURIComponent(state.chatId),{append_user_message:initialMessage})}
  return state.chatId;
 }
 async function newChat(){cancelRun();agentReset();state.chatId=null;state.linkedFolder='';state.workingRoot='';hint();state.selectingChats=false;state.selectedChatIds=[];updateChatSelectionToolbar();resetComposer();const preferred=state.settings.default_route||'';if(preferred&&Array.from($('topModel').options).some(option=>option.value===preferred)){$('topModel').value=preferred}renderRoutePicker();showWelcome();setTitle('New chat','');renderChats();follow=true;$('messages').scrollTop=0;document.body.classList.remove('nav-open');$('prompt').focus()}
-async function loadChat(id){cancelRun();agentReset();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.linkedFolder=data.linked_folder||'';state.workingRoot=data.working_root||state.linkedFolder||'';if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;state.uploadedFiles=(data.agent_mode||data.agent)?[]:(context.items||[])}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>agentLabelMessage(renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null,attachments:message.attachments||[],media:message.media||[]}),message));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();agentOnChatLoaded(data);setTitle(data.title||'Conversation',[data.model||''].filter(Boolean).join(' · '),state.workingRoot);renderChats();document.body.classList.remove('nav-open')}
+async function loadChat(id){cancelRun();agentReset();clearArtifactPane();closeChatMenu();state.uploadedFiles.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.uploadedFiles=[];state.pendingUploads.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl)});state.pendingUploads=[];state.composerFiles=[];state.sentPaths=new Set();state.selectedFiles=[];state.selectedFolders=[];const data=await api('/api/chats/'+encodeURIComponent(id));state.chatId=id;state.contextCount=0;state.linkedFolder=data.linked_folder||'';state.workingRoot=data.working_root||state.linkedFolder||'';if(data.route){$('topModel').value=data.route}renderRoutePicker();try{const context=await api('/api/context/status?chat_id='+encodeURIComponent(id));state.contextCount=context.files||0;const ctxItems=context.items||[];state.sentPaths=new Set(ctxItems.map(item=>item.path));state.uploadedFiles=(data.agent_mode||data.agent)?[]:ctxItems}catch(error){}renderPendingUploads();hint();$('messages').replaceChildren();const messages=data.messages||[];if(messages.length){setEmpty(false);messages.forEach(message=>agentLabelMessage(renderMessage(message.role,message.content,message.artifacts||[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,stats:message.stats||null,model:message.model||data.model||null,attachments:message.attachments||[],media:message.media||[]}),message));follow=true;scrollEnd(true)}else showWelcome();loadUploadedImagePreviews();agentOnChatLoaded(data);setTitle(data.title||'Conversation',[data.model||''].filter(Boolean).join(' · '),state.workingRoot);renderChats();document.body.classList.remove('nav-open')}
 async function linkFolderFromMessage(text){
  const intent=/\b(?:link|connect)\s+(?:this\s+)?(?:session|chat|workspace)\s+to\b/i.test(text);
  if(!intent)return false;
@@ -3114,7 +3114,7 @@ async function send(){
  if(run!==state.run)return;
  $('prompt').value='';autosize();hint();
  if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
- follow=true;if(!retryExisting)renderMessage('user',text,null,{attachments:(state.uploadedFiles||[]).map(item=>item.path)});const node=renderMessage('assistant','');node.classList.add('live');node.__t0=performance.now();node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
+ follow=true;const sentAttachments=takeSentAttachments();if(!retryExisting)renderMessage('user',text,null,{attachments:sentAttachments});const node=renderMessage('assistant','');node.classList.add('live');node.__t0=performance.now();node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
  $('chatMeta').textContent='Generating…';
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
  const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',blockRationale='',pending=false,thinkStart=0;node.__artifacts=[];node.__terminals=new Map();const showReasoning=live=>{reasoning=[modelRationale,blockRationale].filter(Boolean).join('\n\n');setReasoning(node,reasoning,live)};
@@ -3122,7 +3122,7 @@ async function send(){
  const paint=()=>{pending=false;if(run!==state.run)return;const hasAction=ACTION_START_RE.test(raw);const parsed=splitResponseRationale(safeLiveDraft(raw),true);let rationale=parsed.rationale,answer=parsed.answer;if(hasAction){const narration=stripUnsupportedActions(parsed.answer);rationale=[parsed.rationale,narration].filter(Boolean).join('\n\n');answer=''}if(rationale){if(!thinkStart)thinkStart=performance.now();blockRationale=rationale;showReasoning(true)}const safe=stripUnsupportedActions(answer);contentEl.innerHTML=safe?renderMarkdown(safe):'';if(safe)bindCopy(node);node.dataset.raw=safe;scrollEnd()};
  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(paint)}};
  try{
-  const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text:requestText,skill_id:skillId,route,message_id:messageId}),signal:controller.signal});
+  const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Kurt-Token':TOKEN},body:JSON.stringify({chat_id:state.chatId,text:requestText,skill_id:skillId,route,message_id:messageId,attachments:sentAttachments}),signal:controller.signal});
   if(!response.ok){const result=await response.json().catch(()=>({}));throw new Error(result.error||response.statusText)}
   node.querySelector('.assistant-status').textContent='Thinking…';const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
   while(true){const packet=await reader.read();if(packet.done)break;if(run!==state.run)return;buffer+=decoder.decode(packet.value,{stream:true});let separator;
@@ -3674,7 +3674,7 @@ async function sendAgent(text){
   $('prompt').value='';autosize();hint();updateSend();state.agentSeen.add(messageId);
   if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
   agentLiveEnd();
-  renderMessage('user',text,null,{attachments:(state.uploadedFiles||[]).map(item=>item.path)});follow=true;scrollEnd(true);
+  renderMessage('user',text,null,{attachments:takeSentAttachments()});follow=true;scrollEnd(true);
   const payload={chat_id:state.chatId,text,route,message_id:messageId};
   if(a.prefSet)payload.continuous=a.continuous;
   try{await api('/api/agent/send',payload)}catch(error){$('prompt').value=text;autosize();updateSend();throw error}
@@ -3700,8 +3700,8 @@ agentReset();
 try{if(localStorage.getItem('kurt_mode')==='agent')setMode('agent',true)}catch(error){}
 $('messages').addEventListener('scroll',()=>{const m=$('messages');follow=m.scrollHeight-m.scrollTop-m.clientHeight<60;$('toBottom').classList.toggle('show',!follow&&!$('main').classList.contains('empty'))});$('toBottom').onclick=()=>{follow=true;scrollEnd(true);$('toBottom').classList.remove('show')};
 $('closeArtifactPane').onclick=closeArtifactPane;$('artifactPaneCopy').onclick=copyActiveArtifact;$('artifactPaneDownload').onclick=downloadActiveArtifact;$('applySystemPromptProposal').onclick=applySystemPromptProposal;$('linkFolderBtn').onclick=linkSessionFolder;
-$('sendBtn').onclick=()=>{if(state.busy){if(state.abort)state.abort.abort()}else send()};
-$('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!state.busy)send()}});
+$('sendBtn').onclick=()=>{if(state.busy){toast('Kurt is working. You can send again when it finishes.');return}send()};
+$('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(state.busy)toast('Kurt is working. You can send again when it finishes.');else send()}});
 $('prompt').addEventListener('input',()=>{autosize();updateSend();slashActiveIndex=0;renderSlashMenu()});
 $('prompt').addEventListener('keydown',e=>{if(handleSlashKeydown(e))return});
 $('prompt').addEventListener('click',renderSlashMenu);
@@ -3791,12 +3791,13 @@ function makeUploadCard(item,{uploaded=false,removable=false,compact=false,index
  row.appendChild(fileIconNode(item));const info=document.createElement('span');info.className='attachment-info';
  const name=document.createElement('span');name.className='attachment-name';name.textContent=item.name||String(item.path||'').split('/').pop()||'Uploaded file';name.title=item.path||name.textContent;
  const meta=document.createElement('span');meta.className='attachment-meta';meta.textContent=[formatFileSize(item.size),item.folderRoot?'Folder upload':''].filter(Boolean).join(' · ');
- const status=document.createElement('span');status.className='attachment-status';status.textContent=uploaded?'Added to this chat':'Ready to add';
- info.append(name,meta,status);row.appendChild(info);
+ const status=document.createElement('span');status.className='attachment-status';status.textContent='Ready to add';
+ info.append(name,meta);if(!uploaded)info.appendChild(status);row.appendChild(info);
  if(removable){const remove=document.createElement('button');remove.type='button';remove.className='attachment-remove';remove.textContent='×';remove.title='Remove attachment';remove.setAttribute('aria-label','Remove '+name.textContent);remove.onclick=()=>{const removed=state.pendingUploads.splice(index,1)[0];if(removed?.previewUrl)URL.revokeObjectURL(removed.previewUrl);renderPendingUploads()};row.appendChild(remove)}
  return row
 }
-function renderComposerAttachments(){const root=$('composerAttachments');if(!root)return;root.replaceChildren();const pending=state.pendingUploads||[],uploaded=state.uploadedFiles||[];pending.forEach((item,index)=>root.appendChild(makeUploadCard(item,{removable:true,index,compact:true})));uploaded.forEach(item=>root.appendChild(makeUploadCard(item,{uploaded:true,compact:true})));root.hidden=!pending.length&&!uploaded.length}
+function takeSentAttachments(){const paths=(state.composerFiles||[]).map(item=>item.path);paths.forEach(path=>state.sentPaths.add(path));state.composerFiles=[];renderPendingUploads();return paths}
+function renderComposerAttachments(){const root=$('composerAttachments');if(!root)return;root.replaceChildren();const pending=state.pendingUploads||[],uploaded=state.composerFiles||[];pending.forEach((item,index)=>root.appendChild(makeUploadCard(item,{removable:true,index,compact:true})));uploaded.forEach(item=>root.appendChild(makeUploadCard(item,{uploaded:true,compact:true})));root.hidden=!pending.length&&!uploaded.length}
 function renderPendingUploads(){const root=$('uploadList');if(!root)return;root.replaceChildren();
  const pending=state.pendingUploads||[],uploaded=state.uploadedFiles||[];const projectCount=state.selectedFiles.length+state.selectedFolders.length;
  if(!pending.length&&!projectCount&&!uploaded.length){const empty=document.createElement('div');empty.className='upload-empty';empty.textContent='No files selected.';root.appendChild(empty)}
@@ -3820,6 +3821,7 @@ async function attachFiles(){
   const result=await api('/api/context/import',{chat_id:state.chatId,selected_files:state.selectedFiles,selected_folders:state.selectedFolders,uploads});
   state.contextCount=Number(result.items?.length??((state.contextCount||0)+Number(result.files||0)));
   state.uploadedFiles=(result.items||[]).map(item=>({...item,previewUrl:previewMap.get(item.path)||null}));
+  {const justAdded=new Set(state.pendingUploads.map(item=>item.path)),roots=state.pendingUploads.map(item=>item.folderRoot).filter(Boolean);const fresh=state.uploadedFiles.filter(item=>justAdded.has(item.path)||roots.some(root=>item.path===root||item.path.startsWith(root+'/'))||!state.sentPaths.has(item.path));fresh.forEach(item=>state.sentPaths.delete(item.path));state.composerFiles=fresh}
   state.selectedFiles=[];state.selectedFolders=[];
   state.pendingUploads.forEach(item=>{if(item.previewUrl&&!state.uploadedFiles.some(uploaded=>uploaded.previewUrl===item.previewUrl))URL.revokeObjectURL(item.previewUrl)});
   state.pendingUploads=[];renderPendingUploads();$('filesModal').classList.remove('show');hint();await refreshChats();loadUploadedImagePreviews();toast(result.message||'Files added to this chat');return true;
@@ -5706,9 +5708,6 @@ class KurtWebApp:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
             imported += 1
-            if target.suffix.lower() == '.zip':
-                self._extract_zip_bytes(target.read_bytes(), workspace)
-                archives += 1
         if total_bytes > MAX_IMPORT_BYTES:
             raise ValueError('The total context import exceeds 20 MB.')
         uploads = uploads if isinstance(uploads, list) else []
@@ -5730,14 +5729,7 @@ class KurtWebApp:
             if total_bytes > MAX_IMPORT_BYTES:
                 raise ValueError('The total context import exceeds 20 MB.')
             folder_root = str(item.get('folder_root') or '').strip().replace('\\', '/')
-            if Path(rel).suffix.lower() == '.zip':
-                target = self.resolve_chat_path(workspace, rel)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(content)
-                extracted, _expanded = self._extract_zip_bytes(content, workspace)
-                archives += 1
-                imported += 1 + extracted
-            elif folder_root:
+            if folder_root:
                 folder_root = self._safe_context_relative(folder_root)
                 if rel != folder_root and not rel.startswith(folder_root + '/'):
                     raise ValueError('A folder upload contains a path outside its selected folder.')
@@ -5763,8 +5755,11 @@ class KurtWebApp:
             imported += count
             archives += 1
         items = self.context_file_list(chat_id)
+        message = f'Added {imported} file(s) to this chat.'
+        if archives:
+            message += f' Unpacked {archives} selected folder(s).'
         return {'ok': True, 'files': imported, 'items': items, 'bytes': total_bytes, 'archives': archives,
-                'workspace': str(workspace), 'message': f'Added files to this chat workspace. Automatically unpacked {archives} folder/archive ZIP(s).'}
+                'workspace': str(workspace), 'message': message}
 
     def context_contents(self, chat_id):
         root = self.chat_workspace(chat_id, create=False)
@@ -5807,11 +5802,14 @@ class KurtWebApp:
             block = header + content + '\n'
             chunks.append(block)
             used += len(block)
-        intro = 'Text file contents from this conversation’s isolated temporary workspace. Uploaded ZIP files and folders are extracted automatically; use the extracted paths shown in the workspace tree.'
+        intro = 'Text file contents from this conversation’s isolated temporary workspace. Uploaded ZIP files are kept as ZIP files and are not unpacked; selected folders are unpacked into the workspace.'
         if truncated:
             intro += f'\n{truncated} text file(s) are partially included because the inline text context is limited to 1.4 MB; the full files remain in the workspace.'
         if skipped:
             intro += f'\n{skipped} file(s) were omitted from inline text context because they were binary or unreadable; the original attachments remain in this workspace.'
+        zip_paths = [item['path'] for item in self.context_file_list(chat_id) if item.get('archive')]
+        if zip_paths:
+            intro += '\nZIP files attached and not unpacked: ' + ', '.join(zip_paths[:40]) + '. Extract one only if the user asks you to work with its contents.'
         image_paths = [item['path'] for item in self.context_file_list(chat_id) if item.get('image')]
         if image_paths:
             intro += '\nImage attachments available in the workspace: ' + ', '.join(image_paths[:80])
@@ -7770,11 +7768,18 @@ class Handler(BaseHTTPRequestHandler):
         user_payload = ([{"type": "text", "text": user_text}] + image_parts) if image_parts else user_text
         messages.append({"role": "user", "content": user_payload})
 
-        attachment_paths = [item["path"] for item in self.app.context_file_list(chat_id)]
+        available_paths = [item["path"] for item in self.app.context_file_list(chat_id)]
+        requested_attachments = data.get("attachments")
+        if isinstance(requested_attachments, list):
+            wanted = {str(value) for value in requested_attachments}
+            attachment_paths = [path for path in available_paths if path in wanted]
+        else:
+            attachment_paths = available_paths
         if already_saved:
             for saved in chat.get("messages", []):
                 if saved.get("message_id") == message_id:
-                    saved["attachments"] = attachment_paths
+                    if attachment_paths or not saved.get("attachments"):
+                        saved["attachments"] = attachment_paths
                     break
         if not already_saved:
             user_record = {"role": "user", "content": user_text, "ts": round(time.time(), 3)}
