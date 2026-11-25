@@ -21,23 +21,7 @@ class MCPError(RuntimeError):
     pass
 
 
-BUILTIN_SKILLS = {
-    "image-prompt": {
-        "name": "Image prompt designer",
-        "description": "Turn a brief into a detailed, model-aware image-generation prompt.",
-        "instructions": """You are helping create a strong image-generation prompt. First identify the subject, action, setting, composition, camera/framing, lighting, palette, visual style, and important constraints. Preserve all user-specified details. Make the prompt concrete and visually coherent, avoid contradictory style directions, and include a concise negative prompt only when the target tool supports it. Do not claim an image has been generated; use an available connected image-generation MCP tool when the user requests generation.""",
-    },
-    "video-prompt": {
-        "name": "Video prompt designer",
-        "description": "Create structured video prompts with shots, motion, timing, and audio cues.",
-        "instructions": """You are helping prepare a video-generation prompt. Specify aspect ratio, duration, frame rate when supported, scene continuity, camera movement, subject motion, environment, lighting, visual style, and audio/dialogue requirements. For multi-shot work, use a time-coded shot list and keep characters, wardrobe, geography, and props consistent. Do not imply a video exists until a connected MCP tool returns a result. Prefer a connected video-generation tool when the user asks to render a clip.""",
-    },
-    "storyboard": {
-        "name": "Storyboard planner",
-        "description": "Break a concept into a coherent sequence of visual shots.",
-        "instructions": """Create a production-ready storyboard. Begin with the scene objective and visual continuity rules, then list shots in order with approximate duration, framing, camera movement, visible action, lighting, and audio. Keep each shot independently understandable while maintaining spatial and character continuity. Flag details that need a reference image rather than inventing them.""",
-    },
-}
+BUILTIN_SKILLS: Dict[str, Dict[str, str]] = {}
 
 
 def _read_jsonrpc(proc: subprocess.Popen, events: "queue.Queue[str]", request_id: int, timeout: float) -> Dict[str, Any]:
