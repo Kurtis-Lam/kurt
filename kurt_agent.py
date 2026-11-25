@@ -789,7 +789,7 @@ How you run the team:
    c. If it blocks again, change approach: try a different library or method, split the task in two, or RETIRE it and SPAWN a fresh specialist with a cleaner brief. You may also do the step yourself with RUN and WRITE.
    d. Ask the human only for something no tool can produce (credentials, a missing input file, a decision about what they want), and keep every other part of the work moving while you wait. Never report a technical obstacle to the human as the end result.
 5. Verify with your own tools when it matters: LIST the workspace, READ the key files, RUN a check. Do not repeat a teammate's claim as fact until the live state (WORKSPACE FILES, team reports) supports it.
-6. Message the human (SAY user) only when they asked something, at a real milestone, or when you are blocked on something only a human can give (a decision about what they want, credentials, files you cannot create). Never ask the human to advise on technical obstacles: pick a way around it yourself (for example have the tester use RUN tty, or test the logic headlessly) and ASSIGN it. Answer with real facts from the live team state, briefly, and never repeat a status you already gave. If their message contains an instruction, act on it and say what you changed.
+6. Message the human (SAY user) only when they asked something, at a real milestone, or when you are blocked on something only a human can give (a decision about what they want, credentials, files you cannot create). Never ask the human to advise on technical obstacles: pick a way around it yourself (for example have the tester use RUN tty, or test the logic headlessly) and ASSIGN it. Answer with real facts from the live team state, briefly, and never repeat a status you already gave. If their message contains an instruction, act on it and say what you changed. If the human sent several messages while you were busy, answer them together in ONE SAY user message after reading all of them; never send one reply per message.
 7. Do the work through the team. Use READ, LIST, SEARCH and RUN to inspect, verify and debug; do a step yourself only when that is the fastest way to unblock someone.
 {mode_block}
 
@@ -821,7 +821,7 @@ Do not repeat yourself or chat for its own sake. If you have nothing to do, fini
 Extra verbs: DONE and BLOCKED, as described above.
 {syntax}"""
 
-QUICK_SYSTEM = """You are LEAD answering the human while your main orchestration loop is busy. Answer using only the live team state below; never claim something is finished unless the state shows it. Be direct and concrete in 2 to 6 sentences: what is done, who is doing what, what is blocked, and what is next. If the human gave an instruction, say it has been passed to your orchestration loop. Do not use action blocks."""
+QUICK_SYSTEM = """You are LEAD. The human wrote while your main orchestration loop was busy. Send only a short acknowledgement in one or two sentences: say you got the message and will answer in full as soon as the current step finishes. Do not answer the question, give a status report or list details; the full answer comes later in one reply. If they gave an instruction, say it will be applied. Do not use action blocks."""
 
 DEGENERATE_NOTICE = ("SYSTEM: your previous reply got stuck repeating the same text and was discarded; nothing in it was executed. "
                      "Reply again with a short, fresh reply: one or two action blocks at most. If you were writing a long file, write a smaller first part.")
@@ -899,6 +899,7 @@ class AgentSwarm:
         self.events = deque(maxlen=MAX_EVENTS)
         self.seq = 0
         self.channel = []
+        self._ack_pending = False
         self.activity = deque(maxlen=MAX_ACTIVITY)
         self.notes = {}
         self.plan = ""
@@ -1536,9 +1537,15 @@ class AgentSwarm:
         self._emit("chat", message=record)
         self._emit("channel", message=message)
         busy = self.lead.busy
+        send_ack = False
+        if busy:
+            with self.lock:
+                send_ack = not self._ack_pending
+                self._ack_pending = True
+            message["acknowledged"] = True
         self.lead.inbox.append(message)
         self.lead.wake.set()
-        if busy:
+        if send_ack:
             threading.Thread(target=self._quick_reply, args=(message,), name="kurt-agent-quick", daemon=True).start()
 
     def _wait(self, seconds):
@@ -1794,15 +1801,24 @@ class AgentSwarm:
         lines = []
         for item in items:
             extra = ""
-            if item.get("quick_reply"):
-                extra = "\n(Already answered by a quick status reply: {})".format(clip(item["quick_reply"], 600))
+            if item.get("acknowledged") or item.get("quick_reply"):
+                extra = "\n(The human already got a short acknowledgement while you were busy. Do not reply to this message on its own.)"
             lines.append("from {}: {}{}".format(item.get("from"), clip(item.get("text"), 3000), extra))
         return "\n\n".join(lines)
 
-    @staticmethod
-    def _drain(agent):
+    def _drain(self, agent):
         items, agent.inbox = agent.inbox, []
+        if agent.lead:
+            with self.lock:
+                self._ack_pending = False
         return items
+
+    def _late_note(self, late):
+        note = "NEW MESSAGES FOR YOU:\n" + self._format_inbox(late)
+        if any(item.get("from") == "user" for item in late):
+            note += ("\n\nThe human wrote while you were working and already received a short acknowledgement. Fold these messages into your work "
+                     "and, when you are done with this step, send ONE full SAY user reply that covers all of them. Do not send one reply per message.")
+        return note
 
     def _trim(self, agent):
         if len(agent.history) > MAX_HISTORY:
@@ -1999,7 +2015,7 @@ class AgentSwarm:
                 extra = []
                 results, finished, said_to_user, stop_turn = self._execute(agent, turn)
                 if agent.lead:
-                    pending_user = [item for item in inbox if item.get("from") == "user" and not item.get("quick_reply")]
+                    pending_user = [item for item in inbox if item.get("from") == "user"]
                     if pending_user and not said_to_user and turn.prose and not results and not self.finished:
                         self.post("lead", "user", turn.prose)
                         said_to_user = True
@@ -2013,7 +2029,7 @@ class AgentSwarm:
                         late = self._drain(agent)
                         base = ("TOOL RESULTS:\n" + "\n\n".join(results) + "\n\n" if results else "") + self._blocker_section(reminder=True)
                         if late:
-                            base += "\n\nNEW MESSAGES FOR YOU:\n" + self._format_inbox(late)
+                            base += "\n\n" + self._late_note(late)
                             inbox = inbox + late
                         continue
                     used_tools = any(item.verb in TOOL_VERBS for item in turn.actions)
@@ -2037,7 +2053,7 @@ class AgentSwarm:
                 late = self._drain(agent)
                 base = "TOOL RESULTS:\n" + "\n\n".join(results)
                 if late:
-                    base += "\n\nNEW MESSAGES FOR YOU:\n" + self._format_inbox(late)
+                    base += "\n\n" + self._late_note(late)
                     inbox = inbox + late
             else:
                 if agent.lead:
@@ -2065,7 +2081,7 @@ class AgentSwarm:
         users = [item for item in inbox if item.get("from") == "user"]
         others = [item for item in inbox if item.get("from") != "user"]
         if users:
-            parts.append("THE HUMAN WROTE (reply with SAY user unless a quick reply already covered it, then act on any instruction):\n" + self._format_inbox(users))
+            parts.append("THE HUMAN WROTE {} message(s). Read them together and answer ALL of them in ONE full SAY user reply (a short acknowledgement may already have been sent, so do not repeat it), then act on any instruction:\n".format(len(users)) + self._format_inbox(users))
         if others:
             parts.append("TEAM MESSAGES:\n" + self._format_inbox(others))
         if reason == CONTINUE_REASON and not inbox:
@@ -2746,7 +2762,7 @@ class AgentSwarm:
             prose, _actions = parse_actions(answer)
             answer = prose.strip()
             if not answer:
-                answer = self._status_report()
+                answer = "Got it. I will finish the current step and reply in full."
             if answer:
                 message["quick_reply"] = answer
                 self.post("lead", "user", answer, kind="quick")
