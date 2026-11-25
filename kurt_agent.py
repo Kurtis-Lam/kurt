@@ -91,6 +91,19 @@ TTY_TIMEOUT = 10
 DEFAULT_TEMPERATURE = 0.2
 RETRY_TEMPERATURE = 0.55
 
+EXTRACT_COMMAND_RE = re.compile(r"^\s*(?:cd\s+\S+\s*&&\s*)?(?:unzip|7z[a]?\s+x|7z[a]?\s+e|unrar\s+x|tar\s+-?[a-zA-Z]*x[a-zA-Z]*)\b")
+
+
+def is_extract_command(command):
+    """True for a command that only unpacks an archive the user supplied (not a deliverable the team wrote)."""
+    text = str(command or "").strip()
+    if not text or "\n" in text:
+        return False
+    parts = [part for part in re.split(r"\s*(?:&&|;)\s*", text) if part]
+    return bool(parts) and all(EXTRACT_COMMAND_RE.match(part) or re.match(r"^\s*(?:ls|cat|head|tail|wc|echo|find)\b", part) for part in parts) \
+        and any(EXTRACT_COMMAND_RE.match(part) for part in parts)
+
+
 THINK_TAG_RE = re.compile(r"<(/)?think(?:ing)?>", re.I)
 STRAY_CLOSE_RE = re.compile(r"</think(?:ing)?>", re.I)
 RATE_LIMIT_RE = re.compile(r"429|rate.?limit|quota|overload|too many|capacity|throttl", re.I)
@@ -770,7 +783,7 @@ GROUND RULES (the system checks these and refuses or cuts off violations)
 - You DO have a terminal: RUN for normal commands, RUN tty for interactive programs. "No terminal", "cannot run interactively" or "needs a real terminal" is never a valid reason to be blocked. Use RUN tty, or test the logic headlessly (import the module and call its functions, simulate input).
 """
 
-MODE_FINITE = """8. FINISHING. This is a normal run: the team stops when the work is done. When the goal is met and verified (every deliverable is listed in WORKSPACE FILES, a teammate other than the author tested or reviewed the final state and reported RESULT: PASS, no open blockers) write FINISH with the final report. Do not invent extra work afterwards, and do not FINISH while any teammate is still working. The system checks these conditions and refuses an early FINISH; the FINISH CHECK line in the shared context shows whether you are ready."""
+MODE_FINITE = """8. FINISHING. This is a normal run: the team stops when the work is done. When the goal is met and verified (every deliverable is listed in WORKSPACE FILES, a teammate other than the author tested or reviewed the final state and reported RESULT: PASS, no open blockers) write FINISH with the final report. If the goal is only a question or an analysis (nothing to build), answer it yourself with read-only READ, LIST, SEARCH and RUN, then SAY user and FINISH: no teammates, no installing or running the project, no new files unless the human asked. Do not invent extra work afterwards, and do not FINISH while any teammate is still working. The system checks these conditions and refuses an early FINISH; the FINISH CHECK line in the shared context shows whether you are ready."""
 
 MODE_CONTINUOUS = """8. CONTINUOUS MODE. The human asked the team to keep running until they stop it. Never use FINISH. When a milestone is complete, define the next useful improvement (more tests, bug hunting, polish, performance, docs) and assign it. If there is truly nothing useful left to do, WAIT."""
 
@@ -780,7 +793,7 @@ The ONLY goal is the one under GOAL in the shared context. Everything the team d
 
 How you run the team:
 1. PLAN: turn the goal into a short ordered plan (3 to 7 steps, each with an owner and a status) and keep it current.
-2. SPAWN only the specialists the goal truly needs, usually 2 to 4 (hard limit {max_agents}). Each mission states the goal, the files the agent owns, the interfaces it must respect and its definition of done.
+2. SPAWN only the specialists the goal truly needs (none for a question or analysis; usually 2 to 4 for a build; hard limit {max_agents}). Each mission states the goal, the files the agent owns, the interfaces it must respect and its definition of done.
 3. Sequence dependent work. Do not start a tester or reviewer before there is something to test: spawn or ASSIGN them after the builder reports DONE, and give them the exact file names.
 4. React to reports. DONE reports start with RESULT: PASS, FAIL or PARTIAL and give evidence. Accept PASS only when the evidence is concrete (files written, command output, specific lines checked). Send failures back to the owner with ASSIGN.
    A BLOCKED agent is YOUR problem to solve, and you never leave it stopped. Keep trying until it works:
@@ -1864,6 +1877,10 @@ class AgentSwarm:
             self.block_reviews = 0
         if self.idle_paused:
             return None
+        if not members and not self.lead.carry and not self.lead.inbox and self.last_change_ts == 0 and self._answered_current_user_message():
+            # Question/analysis run: the lead already answered and wrote nothing, so end quietly instead of inventing more work.
+            self._finish_quietly()
+            return None
         if working:
             stalled = [a.name for a in working if a.status == "working" and now - a.last_activity > STALL_SECONDS]
             return "stalled agents: " + ", ".join(stalled) if stalled else None
@@ -1879,6 +1896,19 @@ class AgentSwarm:
             self.idle_reviews = 0
         self.review_signature = signature
         return "team idle review"
+
+    def _answered_current_user_message(self):
+        with self.lock:
+            return self.user_msg_count > 0 and any(count == self.user_msg_count for count, _text in self.recent_user_posts)
+
+    def _finish_quietly(self):
+        """Mark the run finished without posting a second copy of the answer the human already has."""
+        with self.lock:
+            last = next((m for m in reversed(self.channel) if m.get("from") == "lead" and m.get("to") == "user"), None)
+        self.finish_summary = (last or {}).get("text", "")
+        self._activity(self.lead, "finish", "The lead answered and finished", detail=self.finish_summary, ok=True)
+        self._emit("finished", summary=self.finish_summary, files=self.files_view())
+        self.stop(final_status="finished", finished=True)
 
     def _lead_loop(self):
         lead = self.lead
@@ -2091,7 +2121,8 @@ class AgentSwarm:
                 parts.append("No new messages. Review progress. Use WAIT if the team is busy and nothing needs you; otherwise assign the next useful work.")
             else:
                 parts.append("No new messages. Check the team state and the FINISH CHECK. If the goal is met and verified, FINISH. "
-                             "If something is missing, assign exactly that. If the team is busy, WAIT.")
+                             "If the human only asked a question or for an analysis and you already answered, FINISH now: do not install, run or write anything. "
+                             "If something the human asked for is missing, assign exactly that. If the team is busy, WAIT.")
         blockers = self._blocker_section()
         if blockers:
             parts.append(blockers)
@@ -2131,16 +2162,21 @@ class AgentSwarm:
             soft.append("unresolved blockers: " + ", ".join(blocked))
         if self.last_change_ts:
             stamp = time.strftime("%H:%M:%S", time.localtime(self.last_change_ts))
-            reporters = [a for a in list(members) + [self.lead] if a.last_report_ts > self.last_change_ts]
-            others = reporters if len(members) <= 1 else [a for a in reporters if a.name != self.last_writer]
             if not members:
-                soft.append("files were written but no teammate verified them")
-            elif not others:
-                soft.append("nobody other than {} has reported since the last file change at {}: have a tester or reviewer verify the final state".format(
-                    self.last_writer or "the author", stamp))
-            fails = [a.name for a in reporters if a.last_result in ("FAIL", "PARTIAL")]
-            if fails:
-                soft.append("reports since the last change say FAIL or PARTIAL: " + ", ".join(fails))
+                # A solo lead has nobody to hand verification to: its own successful check after the last change is enough.
+                if self.lead.last_report_ts <= self.last_change_ts:
+                    soft.append("files were written at {}: run one quick check (RUN, READ or LIST) on them, then FINISH".format(stamp))
+                elif self.lead.last_result in ("FAIL", "PARTIAL"):
+                    soft.append("your last check after the file change at {} failed: fix it or explain it in the final report".format(stamp))
+            else:
+                reporters = [a for a in list(members) + [self.lead] if a.last_report_ts > self.last_change_ts]
+                others = reporters if len(members) <= 1 else [a for a in reporters if a.name != self.last_writer]
+                if not others:
+                    soft.append("nobody other than {} has reported since the last file change at {}: have a tester or reviewer verify the final state".format(
+                        self.last_writer or "the author", stamp))
+                fails = [a.name for a in reporters if a.last_result in ("FAIL", "PARTIAL")]
+                if fails:
+                    soft.append("reports since the last change say FAIL or PARTIAL: " + ", ".join(fails))
         return hard, soft
 
     def _finish_summary_line(self):
@@ -2663,7 +2699,8 @@ class AgentSwarm:
                 outcome = host.run_command(self.chat_id, command, **({"tty": tty} if tty is not None else {}))
                 if outcome.get("output"):
                     stream_terminal(outcome.get("output"))
-            if self._signature() != before:
+            extracting = is_extract_command(command)
+            if not extracting and self._signature() != before:
                 self._mark_change(agent)
             agent.evidence += 1
             ok = bool(outcome.get("ok"))
@@ -2678,7 +2715,7 @@ class AgentSwarm:
             self._emit("terminal", action="done", id=terminal_id, returncode=exit_code,
                        ok=ok, elapsed=elapsed)
             try:
-                for generated in host.collect_user_outputs(self.chat_id, before_outputs):
+                for generated in ([] if extracting else host.collect_user_outputs(self.chat_id, before_outputs)):
                     row = {"by": agent.name, "ts": time.time(), "size": generated.get("size", 0),
                            "rel": generated.get("path", ""), "output": True, "mime": generated.get("mime", ""),
                            "area": generated.get("area", "work")}
