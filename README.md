@@ -7,7 +7,7 @@ Kurt is a coding assistant that runs on local models (through [Ollama](https://o
 | `kurt` | Opens the **browser interface** on `http://127.0.0.1:1277` |
 | `kurt --cli` | Runs the same assistant **in your terminal** |
 
-Nothing runs and nothing is written without your approval, in either interface.
+Workspace commands and file changes require your approval. MCP tools run only when you explicitly choose a connected tool with a slash command; their effects depend on the server you connected.
 
 ## Setup
 
@@ -27,6 +27,44 @@ kurt --port 8080      # use another port
 ```
 
 Press `Ctrl+C` in the terminal to stop it. If the port is taken, Kurt falls back to `KURT_WEB_FALLBACK_PORT` (default `10220`). `kurt --localhost` still works as an alias.
+
+## MCP servers and skills (browser interface)
+
+Open **Settings → MCP servers** to connect tools. Kurt supports:
+
+- **Local stdio MCP**: Kurt launches a trusted local MCP executable such as `comfy-mcp`.
+- **Remote Streamable HTTP MCP**: connect to an HTTPS endpoint and supply custom headers, for example an API key. OAuth sign-in is not implemented yet.
+
+After connecting, Kurt discovers the server's tools. Type `/` in the chat composer to search the combined list of MCP tools and skills. Choose a tool, add its input, and press Enter. A tool that needs multiple inputs accepts a JSON object after its slash command. Returned image and video files are displayed in the conversation when the MCP server returns local file paths or embedded images.
+
+### Recommended image and video setup: Comfy MCP
+
+[Comfy MCP](https://docs.comfy.org/agent-tools/mcp) is Comfy's first-party MCP connection for [ComfyUI](https://www.comfy.org/). It can drive image, video, audio and 3D workflows. The local server is open source and runs workflows on your own ComfyUI installation and hardware; model downloads and hardware requirements still apply.
+
+For a local setup:
+
+1. Install ComfyUI and its CLI requirements from the [official Comfy MCP setup guide](https://docs.comfy.org/agent-tools/mcp#local-comfy-mcp-connection). The local MCP server requires Python 3.10+, `comfy-cli`, a ComfyUI workspace, and a running ComfyUI instance for generation.
+2. Install the MCP package with `pip install comfy-mcp`.
+3. Start ComfyUI with `comfy launch`.
+4. In Kurt, open Settings → MCP servers and enter:
+
+   | Field | Value |
+   | --- | --- |
+   | Display name | `ComfyUI` |
+   | Connection type | `Local stdio` |
+   | Executable command | `comfy-mcp` |
+   | Arguments | `[]` |
+   | Environment variables | `{"COMFY_BIN":"/absolute/path/to/comfy"}` only if `comfy` is not already on Kurt's PATH |
+
+   The environment-variable field may be left blank when `comfy` is already available on PATH.
+
+For a hosted option, choose **Remote Streamable HTTP**, use `https://cloud.comfy.org/mcp`, and add the API key as an HTTP header: `{"X-API-Key":"your-key"}`. Comfy Cloud currently gives new accounts five free generation runs; further generation requires an active subscription. Kurt supports API-key headers for this connection, but not the Comfy Cloud OAuth flow.
+
+### Skills
+
+Create, edit, and remove your own skills under **Settings → Skills**. Custom skills are saved as `SKILL.md` files in `~/.kurt/web_skills/<skill-id>/SKILL.md`, and are applied to one request when selected from the `/` menu.
+
+MCP servers are powerful local/remote programs. Only connect servers you trust. Local MCP commands run with the permissions of your operating-system account. API keys and custom headers are stored locally in `~/.kurt/web_settings.json` with owner-only file permissions.
 
 ## Using the terminal interface
 
@@ -76,8 +114,9 @@ Both interfaces use the same files under `~/.kurt`, so a conversation started in
 | What | Where | Shared by |
 | --- | --- | --- |
 | Models, API keys, hardware tuning | `~/.kurt/config.json`, `hardware.json` | CLI and browser |
-| System prompt, API groups, defaults | `~/.kurt/web_settings.json` | CLI and browser |
+| System prompt, API groups, MCP server configuration and defaults | `~/.kurt/web_settings.json` | CLI and browser |
 | Conversations | `~/.kurt/chats.json` | CLI and browser |
+| Custom browser skills | `~/.kurt/web_skills/` | browser |
 | Private workspace (uploads, scratch, temp, home) | `~/.kurt/web_workspaces/<chat id>/` | one conversation |
 | Python virtual environment | `~/.kurt/web_envs/<chat id>/` | one conversation |
 | Linked project folder (optional) | your folder | one conversation |
