@@ -3833,13 +3833,17 @@ class ChatTurn:
         actions = actions[:3]
         records = [{"name": name, "task": task} for _pos, name, task in actions]
         self.log("Lead agent delegated {} task(s) to subagents.".format(len(records)), None,
-                 "Children see only recent chat context and their task; they cannot read files, run commands or write.")
+                 "Each child has its own private context: it sees only its task brief, not this chat. It cannot read files, run commands or write.")
 
         def run_child(task):
-            system = ("You are a read-only analysis subagent. Do not access files, request tools, run commands, "
-                      "or propose mutations. Return concise findings and uncertainties to the lead agent.")
-            history = self.messages[-8:] + [{"role": "system", "content": system},
-                                            {"role": "user", "content": "Delegated task: " + task}]
+            # A child works in its own private context: it never sees the lead's chat history.
+            # Everything it needs must be inside the task brief the lead wrote.
+            system = ("You are a read-only analysis subagent with your own private context. You cannot see the "
+                      "lead's conversation, only the task brief below. Do not access files, request tools, run "
+                      "commands, or propose mutations. If the brief lacks something you need, say so instead of "
+                      "guessing. Return concise findings and uncertainties to the lead agent.")
+            history = [{"role": "system", "content": system},
+                       {"role": "user", "content": "Task brief from the lead:\n" + task}]
             parts = []
             for kind, chunk in stream_chat(history, model=self.model, think=False, temperature=0.2,
                                            max_tokens=3072, reasoning_effort="medium"):
