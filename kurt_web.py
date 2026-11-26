@@ -430,7 +430,9 @@ CAPABILITIES AND ACCESS (single unified assistant; there is nothing to switch):
 - Use RUN for one command at a time. Use WRITE/EDIT for file changes. Use DELETE for one regular file
   at a time; directories, wildcards, and recursive deletion are not accepted by DELETE.
 - Never run shell privilege escalation or attempt to bypass OS file permissions.
-- Delegate bounded analysis only when it materially helps; child agents cannot read local
+- Delegate bounded analysis only when it materially helps, and run independent pieces in parallel.
+  Child agents have their own private context: they cannot see this conversation, so every SUBAGENT
+  brief must be self-contained (include the facts, text or question it needs). They cannot read local
   files, run commands, write files, or approve actions.
 """
 
@@ -1271,6 +1273,38 @@ html.side-collapsed .menu-btn{display:inline-grid}
 .ac-hint{margin:0 13px 12px;padding:9px 11px;border:1px dashed var(--line2);border-radius:10px;color:var(--muted);font-size:12.5px;line-height:1.5}
 .ac-alert{margin:0 13px 12px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--bad) 45%,var(--line));border-radius:11px;background:var(--bad-soft);font-size:13px;line-height:1.5}
 .ac-alert b{display:block;color:var(--bad);font-weight:600}
+.ad-bar .s-queue{background:var(--warn)}.ad-legend .l-queue{color:var(--warn)}
+.st-queued .ac-pill{background:var(--warn-soft);color:var(--warn)}
+.ac.st-queued{border-style:dashed}.ac.st-queued .ac-now i{background:var(--warn)}
+.ad-why{margin-bottom:10px;padding:10px 12px;border-radius:12px;background:var(--info-soft);border:1px solid color-mix(in srgb,var(--info) 35%,var(--line2));font-size:13px;line-height:1.5}
+.ad-why[hidden]{display:none}
+.ad-why b{display:block;font-weight:600;color:var(--text)}
+.ad-why p{margin:2px 0 0;color:var(--muted);overflow-wrap:anywhere}
+.ad-why-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.ad-why-chip{--hc:hsl(var(--h) 55% var(--ag-l));display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;background:var(--bg);border:1px solid var(--line);font-size:12px}
+.ad-why-chip i{width:7px;height:7px;border-radius:50%;background:var(--hc)}
+.ad-why-chip small{color:var(--muted);font-size:11.5px}
+.ad-intro{margin:0 0 10px;padding:9px 11px;border:1px dashed var(--line2);border-radius:10px;color:var(--muted);font-size:12.5px;line-height:1.5}
+.ad-toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}
+.ad-toolbar .ad-chips{flex:1;min-width:0}
+.ad-check{flex:none;display:flex;align-items:center;gap:6px;padding-top:4px;color:var(--muted);font-size:12px;cursor:pointer;white-space:nowrap}
+.ad-check input{margin:0}
+.ac-mem{padding:10px 11px;border:1px solid var(--line);border-radius:11px;background:var(--panel)}
+.ac-mem>h4{margin-bottom:8px!important}
+.ac-mem>h4 .ic{width:13px;height:13px;color:var(--muted)}
+.ac-mem>h4 small{margin-left:auto;font:400 11px var(--sans);letter-spacing:0;color:var(--faint)}
+.mem-lbl{margin:8px 0 4px;font:600 11px var(--sans);color:var(--faint);letter-spacing:.03em}
+.mem-lbl:first-of-type{margin-top:0}
+.mem-note{display:grid;gap:1px;margin-bottom:5px;font-size:12.5px;line-height:1.45}
+.mem-note b{font-weight:600}
+.mem-note span{color:var(--muted);overflow-wrap:anywhere;white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.mem-empty{color:var(--faint);font-size:12.5px}
+.mem-row{display:flex;flex-wrap:wrap;gap:5px}
+.mem-chip{--hc:hsl(var(--h) 55% var(--ag-l));display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border-radius:999px;background:var(--raise);font-size:12px}
+.mem-chip i{width:6px;height:6px;border-radius:50%;background:var(--hc)}
+.mem-chip.file{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.ac-planbox .ad-plan{margin:0}
+.agent-note{align-self:center;max-width:min(680px,92%);margin:6px auto;padding:6px 12px;border-radius:999px;background:var(--raise);color:var(--muted);font-size:12.5px;line-height:1.45;text-align:center}
 .ac-alert p{margin:3px 0 0;max-height:130px;overflow:auto;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
 .th{border:1px solid var(--line);border-radius:12px;background:var(--code);overflow:hidden}
 .th-head{display:flex;align-items:center;gap:8px;width:100%;padding:8px 11px;border:0;border-radius:0;background:transparent;color:var(--muted);font:500 12.5px var(--sans);text-align:left}
@@ -1632,16 +1666,15 @@ body.modal-open .status-dot,body.modal-open .message,body.modal-open .message.li
 <aside class="agent-dock" id="agentDock" hidden aria-label="Agent team">
 <header class="ad-head">
 <div class="ad-top"><span class="ad-pulse" id="adPulse"></span><div class="ad-titles"><strong>Agent team</strong><span id="adStatus" aria-live="polite">Not running</span></div><button type="button" class="ad-btn danger" id="agentStop" disabled>Stop</button><button type="button" class="ad-btn ad-close" id="adClose">Close</button></div>
-<div class="ad-goal" id="adGoal" hidden title="Click to expand"><b>Goal</b><span id="adGoalText"></span></div>
+<div class="ad-goal" id="adGoal" hidden title="Click to expand"><b>Request</b><span id="adGoalText"></span></div>
 <div class="ad-progress" id="adProgress" hidden><div class="ad-bar" id="adBar"></div><div class="ad-legend" id="adLegend"></div></div>
 <label class="ad-mode" id="adModeBox"><input type="checkbox" id="adContinuous"><span class="ad-track"></span><span><b>Run continuously</b><small id="adModeHelp"></small></span></label>
 </header>
 <div class="ad-banners" id="adBanners"></div>
-<nav class="ad-tabs" id="adTabs" role="tablist" aria-label="Team details"><button type="button" role="tab" data-tab="agents" class="on">Agents <span class="n" id="adNAgents">0</span></button><button type="button" role="tab" data-tab="timeline">Timeline</button><button type="button" role="tab" data-tab="plan">Plan</button><button type="button" role="tab" data-tab="files">Files <span class="n" id="adNFiles">0</span></button><button type="button" role="tab" data-tab="terminal">Terminal</button></nav>
+<nav class="ad-tabs" id="adTabs" role="tablist" aria-label="Team details"><button type="button" role="tab" data-tab="team" class="on">Team <span class="n" id="adNAgents">0</span></button><button type="button" role="tab" data-tab="messages">Messages</button><button type="button" role="tab" data-tab="files">Files <span class="n" id="adNFiles">0</span></button><button type="button" role="tab" data-tab="terminal">Terminal</button></nav>
 <div class="ad-body" id="adBody">
-<div class="ad-pane" id="adPaneAgents"><div class="ad-empty" id="adAgentsEmpty"><b>No agents yet</b><span>Send a message to the lead. Its helpers appear here with their live thinking.</span></div><div class="ad-roster" id="adRoster"></div></div>
-<div class="ad-pane" id="adPaneTimeline" hidden><div class="ad-chips" id="adChips"></div><div class="ad-feed" id="adFeed"></div><button type="button" class="ad-jump" id="adJump">Jump to latest</button></div>
-<div class="ad-pane" id="adPanePlan" hidden><div id="adPlan"></div><div id="adNotes"></div></div>
+<div class="ad-pane" id="adPaneTeam"><div class="ad-why" id="adWhy" hidden></div><div class="ad-empty" id="adAgentsEmpty"><b>No team running</b><span>In Agent mode the lead first decides whether your request needs a team. Simple requests are answered normally. Bigger ones are split into agents that work at the same time, each with its own separate memory.</span></div><div class="ad-roster" id="adRoster"></div></div>
+<div class="ad-pane" id="adPaneMessages" hidden><p class="ad-intro">Agents cannot see each other's work or thinking. They only know what they tell each other, and this is where they do it.</p><div class="ad-toolbar"><div class="ad-chips" id="adChips"></div><label class="ad-check"><input type="checkbox" id="adShowActions"><span>Show actions</span></label></div><div class="ad-feed" id="adFeed"></div><button type="button" class="ad-jump" id="adJump">Jump to latest</button></div>
 <div class="ad-pane" id="adPaneFiles" hidden><div id="adFiles"></div></div>
 <div class="ad-pane" id="adPaneTerminal" hidden><div id="adTerminal"></div></div>
 </div>
@@ -3119,19 +3152,20 @@ async function send(){
  if(/^\/edit-system-prompt\s*$/i.test(text)){
   $('prompt').value='';autosize();hideSlashMenu();await openSettings();activateSettingsTab('general');$('systemPrompt').focus();toast('Edit Kurt’s system prompt in Settings, then save it');return;
  }
- if(state.mode==='agent'){await sendAgent(text);return}
+ const handoff=state.handoff;state.handoff=null;
+ if(state.mode==='agent'&&!handoff){await sendAgent(text);return}
  const slash=parseSlashInvocation(text);if(slash?.kind==='mcp'){await sendMcpTool(text,slash.tool,slash.args);return}
  let requestText=text,skillId='';if(slash?.kind==='skill'){if(!slash.args){toast('Add a request after /'+slash.skill.id);return}requestText=slash.args;skillId=slash.skill.id}
  if(await linkFolderFromMessage(text)){return}
-  const retryExisting=!!state.retryExistingTurn;state.retryExistingTurn=false;
+  const retryExisting=!!state.retryExistingTurn||!!handoff;state.retryExistingTurn=false;
  const run=++state.run;const route=$('topModel').value;
- const messageId=state.retryMessageId||(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2));state.retryMessageId=null;
+ const messageId=(handoff&&handoff.messageId)||state.retryMessageId||(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2));state.retryMessageId=null;
  setBusy(true);
  try{if(state.pendingUploads.length){const uploaded=await attachFiles();if(!uploaded){setBusy(false);return}}await ensureChat({id:messageId,content:text,route})}catch(error){if(run===state.run)setBusy(false);toast(error.message);return}
  if(run!==state.run)return;
  $('prompt').value='';autosize();hint();
  if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
- follow=true;const sentAttachments=takeSentAttachments();if(!retryExisting)renderMessage('user',text,null,{attachments:sentAttachments});const node=renderMessage('assistant','');node.classList.add('live');node.__t0=performance.now();node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
+ follow=true;const sentAttachments=handoff?handoff.attachments:takeSentAttachments();if(!retryExisting)renderMessage('user',text,null,{attachments:sentAttachments});const node=renderMessage('assistant','');node.classList.add('live');node.__t0=performance.now();node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
  $('chatMeta').textContent='Generating…';
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
  const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',blockRationale='',pending=false,thinkStart=0;node.__artifacts=[];node.__terminals=new Map();const showReasoning=live=>{reasoning=[modelRationale,blockRationale].filter(Boolean).join('\n\n');setReasoning(node,reasoning,live)};
@@ -3193,7 +3227,8 @@ const AG_PATHS={
  msg:'<path d="M21 12a8 8 0 0 1-11.7 7L3 21l2-5.3A8 8 0 1 1 21 12z"/>',
  file:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
  user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/>',
- recover:'<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/>'
+ recover:'<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/>',
+ lock:'<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'
 };
 function agIcon(kind){return '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">'+(AG_PATHS[kind]||AG_PATHS.note)+'</svg>'}
 function agEl(tag,cls,text){const el=document.createElement(tag);if(cls)el.className=cls;if(text!==undefined&&text!==null)el.textContent=text;return el}
@@ -3204,22 +3239,22 @@ function agClock(ts){return new Date(ts*1000).toLocaleTimeString([],{hour:'2-dig
 function agDur(sec){sec=Math.max(0,Math.round(sec));const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;return h?h+'h '+m+'m':m?m+'m '+String(s).padStart(2,'0')+'s':s+'s'}
 function agAgo(ts){if(!ts)return '';const d=agNow()-ts;return d<5?'just now':d<90?Math.round(d)+'s ago':d<5400?Math.round(d/60)+'m ago':Math.round(d/3600)+'h ago'}
 function agSize(n){n=Number(n)||0;return n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':(n/1048576).toFixed(1)+' MB'}
-const AG_STATUS={working:'Working',orchestrating:'Coordinating',watching:'Monitoring',idle:'Idle',done:'Done',blocked:'Stuck',waiting:'Needs approval',retrying:'Retrying',retired:'Retired',stopped:'Stopped',finished:'Finished'};
+const AG_STATUS={queued:'Queued',working:'Working',orchestrating:'Coordinating',watching:'Monitoring',idle:'Idle',done:'Done',blocked:'Stuck',waiting:'Needs approval',retrying:'Retrying',retired:'Retired',stopped:'Stopped',finished:'Finished'};
 const AG_ACTIVE=['working','waiting','retrying'];
 
 /* ---------- state ---------- */
-const AG_TABS=['agents','timeline','plan','files','terminal'];
+const AG_TABS=['team','messages','files','terminal'];
 function agentNewState(old){return{seq:-1,epoch:'',exists:false,running:false,finished:false,finishSummary:'',continuous:false,prefSet:false,idlePaused:false,
- goal:'',plan:'',notes:{},startedAt:0,skew:0,agents:new Map(),entries:new Map(),cards:new Map(),timeline:[],timelineIds:new Set(),msgs:[],files:new Map(),terminals:new Map(),
- approvals:new Map(),cooldown:0,reason:'',busyPoll:false,selected:'',tab:old&&AG_TABS.includes(old.tab)?old.tab:'agents',goalOpen:false,open:false,
+ goal:'',plan:'',decision:null,showActions:false,startedAt:0,skew:0,agents:new Map(),entries:new Map(),cards:new Map(),timeline:[],timelineIds:new Set(),msgs:[],files:new Map(),terminals:new Map(),
+ approvals:new Map(),cooldown:0,reason:'',busyPoll:false,selected:'',tab:old&&AG_TABS.includes(old.tab)?old.tab:'team',goalOpen:false,open:false,
  thoughtOpen:new Set(),taskOpen:new Set(),cardOpen:new Set(),dirty:{},raf:0,feedQueue:[],cdNode:null,liveNode:null,liveItems:new Map(),liveSeen:new Set(),liveStart:0}}
 function agentReset(){
  if(state.agentTimer){clearInterval(state.agentTimer);state.agentTimer=null}
  if(state.agentTick){clearInterval(state.agentTick);state.agentTick=null}
  const old=state.agent;if(old&&old.raf)cancelAnimationFrame(old.raf);
  state.agent=agentNewState(old);state.agentSeen=new Set();
- ['adRoster','adBanners','adFeed','adChips','adPlan','adNotes','adFiles','adTerminal'].forEach(id=>{const el=$(id);if(el)el.replaceChildren()});
- agentSetTab(state.agent.tab);agentSyncPanel();agentDirty('head','banners','roster','chips','feed','plan','files','strip');
+ ['adRoster','adBanners','adFeed','adChips','adFiles','adTerminal','adWhy'].forEach(id=>{const el=$(id);if(el)el.replaceChildren()});
+ agentSetTab(state.agent.tab);agentSyncPanel();agentDirty('head','banners','roster','chips','feed','files','strip');
 }
 function agentSelect(name){const a=state.agent;a.selected=name;a.dirty.feedFull=true;agentDirty('chips','feed')}
 function agentDirty(){const a=state.agent;if(!a)return;for(const part of arguments)a.dirty[part]=true;if(!a.raf)a.raf=requestAnimationFrame(agentRender)}
@@ -3244,7 +3279,7 @@ function agentWorkers(){return [...state.agent.agents.values()].filter(x=>!x.lea
 function agentCounts(){
  const w=agentWorkers();
  return{done:w.filter(x=>x.status==='done'||x.status==='finished').length,work:w.filter(x=>AG_ACTIVE.includes(x.status)).length,block:w.filter(x=>x.status==='blocked').length,
-  idle:w.filter(x=>['idle','stopped'].includes(x.status)).length,total:w.length}
+  queued:w.filter(x=>x.status==='queued').length,idle:w.filter(x=>['idle','stopped'].includes(x.status)).length,total:w.length}
 }
 function agentOverall(){
  const a=state.agent,c=agentCounts();
@@ -3254,12 +3289,18 @@ function agentOverall(){
  const wait=Math.ceil(a.cooldown-agNow());
  if(wait>0)return{tone:'warn',text:(a.reason==='rate limit'?'Rate limited':'Model unreachable')+' · retrying in '+wait+'s'};
  if(a.idlePaused)return{tone:'info',text:'Paused · waiting for your message'};
- const parts=[a.continuous?'Running continuously':'Running'];
- if(c.total)parts.push(c.done+' of '+c.total+' done');if(c.block)parts.push(c.block+' stuck, lead is fixing it');else if(c.work)parts.push(c.work+' working');else if(c.total&&c.done<c.total)parts.push('team idle');
+ const parts=[];
+ if(c.work)parts.push(c.work===1?'1 agent working':c.work+' agents working in parallel');
+ else if(c.block)parts.push(c.block+' stuck, lead is fixing it');
+ else if(c.queued)parts.push('Starting the next agents');
+ else parts.push(a.continuous?'Running continuously':'Running');
+ if(c.queued&&c.work)parts.push(c.queued+' queued');
+ if(c.total)parts.push(c.done+' of '+c.total+' done');
  if(a.startedAt)parts.push(agDur(agNow()-a.startedAt));
  return{tone:'live',text:parts.join(' · ')};
 }
 function agentNowText(ag){
+ if(ag.status==='queued')return{text:'Waiting for '+((ag.needs||[]).join(', ')||'a teammate')+' to finish',quiet:true};
  if(ag.status==='blocked')return{text:'Stuck: the lead is working on a fix',quiet:false};
  if(ag.status==='done')return{text:ag.current||'Finished: waiting for the lead',quiet:true};
  if(['idle','stopped','finished','retired'].includes(ag.status))return{text:ag.current||({idle:'Waiting for work',stopped:'Stopped',finished:'Finished',retired:'Retired'})[ag.status],quiet:true};
@@ -3269,17 +3310,26 @@ function agentIsActive(ag){return AG_ACTIVE.includes(ag.status)||ag.status==='or
 
 /* ---------- render: header + banners ---------- */
 function renderStatusLine(){const o=agentOverall();$('adPulse').className='ad-pulse '+o.tone;$('adStatus').textContent=o.text}
+function renderWhy(){
+ const a=state.agent,box=$('adWhy'),d=a.decision;
+ if(!d||d.mode!=='team'||!(d.agents||[]).length){box.hidden=true;box.replaceChildren();return}
+ box.hidden=false;box.replaceChildren();
+ box.append(agEl('b','','Why a team'),agEl('p','',d.reason||'The work splits into parts that can run at the same time.'));
+ const row=agEl('div','ad-why-row');
+ d.agents.forEach(x=>{const chip=agEl('span','ad-why-chip');agTint(chip,x.name);chip.append(agEl('i'),agEl('span','',x.name),agEl('small','',(x.needs&&x.needs.length)?'after '+x.needs.join(', '):'starts now'));row.appendChild(chip)});
+ box.appendChild(row);
+}
 function renderHead(){
- const a=state.agent;renderStatusLine();$('agentStop').disabled=!a.running;
+ const a=state.agent;renderStatusLine();renderWhy();$('agentStop').disabled=!a.running;
  const box=$('adContinuous');if(box.checked!==a.continuous)box.checked=a.continuous;
  const help=a.continuous?'On: the team keeps improving the work until you press Stop.':'Off: the lead ends the run once the project is finished and verified.';$('adModeHelp').textContent=help;$('adModeBox').title=help;
  const goal=$('adGoal');goal.hidden=!a.goal;if(a.goal){$('adGoalText').textContent=a.goal;goal.classList.toggle('open',a.goalOpen)}
  const c=agentCounts(),prog=$('adProgress');prog.hidden=!c.total;
  if(c.total){
-  const bar=$('adBar'),segs=[['s-done',c.done],['s-work',c.work],['s-block',c.block],['s-idle',c.idle]];
+  const bar=$('adBar'),segs=[['s-done',c.done],['s-work',c.work],['s-queue',c.queued],['s-block',c.block],['s-idle',c.idle]];
   bar.replaceChildren();segs.forEach(([cls,n])=>{if(n){const seg=agEl('i',cls);seg.style.flexGrow=String(n);seg.style.flexBasis='0';bar.appendChild(seg)}});
   const legend=$('adLegend');legend.replaceChildren();
-  [['l-done',c.done,'done'],['l-work',c.work,'working'],['l-block',c.block,'blocked'],['l-idle',c.idle,'idle']].forEach(([cls,n,label])=>{if(n)legend.appendChild(agEl('span',cls,n+' '+label))});
+  [['l-done',c.done,'done'],['l-work',c.work,'working'],['l-queue',c.queued,'queued'],['l-block',c.block,'stuck'],['l-idle',c.idle,'idle']].forEach(([cls,n,label])=>{if(n)legend.appendChild(agEl('span',cls,n+' '+label))});
  }
 }
 function agentBanner(tone,title,body){const box=agEl('div','ad-banner '+tone);box.appendChild(agEl('b','',title));if(body)box.appendChild(agEl('p','',body));return box}
@@ -3314,8 +3364,13 @@ function agentCard(name){
  head.onclick=()=>{const open=!a.cardOpen.has(name);if(open)a.cardOpen.add(name);else a.cardOpen.delete(name);root.classList.toggle('open',open);head.setAttribute('aria-expanded',String(open))};
  const now=agEl('div','ac-now'),nowText=agEl('span');now.append(agEl('i'),nowText);
  const alert=agEl('div','ac-alert'),alertP=agEl('p');alert.append(agEl('b','','Stuck. The lead is working on a fix.'),alertP);alert.hidden=true;
- const taskSec=agEl('div','ac-sec'),task=agEl('p','ac-task');taskSec.append(agEl('h4','','Task'),task);
+ const taskSec=agEl('div','ac-sec'),task=agEl('p','ac-task');taskSec.append(agEl('h4','','Assignment from the lead'),task);
  task.onclick=()=>{if(a.taskOpen.has(name))a.taskOpen.delete(name);else a.taskOpen.add(name);task.classList.toggle('open',a.taskOpen.has(name))};
+ const planSec=agEl('div','ac-sec'),planBox=agEl('div','ac-planbox');planSec.append(agEl('h4','','Plan (only the lead sees it)'),planBox);
+ const memSec=agEl('div','ac-sec ac-mem'),memH=agEl('h4'),memWho=agEl('small');
+ memH.innerHTML=agIcon('lock');memH.append(agEl('span','','Private memory'),memWho);
+ const memNotes=agEl('div'),memTalk=agEl('div','mem-row'),memFiles=agEl('div','mem-row');
+ memSec.append(memH,agEl('div','mem-lbl','NOTES'),memNotes,agEl('div','mem-lbl','HAS CHATTED WITH'),memTalk,agEl('div','mem-lbl','FILES IT TOUCHED'),memFiles);
  const hint=agEl('div','ac-hint','The lead thinks and replies in the chat on the left. Its actions are listed below.');hint.hidden=true;
  const thSec=agEl('div','ac-sec'),th=agEl('div','th'),thHead=agEl('button','th-head'),thLabel=agEl('span','th-label'),thTime=agEl('time','th-time'),thText=agEl('pre','th-text');
  thHead.type='button';thHead.append(agEl('span','th-dot'),thLabel,agEl('span','th-grow'),thTime,agEl('span','th-chev','›'));
@@ -3325,10 +3380,10 @@ function agentCard(name){
  const saySec=agEl('div','ac-sec'),say=agEl('div','ac-say');saySec.append(agEl('h4','','Latest message'),say);
  const repSec=agEl('div','ac-sec'),repH=agEl('h4','','Report'),rep=agEl('p','ac-report');repSec.append(repH,rep);
  const stepSec=agEl('div','ac-sec'),steps=agEl('ul','ac-steps');stepSec.append(agEl('h4','','Recent steps'),steps);
- const foot=agEl('div','ac-foot'),btn=agEl('button','ad-btn small','Show in timeline');btn.type='button';btn.onclick=()=>{agentSelect(name);agentSetTab('timeline')};foot.appendChild(btn);
- const detail=agEl('div','ac-detail');detail.append(taskSec,hint,thSec,saySec,repSec,stepSec,foot);
+ const foot=agEl('div','ac-foot'),btn=agEl('button','ad-btn small','See its messages');btn.type='button';btn.onclick=()=>{agentSelect(name);agentSetTab('messages')};foot.appendChild(btn);
+ const detail=agEl('div','ac-detail');detail.append(taskSec,planSec,memSec,hint,thSec,saySec,repSec,stepSec,foot);
  root.append(head,now,alert,detail);
- c={root,av,nm,role,pill,now,nowText,alert,alertP,taskSec,task,hint,thSec,th,thLabel,thTime,thText,thMore,thSum,thList,saySec,say,repSec,repH,rep,stepSec,steps};
+ c={root,av,nm,role,pill,now,nowText,alert,alertP,taskSec,task,planSec,planBox,memSec,memWho,memNotes,memTalk,memFiles,hint,thSec,th,thLabel,thTime,thText,thMore,thSum,thList,saySec,say,repSec,repH,rep,stepSec,steps};
  a.cards.set(name,c);return c;
 }
 function agentFillThought(c,ag){
@@ -3349,6 +3404,21 @@ function agentFillThought(c,ag){
  const sig=earlier.map(e=>e.id).join(',');
  if(c.thMore.__sig!==sig){c.thMore.__sig=sig;c.thSum.textContent='Earlier thoughts ('+earlier.length+')';c.thList.replaceChildren();earlier.forEach(e=>{const p=agEl('p','th-old',String(e.text).trim().slice(-900));p.onclick=()=>p.classList.toggle('open');c.thList.appendChild(p)})}
 }
+function agentFillMemory(c,ag){
+ const notes=(ag.notes||[]).slice(0,8),peers=ag.peers||[],files=(ag.files||[]).slice(-8);
+ const sig=JSON.stringify([notes.map(n=>[n.key,n.ts]),peers,files,ag.name]);
+ if(c.memSec.__sig===sig)return;c.memSec.__sig=sig;
+ c.memWho.textContent='only '+(ag.lead?'the lead':ag.name)+' sees this';
+ c.memNotes.replaceChildren();
+ if(!notes.length)c.memNotes.appendChild(agEl('div','mem-empty','Nothing saved yet.'));
+ notes.forEach(n=>{const row=agEl('div','mem-note');row.append(agEl('b','',n.key),agEl('span','',n.value));c.memNotes.appendChild(row)});
+ c.memTalk.replaceChildren();
+ if(!peers.length)c.memTalk.appendChild(agEl('div','mem-empty','Nobody yet.'));
+ peers.forEach(name=>{const chip=agEl('span','mem-chip');agTint(chip,name);chip.append(agEl('i'),document.createTextNode(name==='lead'?'Lead':name));c.memTalk.appendChild(chip)});
+ c.memFiles.replaceChildren();
+ if(!files.length)c.memFiles.appendChild(agEl('div','mem-empty','None yet.'));
+ files.forEach(f=>c.memFiles.appendChild(agEl('span','mem-chip file',f)));
+}
 function agentFillCard(c,ag){
  const a=state.agent,active=agentIsActive(ag);
  const open=a.cardOpen.has(ag.name);
@@ -3356,13 +3426,16 @@ function agentFillCard(c,ag){
  c.root.firstChild.setAttribute('aria-expanded',String(open));
  c.av.textContent=ag.lead?'L':String(ag.name||'?').charAt(0);
  c.nm.textContent=ag.lead?'Lead':ag.name;
- const bits=[ag.lead?'Plans, assigns and verifies':(ag.role||'')];if(ag.turns)bits.push(ag.turns+(ag.turns===1?' step':' steps'));const files=(ag.files||[]).length;if(files)bits.push(files+(files===1?' file':' files'));
+ const bits=[ag.lead?'Plans, assigns and verifies':(ag.role||'')];if(ag.turns)bits.push(ag.turns+(ag.turns===1?' step':' steps'));
  c.role.textContent=bits.filter(Boolean).join(' · ');c.role.title=c.role.textContent;
  c.pill.textContent=AG_STATUS[ag.status]||ag.status;
  const nt=agentNowText(ag);c.nowText.textContent=nt.text;c.now.title=nt.text;c.now.className='ac-now'+(nt.quiet?' quiet':'');
  const blocked=ag.status==='blocked';c.alert.hidden=!blocked;
  if(blocked){c.alertP.textContent=(ag.blocked||'No reason was given.')+(ag.recoveries?'\nAutomatic restarts used: '+ag.recoveries:'')}
  c.taskSec.hidden=ag.lead||!ag.task;c.task.textContent=ag.task||'';c.task.title=ag.task||'';c.task.classList.toggle('open',a.taskOpen.has(ag.name));
+ c.planSec.hidden=!ag.lead||!a.plan;
+ if(ag.lead&&a.plan&&c.planBox.__v!==a.plan){c.planBox.__v=a.plan;c.planBox.replaceChildren(agentPlanList(agentPlanItems(a.plan)))}
+ agentFillMemory(c,ag);
  agentFillThought(c,ag);
  const outs=[...(a.entries.get(ag.name)||new Map()).values()].filter(e=>e.kind==='output'&&e.text&&e.text.trim());
  const out=outs.length?String(outs[outs.length-1].text).trim():'';
@@ -3381,12 +3454,12 @@ function renderRoster(){
  const list=[...a.agents.values()].filter(x=>x.status!=='retired').sort((x,y)=>(y.lead?1:0)-(x.lead?1:0));
  const keep=new Set(list.map(x=>x.name));
  a.cards.forEach((c,name)=>{if(!keep.has(name)){c.root.remove();a.cards.delete(name)}});
- $('adNAgents').textContent=String(list.length);$('adAgentsEmpty').hidden=list.length>0;
+ $('adNAgents').textContent=String(list.filter(x=>!x.lead).length);$('adAgentsEmpty').hidden=list.length>0;
  list.forEach((ag,index)=>{const c=agentCard(ag.name);agentFillCard(c,ag);if(host.children[index]!==c.root)host.insertBefore(c.root,host.children[index]||null)});
 }
 
 /* ---------- render: timeline ---------- */
-function agentItemVisible(item){const sel=state.agent.selected;if(!sel)return true;return item.t==='act'?item.d.agent===sel:(item.d.from===sel||item.d.to===sel)}
+function agentItemVisible(item){const a=state.agent,sel=a.selected;if(item.t==='act'&&!a.showActions)return false;if(!sel)return true;return item.t==='act'?item.d.agent===sel:(item.d.from===sel||item.d.to===sel||item.d.to==='all')}
 function agentActivityNode(item){
  const d=item.d,node=agEl('div','ad-item k-'+d.kind+(d.ok===false?' bad':'')),ic=agEl('span','ad-ic'),text=agEl('div','ad-text'),time=agEl('time','ad-time',agClock(d.ts));
  agTint(node,d.agent);ic.innerHTML=agIcon(d.kind);
@@ -3399,7 +3472,7 @@ function agentActivityNode(item){
 function agentMessageNode(d){
  const node=agEl('div','ad-item k-msg from-'+(d.from==='user'?'user':'agent')),ic=agEl('span','ad-ic'),text=agEl('div','ad-text'),time=agEl('time','ad-time',agClock(d.ts));
  agTint(node,d.from);ic.innerHTML=agIcon(d.from==='user'?'user':'msg');
- text.append(agEl('span','ad-who',d.from==='lead'?'Lead':d.from),agEl('span','ad-to',' → '+(d.to==='lead'?'Lead':d.to)),agEl('div','ad-msgtext',d.text||''));
+ text.append(agEl('span','ad-who',d.from==='lead'?'Lead':d.from),agEl('span','ad-to',' → '+(d.to==='lead'?'Lead':d.to==='all'?'everyone':d.to)),agEl('div','ad-msgtext',d.text||''));
  node.append(ic,text,time);node.classList.add('has-detail');node.onclick=()=>node.classList.toggle('open');
  return node;
 }
@@ -3413,12 +3486,12 @@ function renderChips(){
 }
 function renderFeed(full){
  const a=state.agent,feed=$('adFeed'),body=$('adBody');
- const visible=a.tab==='timeline',near=agentNear(body)||full;
+ const visible=a.tab==='messages',near=agentNear(body)||full;
  const make=item=>item.t==='act'?agentActivityNode(item):agentMessageNode(item.d);
  if(full){
   feed.replaceChildren();a.feedQueue=[];
   const items=a.timeline.filter(agentItemVisible).slice(-300);
-  if(!items.length){const empty=agEl('div','ad-empty');empty.append(agEl('b','',a.selected?'Nothing from '+a.selected+' yet':'No activity yet'),agEl('span','',a.exists?'Actions, files and messages appear here as the team works.':'Send a message to the lead to start.'));feed.appendChild(empty)}
+  if(!items.length){const empty=agEl('div','ad-empty');empty.append(agEl('b','',a.selected?'No messages for '+a.selected+' yet':'No messages yet'),agEl('span','',a.exists?'When agents ask each other for something or hand over a result, it shows up here.':'Send a request in Agent mode to start.'));feed.appendChild(empty)}
   else items.forEach(item=>feed.appendChild(make(item)));
  }else{
   const fresh=a.feedQueue.splice(0).filter(agentItemVisible);
@@ -3436,16 +3509,6 @@ function agentPlanItems(plan){
  });
 }
 function agentPlanList(items){const ul=agEl('ul','ad-plan');items.forEach(it=>{const li=agEl('li',it.done?'done':''),box=agEl('i','','\u2713');li.append(box,agEl('span','',it.text));ul.appendChild(li)});return ul}
-function renderPlan(){
- const a=state.agent,plan=$('adPlan'),notes=$('adNotes');plan.replaceChildren();notes.replaceChildren();
- const items=agentPlanItems(a.plan),done=items.filter(i=>i.done).length;
- const ph=agEl('div','ad-h');ph.append(agEl('span','','Plan'),agEl('small','',items.length?done+' of '+items.length+' done':''));plan.appendChild(ph);
- if(!items.length)plan.appendChild(agEl('div','ad-empty','The lead has not written a plan yet.'));else plan.appendChild(agentPlanList(items));
- notes.appendChild(agEl('div','ad-h','Shared notes'));
- const keys=Object.keys(a.notes||{});
- if(!keys.length)notes.appendChild(agEl('div','ad-empty','No shared notes yet.'));
- keys.forEach(key=>{const n=a.notes[key],box=agEl('div','ad-note');box.append(agEl('b','',key),agEl('small','','by '+(n.by||'')),agEl('p','',n.value||''));notes.appendChild(box)});
-}
 function renderFiles(){
  const a=state.agent,host=$('adFiles');host.replaceChildren();
  const rows=[...a.files.values()].sort((x,y)=>y.ts-x.ts),outputs=rows.filter(x=>x.output),source=outputs.length?outputs:rows,shown=source.slice(0,24);
@@ -3476,21 +3539,21 @@ function renderStrip(){
  [...a.agents.values()].filter(x=>x.status!=='retired').slice(0,5).forEach(ag=>{const dot=agEl('i',agentIsActive(ag)?'working':'');agTint(dot,ag.name);dots.appendChild(dot)});
  const o=agentOverall(),c=agentCounts(),t=$('agentStripText');t.replaceChildren();
  t.appendChild(agEl('b','',a.approvals.size?'Approval needed':o.tone==='done'?'Finished':a.running?'Team working':'Team stopped'));
- const bits=[];if(c.total){bits.push(c.done+'/'+c.total+' done');if(c.work)bits.push(c.work+' working');if(c.block)bits.push(c.block+' blocked')}
+ const bits=[];if(c.total){bits.push(c.done+'/'+c.total+' done');if(c.work)bits.push(c.work+' working');if(c.queued)bits.push(c.queued+' queued');if(c.block)bits.push(c.block+' stuck')}
  if(bits.length)t.appendChild(agEl('em','',' · '+bits.join(' · ')));
  strip.classList.toggle('attn',a.approvals.size>0||c.block>0);
 }
 function agentSetTab(tab){
- const a=state.agent;if(!AG_TABS.includes(tab))tab='agents';a.tab=tab;
+ const a=state.agent;if(tab==='agents')tab='team';if(tab==='timeline')tab='messages';if(!AG_TABS.includes(tab))tab='team';a.tab=tab;
  document.querySelectorAll('#adTabs button').forEach(b=>{const on=b.dataset.tab===tab;b.classList.toggle('on',on);b.setAttribute('aria-selected',on?'true':'false')});
- $('adPaneAgents').hidden=tab!=='agents';$('adPaneTimeline').hidden=tab!=='timeline';$('adPanePlan').hidden=tab!=='plan';$('adPaneFiles').hidden=tab!=='files';$('adPaneTerminal').hidden=tab!=='terminal';
- const body=$('adBody');if(tab==='timeline'||tab==='terminal')requestAnimationFrame(()=>{body.scrollTop=body.scrollHeight});else body.scrollTop=0;
+ $('adPaneTeam').hidden=tab!=='team';$('adPaneMessages').hidden=tab!=='messages';$('adPaneFiles').hidden=tab!=='files';$('adPaneTerminal').hidden=tab!=='terminal';
+ const body=$('adBody');if(tab==='messages'||tab==='terminal')requestAnimationFrame(()=>{body.scrollTop=body.scrollHeight});else body.scrollTop=0;
 }
 function agentRender(){
  const a=state.agent;if(!a)return;a.raf=0;const d=a.dirty;a.dirty={};
  agentSyncPanel();
- if(d.head)renderHead();if(d.banners)renderBanners();if(d.roster)renderRoster();if(d.chips)renderChips();
- if(d.feed)renderFeed(!!d.feedFull);if(d.plan)renderPlan();if(d.files)renderFiles();if(d.terminal)renderAgentTerminals();if(d.strip)renderStrip();
+ if(d.head)renderHead();if(d.banners)renderBanners();if(d.roster||d.plan)renderRoster();if(d.chips)renderChips();
+ if(d.feed)renderFeed(!!d.feedFull);if(d.files)renderFiles();if(d.terminal)renderAgentTerminals();if(d.strip)renderStrip();
 }
 function agentTickRender(){
  const a=state.agent;if(!a||!a.exists)return;
@@ -3619,7 +3682,7 @@ function agentRenderChat(message){
 }
 function agentApplySnapshot(s){
  const a=state.agent;a.exists=true;a.running=!!s.running;a.finished=!!s.finished;a.finishSummary=s.finish_summary||'';a.continuous=!!s.continuous;a.idlePaused=!!s.idle_paused;
- a.goal=s.goal||'';a.plan=s.plan||'';a.notes=s.notes||{};a.startedAt=s.started_at||0;if(s.now)a.skew=s.now-Date.now()/1000;
+ a.goal=s.goal||'';a.plan=s.plan||'';a.decision=s.decision&&s.decision.mode?s.decision:null;a.startedAt=s.started_at||0;if(s.now)a.skew=s.now-Date.now()/1000;
  a.agents.clear();a.entries.clear();a.cards.forEach(card=>card.root.remove());a.cards.clear();
  (s.agents||[]).forEach(ag=>{a.agents.set(ag.name,ag);const map=new Map();(ag.entries||[]).forEach(e=>map.set(e.id,e));a.entries.set(ag.name,map)});
  a.timeline=[];a.timelineIds=new Set();a.feedQueue=[];a.msgs=[];
@@ -3631,7 +3694,7 @@ function agentApplySnapshot(s){
  if(a.selected&&!a.agents.has(a.selected))a.selected='';
  (s.chat||[]).forEach(agentRenderChat);
  agentSyncLive();
- a.dirty.feedFull=true;agentDirty('head','banners','roster','chips','feed','plan','files','terminal','strip');
+ a.dirty.feedFull=true;agentDirty('head','banners','roster','chips','feed','files','terminal','strip');
 }
 function agentApplyEvent(event){
  const a=state.agent;a.exists=true;
@@ -3640,8 +3703,9 @@ function agentApplyEvent(event){
   case 'agent':agentUpsertAgent(event.agent);break;
   case 'activity':agentAddActivity(event.item);agentLiveStep(event.item);break;
   case 'channel':agentAddChannel(event.message);break;
-  case 'note':a.notes[event.key]=event.note;agentDirty('plan');break;
-  case 'plan':a.plan=event.plan||'';agentDirty('plan');break;
+  case 'note':{const ag=a.agents.get(event.agent);if(ag){ag.notes=(ag.notes||[]).filter(n=>n.key!==event.key);ag.notes.unshift({key:event.key,value:event.note.value,ts:event.note.ts});agentDirty('roster')}break}
+  case 'plan':a.plan=event.plan||'';agentDirty('roster');break;
+  case 'decision':a.decision=event.decision&&event.decision.mode?event.decision:null;agentDirty('head');break;
   case 'file':a.files.set(event.file.path,event.file);agentDirty('files');if(event.file.output)openWorkspaceFile(event.file.path,event.file.area||'work').catch(error=>toast(error.message));break;
   case 'terminal':agentTerminalEvent(event);break;
   case 'title':setTitle(event.title,$('chatMeta').textContent);refreshChats().catch(()=>{});break;
@@ -3682,21 +3746,45 @@ function agentOnChatLoaded(data){
  (data.messages||[]).forEach(message=>{if(message.message_id)state.agentSeen.add(message.message_id)});
  if(data.agent_mode)setMode('agent',true);agentPoll();
 }
+function agentNotice(text){
+ if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
+ const note=agEl('div','agent-note',text);$('messages').appendChild(note);follow=true;scrollEnd(true);return note;
+}
 async function sendAgent(text){
+ let pending=null,busySet=false;
  try{
   if(state.pendingUploads.length){const uploaded=await attachFiles();if(!uploaded)return}
   await ensureChat();
   const messageId=crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2);
-  const route=$('topModel').value,a=state.agent;
+  const route=$('topModel').value,a=state.agent,teamRunning=!!(a.exists&&a.running);
   $('prompt').value='';autosize();hint();updateSend();state.agentSeen.add(messageId);
   if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
   agentLiveEnd();
-  renderMessage('user',text,null,{attachments:takeSentAttachments()});follow=true;scrollEnd(true);
+  const attachments=takeSentAttachments();
+  renderMessage('user',text,null,{attachments});follow=true;scrollEnd(true);
+  if(!teamRunning){
+   // The lead decides first, so tell the person what is happening while that one short call runs.
+   pending=renderMessage('assistant','');pending.classList.add('from-agent','lead-only','live');
+   const status=pending.querySelector('.assistant-status');if(status)status.textContent='The lead is deciding whether this needs a team…';
+   scrollEnd(true);setBusy(true);busySet=true;
+  }
   const payload={chat_id:state.chatId,text,route,message_id:messageId};
   if(a.prefSet)payload.continuous=a.continuous;
-  try{await api('/api/agent/send',payload)}catch(error){$('prompt').value=text;autosize();updateSend();throw error}
+  let result;
+  try{result=await api('/api/agent/send',payload)}catch(error){if(pending){pending.remove();pending=null}if(busySet){setBusy(false);busySet=false}$('prompt').value=text;autosize();updateSend();throw error}
+  if(pending){pending.remove();pending=null}
+  if(result&&result.mode==='normal'){
+   // No team needed: continue through the ordinary chat, which already shows this message.
+   agentNotice('Agent mode: the lead decided this does not need a team'+(result.reason?' ('+String(result.reason).replace(/[.\s]+$/,'')+')':'')+', so Kurt is answering it normally.');
+   state.handoff={messageId,attachments};
+   $('prompt').value=text;setBusy(false);busySet=false;
+   await send();return;
+  }
+  if(busySet){setBusy(false);busySet=false}
+  if(result&&result.decision&&result.decision.mode==='team'){a.decision=result.decision}
   a.exists=true;a.prefSet=false;agentSyncPanel();ensureAgentTimer();await agentPoll();refreshChats().catch(()=>{});
- }catch(error){toast(error.message)}
+  if(result&&result.started&&result.decision&&result.decision.mode==='team'){a.open=true;agentSyncPanel()}
+ }catch(error){if(pending)pending.remove();if(busySet)setBusy(false);toast(error.message)}
 }
 
 /* ---------- wiring ---------- */
@@ -3706,6 +3794,7 @@ $('adContinuous').onchange=async event=>{
  const a=state.agent,value=event.target.checked;a.continuous=value;a.prefSet=true;agentDirty('head');
  if(state.chatId&&a.exists){try{await api('/api/agent/mode',{chat_id:state.chatId,continuous:value});a.prefSet=false;agentPoll()}catch(error){toast(error.message)}}
 };
+$('adShowActions').onchange=event=>{const a=state.agent;a.showActions=event.target.checked;a.dirty.feedFull=true;agentDirty('feed')};
 $('adGoal').onclick=()=>{const a=state.agent;a.goalOpen=!a.goalOpen;agentDirty('head')};
 $('adTabs').onclick=event=>{const b=event.target.closest('button[data-tab]');if(b)agentSetTab(b.dataset.tab)};
 $('adBody').addEventListener('scroll',()=>{const body=$('adBody');if(agentNear(body))$('adJump').classList.remove('show')});
@@ -8440,15 +8529,17 @@ class Handler(BaseHTTPRequestHandler):
                             emit({"type": "agents", "agents": agent_records, "running": len(agent_records)})
                             log_step("Lead agent delegated {} task(s) to subagents.".format(len(agent_records)), None,
                                      status="{} subagent(s) running…".format(len(agent_records)),
-                                     detail="Delegation decision recorded. Each child receives only recent chat context and its assigned task; children cannot access local files, execute commands, or approve changes.")
+                                     detail="Delegation decision recorded. Each child has its own private context and receives only its assigned task brief, not this chat; children cannot access local files, execute commands, or approve changes.")
                             for record in agent_records:
                                 log_step("Subagent {} started: {}".format(record["name"], record["task"][:220]), None,
                                          status="{} subagent(s) running…".format(len(agent_records)),
                                          detail="Assigned task: " + record["task"][:4000])
                             def run_child(task_text):
-                                child_system = "You are a read-only analysis subagent. Do not access files, request tools, run commands, or propose mutations. Return concise findings and uncertainties to the lead agent."
-                                child_messages = messages[-8:] + [{"role": "system", "content": child_system},
-                                                                  {"role": "user", "content": "Delegated task: " + task_text}]
+                                child_system = ("You are a read-only analysis subagent with your own private context. You cannot see the lead's conversation, only the task brief below. "
+                                                "Do not access files, request tools, run commands, or propose mutations. If the brief lacks something you need, say so instead of guessing. "
+                                                "Return concise findings and uncertainties to the lead agent.")
+                                child_messages = [{"role": "system", "content": child_system},
+                                                  {"role": "user", "content": "Task brief from the lead:\n" + task_text}]
                                 child_chunks = []
                                 for child_kind, child_chunk in K.stream_chat(child_messages, model=model, think=False,
                                                                               temperature=0.2, max_tokens=3072,
