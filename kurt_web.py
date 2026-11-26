@@ -1673,7 +1673,7 @@ body.modal-open .status-dot,body.modal-open .message,body.modal-open .message.li
 <div class="ad-banners" id="adBanners"></div>
 <nav class="ad-tabs" id="adTabs" role="tablist" aria-label="Team details"><button type="button" role="tab" data-tab="team" class="on">Team <span class="n" id="adNAgents">0</span></button><button type="button" role="tab" data-tab="messages">Messages</button><button type="button" role="tab" data-tab="files">Files <span class="n" id="adNFiles">0</span></button><button type="button" role="tab" data-tab="terminal">Terminal</button></nav>
 <div class="ad-body" id="adBody">
-<div class="ad-pane" id="adPaneTeam"><div class="ad-why" id="adWhy" hidden></div><div class="ad-empty" id="adAgentsEmpty"><b>No team running</b><span>In Agent mode the lead first decides whether your request needs a team. Simple requests are answered normally. Bigger ones are split into agents that work at the same time, each with its own separate memory.</span></div><div class="ad-roster" id="adRoster"></div></div>
+<div class="ad-pane" id="adPaneTeam"><div class="ad-why" id="adWhy" hidden></div><div class="ad-empty" id="adAgentsEmpty"><b>No team running</b><span>In Agent mode the lead handles every request. It can split bigger work into agents that work at the same time, each with its own separate memory.</span></div><div class="ad-roster" id="adRoster"></div></div>
 <div class="ad-pane" id="adPaneMessages" hidden><p class="ad-intro">Agents cannot see each other's work or thinking. They only know what they tell each other, and this is where they do it.</p><div class="ad-toolbar"><div class="ad-chips" id="adChips"></div><label class="ad-check"><input type="checkbox" id="adShowActions"><span>Show actions</span></label></div><div class="ad-feed" id="adFeed"></div><button type="button" class="ad-jump" id="adJump">Jump to latest</button></div>
 <div class="ad-pane" id="adPaneFiles" hidden><div id="adFiles"></div></div>
 <div class="ad-pane" id="adPaneTerminal" hidden><div id="adTerminal"></div></div>
@@ -3152,20 +3152,19 @@ async function send(){
  if(/^\/edit-system-prompt\s*$/i.test(text)){
   $('prompt').value='';autosize();hideSlashMenu();await openSettings();activateSettingsTab('general');$('systemPrompt').focus();toast('Edit Kurt’s system prompt in Settings, then save it');return;
  }
- const handoff=state.handoff;state.handoff=null;
- if(state.mode==='agent'&&!handoff){await sendAgent(text);return}
+ if(state.mode==='agent'){await sendAgent(text);return}
  const slash=parseSlashInvocation(text);if(slash?.kind==='mcp'){await sendMcpTool(text,slash.tool,slash.args);return}
  let requestText=text,skillId='';if(slash?.kind==='skill'){if(!slash.args){toast('Add a request after /'+slash.skill.id);return}requestText=slash.args;skillId=slash.skill.id}
  if(await linkFolderFromMessage(text)){return}
-  const retryExisting=!!state.retryExistingTurn||!!handoff;state.retryExistingTurn=false;
+  const retryExisting=!!state.retryExistingTurn;state.retryExistingTurn=false;
  const run=++state.run;const route=$('topModel').value;
- const messageId=(handoff&&handoff.messageId)||state.retryMessageId||(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2));state.retryMessageId=null;
+ const messageId=state.retryMessageId||(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2));state.retryMessageId=null;
  setBusy(true);
  try{if(state.pendingUploads.length){const uploaded=await attachFiles();if(!uploaded){setBusy(false);return}}await ensureChat({id:messageId,content:text,route})}catch(error){if(run===state.run)setBusy(false);toast(error.message);return}
  if(run!==state.run)return;
  $('prompt').value='';autosize();hint();
  if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
- follow=true;const sentAttachments=handoff?handoff.attachments:takeSentAttachments();if(!retryExisting)renderMessage('user',text,null,{attachments:sentAttachments});const node=renderMessage('assistant','');node.classList.add('live');node.__t0=performance.now();node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
+ follow=true;const sentAttachments=takeSentAttachments();if(!retryExisting)renderMessage('user',text,null,{attachments:sentAttachments});const node=renderMessage('assistant','');node.classList.add('live');node.__t0=performance.now();node.querySelector('.assistant-status').textContent='Connecting…';scrollEnd(true);
  $('chatMeta').textContent='Generating…';
  await refreshChats().catch(error=>console.warn('Could not refresh the chat list before generation:',error));
  const contentEl=node.querySelector('.content');let raw='',reasoning='',modelRationale='',blockRationale='',pending=false,thinkStart=0;node.__artifacts=[];node.__terminals=new Map();const showReasoning=live=>{reasoning=[modelRationale,blockRationale].filter(Boolean).join('\n\n');setReasoning(node,reasoning,live)};
@@ -3746,45 +3745,24 @@ function agentOnChatLoaded(data){
  (data.messages||[]).forEach(message=>{if(message.message_id)state.agentSeen.add(message.message_id)});
  if(data.agent_mode)setMode('agent',true);agentPoll();
 }
-function agentNotice(text){
- if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
- const note=agEl('div','agent-note',text);$('messages').appendChild(note);follow=true;scrollEnd(true);return note;
-}
 async function sendAgent(text){
- let pending=null,busySet=false;
  try{
   if(state.pendingUploads.length){const uploaded=await attachFiles();if(!uploaded)return}
   await ensureChat();
   const messageId=crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2);
-  const route=$('topModel').value,a=state.agent,teamRunning=!!(a.exists&&a.running);
+  const route=$('topModel').value,a=state.agent;
   $('prompt').value='';autosize();hint();updateSend();state.agentSeen.add(messageId);
   if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
   agentLiveEnd();
   const attachments=takeSentAttachments();
   renderMessage('user',text,null,{attachments});follow=true;scrollEnd(true);
-  if(!teamRunning){
-   // The lead decides first, so tell the person what is happening while that one short call runs.
-   pending=renderMessage('assistant','');pending.classList.add('from-agent','lead-only','live');
-   const status=pending.querySelector('.assistant-status');if(status)status.textContent='The lead is deciding whether this needs a team…';
-   scrollEnd(true);setBusy(true);busySet=true;
-  }
   const payload={chat_id:state.chatId,text,route,message_id:messageId};
   if(a.prefSet)payload.continuous=a.continuous;
   let result;
-  try{result=await api('/api/agent/send',payload)}catch(error){if(pending){pending.remove();pending=null}if(busySet){setBusy(false);busySet=false}$('prompt').value=text;autosize();updateSend();throw error}
-  if(pending){pending.remove();pending=null}
-  if(result&&result.mode==='normal'){
-   // No team needed: continue through the ordinary chat, which already shows this message.
-   agentNotice('Agent mode: the lead decided this does not need a team'+(result.reason?' ('+String(result.reason).replace(/[.\s]+$/,'')+')':'')+', so Kurt is answering it normally.');
-   state.handoff={messageId,attachments};
-   $('prompt').value=text;setBusy(false);busySet=false;
-   await send();return;
-  }
-  if(busySet){setBusy(false);busySet=false}
-  if(result&&result.decision&&result.decision.mode==='team'){a.decision=result.decision}
+  try{result=await api('/api/agent/send',payload)}catch(error){$('prompt').value=text;autosize();updateSend();throw error}
   a.exists=true;a.prefSet=false;agentSyncPanel();ensureAgentTimer();await agentPoll();refreshChats().catch(()=>{});
-  if(result&&result.started&&result.decision&&result.decision.mode==='team'){a.open=true;agentSyncPanel()}
- }catch(error){if(pending)pending.remove();if(busySet)setBusy(false);toast(error.message)}
+  if(result&&result.started){a.open=true;agentSyncPanel()}
+ }catch(error){toast(error.message)}
 }
 
 /* ---------- wiring ---------- */
