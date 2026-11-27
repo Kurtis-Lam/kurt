@@ -860,9 +860,12 @@ html.side-collapsed .menu-btn{display:inline-grid}
 .copy-mini{font-size:12px;padding:3px 9px;background:transparent;border-color:transparent;color:var(--muted);border-radius:7px}
 .copy-mini:hover{color:var(--text);background:var(--raise2)}
 
-.msg-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;min-height:32px;opacity:0;transition:opacity .15s}
-.message.assistant:hover .msg-foot,.message.assistant:last-child .msg-foot,.msg-foot:focus-within{opacity:1}
-@media(hover:none){.msg-foot{opacity:1}}
+.msg-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;min-height:32px}
+.msg-foot .copy-msg{opacity:0;transition:opacity .15s}
+.message.assistant:hover .msg-foot .copy-msg,.message.assistant:last-child .msg-foot .copy-msg,.msg-foot:focus-within .copy-msg{opacity:1}
+.response-metrics:empty{display:none}
+.say-text{color:var(--text);font:14px/1.65 var(--sans);white-space:pre-wrap;overflow-wrap:anywhere;padding:4px 0 8px}
+@media(hover:none){.msg-foot .copy-msg{opacity:1}}
 .copy-msg{width:30px;height:30px;margin-left:-6px}
 .copy-msg .ic{width:16px;height:16px}
 .message.live .copy-msg,.message.live .msg-foot{visibility:hidden}
@@ -2071,6 +2074,7 @@ function setThink(node,entries){
   const data=typeof item==='string'?{text:item}:item||{};
   if(data.kind==='approval'&&data.approval){body.appendChild(createApprovalRow(node,data));return}
   if(data.kind==='thinking'){const block=document.createElement('div');block.className='think-text';block.textContent=String(data.detail||'');body.appendChild(block);return}
+  if(data.say&&data.text){const say=document.createElement('div');say.className='say-text';say.textContent=String(data.text);body.appendChild(say);return}
   const PAUSE='Paused for your approval: ';
   if(typeof data.text==='string'&&data.text.startsWith(PAUSE)&&items.some(x=>x&&x.kind==='approval'&&x.approval&&String(x.text||x.approval.title||'')===data.text.slice(PAUSE.length)))return;
   const label=String(data.text||'Step'),detail=String(data.detail||'');
@@ -2153,7 +2157,7 @@ function resolveApprovalPause(node,event){
 
 
 
-function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const seconds=node.__thinkSeconds||(node.__t0?(performance.now()-node.__t0)/1000:0);setThinkLabel(node,false,seconds);if(!node.__userToggled)setThinkOpen(node,false)}
+function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const seconds=node.__thinkSeconds||(node.__t0?(performance.now()-node.__t0)/1000:0);setThinkLabel(node,false,seconds);if(!node.__userToggled)setThinkOpen(node,true)}
 function setApprovalOutput(node,event){const entries=node.__worklog||[];const item=entries.find(value=>value&&value.kind==='approval'&&value.approval&&value.approval.id===event.approval_id);if(item){item.output=event.output;setThink(node,entries)}}
 
 
@@ -2200,7 +2204,7 @@ function hint(){
 function setBusy(b){state.busy=b;const btn=$('sendBtn');btn.querySelector('use').setAttribute('href','#i-up');btn.title=b?'Kurt is working. You can send again when it finishes.':'Send message';btn.setAttribute('aria-label',btn.title);updateSend()}
 function cancelRun(){if(state.abort)state.abort.abort();state.abort=null;state.run++;setBusy(false)}
 function responseModelLabel(ref){if(!ref)return'';const item=state.models.find(m=>m.ref===ref);return item?`${item.label||item.name||item.model} · ${item.provider}`:String(ref)}
-function setResponseMeta(node,stats,model){const el=node?.querySelector('.response-metrics');if(!el)return;const parts=[];const seconds=Number(stats?.thought_seconds);const speed=Number(stats?.tokens_per_second);if(Number.isFinite(seconds)&&seconds>0)parts.push(`Generated in ${seconds.toFixed(seconds<10?1:0)}s`);if(Number.isFinite(speed)&&speed>0)parts.push(`${stats?.tokens_estimated?'~':''}${speed.toFixed(speed<10?1:0)} tok/s`);const label=responseModelLabel(model);if(label)parts.push(label);el.textContent=parts.join(' · ');if(stats?.tokens_estimated)el.title='Token rate is estimated from generated text length because the provider did not report output-token usage.'}
+function setResponseMeta(node,stats,model){const el=node?.querySelector('.response-metrics');if(!el)return;const parts=[];const label=responseModelLabel(model);if(label)parts.push(label);const speed=Number(stats?.tokens_per_second);if(Number.isFinite(speed)&&speed>0)parts.push(`${stats?.tokens_estimated?'~':''}${speed.toFixed(speed<10?1:0)} tok/s`);el.textContent=parts.join(' · ');if(stats?.tokens_estimated)el.title='Token rate is estimated from generated text length because the provider did not report output-token usage.'}
 function renderAgentBoard(node){
  const agents=node.__agents||[];let board=node.querySelector('.agent-board');
  if(!board){board=document.createElement('div');board.className='agent-board';const head=document.createElement('div');head.className='agent-board-head';head.textContent='Agent team';const list=document.createElement('div');list.className='agent-board-list';board.append(head,list);const bubble=node.querySelector('.bubble');bubble.insertBefore(board,bubble.querySelector('.content'))}
@@ -2240,7 +2244,7 @@ function renderMessage(role,content,artifacts,extra){
   const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindFileLinks(contentNode);renderMcpMedia(contentNode,extra?.media||[]);bindCopy(wrap);
   wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];
   if(extra?.reasoning&&!wrap.__worklog.some(entry=>entry&&entry.kind==='thinking'))wrap.__worklog.unshift({kind:'thinking',text:'Thinking',ok:null,detail:extra.reasoning});
-  setThink(wrap,wrap.__worklog);setThinkLabel(wrap,false,extra?.thinkingSeconds||(extra?.stats&&extra.stats.thought_seconds)||0);
+  setThink(wrap,wrap.__worklog);setThinkLabel(wrap,false,extra?.thinkingSeconds||(extra?.stats&&extra.stats.thought_seconds)||0);if(wrap.__worklog.length)setThinkOpen(wrap,true);
   setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);
   wrap.__artifacts=Array.isArray(artifacts)?artifacts.slice():[];
   bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'));
@@ -3609,13 +3613,13 @@ function agentLiveEnd(){
  if(!node.__worklog.length&&!node.dataset.raw){node.remove();return}
  setThink(node,node.__worklog);setThinkLabel(node,false,Date.now()/1000-a.liveStart);
  const status=node.querySelector('.assistant-status');if(status)status.textContent='';
- if(!node.__userToggled)setThinkOpen(node,false);
+ if(!node.__userToggled)setThinkOpen(node,true);
 }
 function agentLiveFinish(message){
  const a=state.agent,node=a.liveNode&&a.liveNode.isConnected?a.liveNode:null;
  if(!node){
   if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
-  const fresh=renderMessage('assistant',message.content,[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,model:message.model||null});
+  const fresh=renderMessage('assistant',message.content,[],{worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0,model:message.model||null,stats:message.stats||null});
   fresh.classList.add('from-agent','lead-only');follow=true;scrollEnd(true);return;
  }
  const safe=stripUnsupportedActions(message.content);
@@ -3623,12 +3627,12 @@ function agentLiveFinish(message){
  node.__worklog=node.__worklog.filter(item=>!(item.say&&item.text&&(flat(safe).includes(flat(item.text).slice(0,80))||flat(item.text).includes(flat(safe).slice(0,80)))));
  node.dataset.raw=safe;
  const content=node.querySelector('.content');content.innerHTML=renderMarkdown(safe);typesetMath(content);bindFileLinks(content);bindCopy(node);
- setResponseMeta(node,null,message.model||null);
+ setResponseMeta(node,message.stats||null,message.model||null);
  node.classList.remove('live');
  const seconds=message.thinking_seconds||(Date.now()/1000-a.liveStart);
  setThink(node,node.__worklog);setThinkLabel(node,false,seconds);
  const status=node.querySelector('.assistant-status');if(status)status.textContent='';
- if(!node.__userToggled)setThinkOpen(node,false);
+ if(!node.__userToggled)setThinkOpen(node,true);
  a.liveNode=null;a.liveItems=new Map();follow=true;scrollEnd(true);
 }
 function agentSyncLive(){
@@ -3677,7 +3681,7 @@ function agentRenderChat(message){
  state.agentSeen.add(message.message_id);
  if(message.role==='assistant'&&(!message.agent||message.agent==='lead')&&!message.quick){agentLiveFinish(message);return}
  if($('main').classList.contains('empty')){setEmpty(false);$('messages').replaceChildren()}
- agentLabelMessage(renderMessage(message.role,message.content,[],{model:message.model||null,worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0}),message);follow=true;scrollEnd(true);
+ agentLabelMessage(renderMessage(message.role,message.content,[],{model:message.model||null,stats:message.stats||null,worklog:message.worklog||[],reasoning:message.reasoning||'',thinkingSeconds:message.thinking_seconds||0}),message);follow=true;scrollEnd(true);
 }
 function agentApplySnapshot(s){
  const a=state.agent;a.exists=true;a.running=!!s.running;a.finished=!!s.finished;a.finishSummary=s.finish_summary||'';a.continuous=!!s.continuous;a.idlePaused=!!s.idle_paused;
