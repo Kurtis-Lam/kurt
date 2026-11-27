@@ -1000,6 +1000,8 @@ class AgentSwarm:
         self.failure_streak = 0
         self.lead_trace = []
         self.lead_think_seconds = 0.0
+        self.lead_tokens = 0
+        self.lead_gen_seconds = 0.0
         self.file_lock = threading.Lock()
         self.last_persist = 0.0
         self.started_at = time.time()
@@ -1213,14 +1215,31 @@ class AgentSwarm:
         self._entry_emit(agent, entry, done=True)
         return entry
 
-    def _trace_lead_thinking(self, reasoning, seconds):
+    def _trace_lead_thinking(self, reasoning, seconds, answer=""):
         text = str(reasoning or "").strip()
-        if not text:
+        say = str(answer or "").strip()
+        if not text and not say:
             return
         with self.lock:
-            self.lead_trace.append({"kind": "thinking", "text": "Thinking", "ok": None, "detail": clip_tail(text, 8000)})
-            del self.lead_trace[:-40]
-            self.lead_think_seconds += max(0.0, float(seconds))
+            if text:
+                self.lead_trace.append({"kind": "thinking", "text": "Thinking", "ok": None, "detail": clip_tail(text, 8000)})
+                self.lead_think_seconds += max(0.0, float(seconds))
+            if say:
+                self.lead_trace.append({"text": clip(say, 500), "detail": "", "ok": None, "say": True})
+            del self.lead_trace[:-60]
+
+    def _note_lead_generation(self, tokens, seconds):
+        with self.lock:
+            self.lead_tokens += max(0, int(tokens))
+            self.lead_gen_seconds += max(0.0, float(seconds))
+
+    def _take_lead_stats(self):
+        with self.lock:
+            tokens, seconds = self.lead_tokens, self.lead_gen_seconds
+            self.lead_tokens, self.lead_gen_seconds = 0, 0.0
+        if tokens <= 0 or seconds <= 0:
+            return {}
+        return {"thought_seconds": round(seconds, 1), "tokens_per_second": round(tokens / seconds, 1), "tokens_estimated": True}
 
     def _take_lead_trace(self):
         with self.lock:
@@ -1584,6 +1603,14 @@ class AgentSwarm:
                   "agent_mode": True, "agent": sender, "message_id": uuid.uuid4().hex}
         if attach and sender == "lead":
             worklog, seconds = self._take_lead_trace()
+            record["stats"] = self._take_lead_stats()
+            flat_text = re.sub(r"\s+", " ", str(text or "")).strip().lower()
+            def _duplicates_final(item):
+                if not item.get("say"):
+                    return False
+                said = re.sub(r"\s+", " ", str(item.get("text") or "")).strip().lower()
+                return bool(said) and bool(flat_text) and (said[:80] in flat_text or flat_text[:80] in said)
+            worklog = [item for item in worklog if not _duplicates_final(item)]
             if worklog:
                 record["worklog"] = worklog
                 record["reasoning"] = "\n\n".join(item["detail"] for item in worklog if item.get("kind") == "thinking")
@@ -1843,8 +1870,10 @@ class AgentSwarm:
                         pass
                     self._trace("model_response", agent, model=candidate.get("model"), entry=candidate.get("member_label"),
                                 seconds=round(time.monotonic() - started, 3), reasoning=reasoning, answer=answer)
+                    if agent.lead:
+                        self._note_lead_generation(round((len(reasoning) + len(answer)) / 4), time.monotonic() - started)
                     if agent.lead and entries:
-                        self._trace_lead_thinking(reasoning, time.monotonic() - started)
+                        self._trace_lead_thinking(reasoning, time.monotonic() - started, answer)
                     return Generation(reasoning, answer)
                 except StopRequested:
                     raise
