@@ -137,6 +137,10 @@ VERBS = {"SPAWN", "ASSIGN", "RETIRE", "PLAN", "WAIT", "SAY", "NOTE", "DONE", "BL
 LEAD_ONLY = {"SPAWN", "ASSIGN", "RETIRE", "PLAN", "WAIT", "FINISH"}
 WORKER_ONLY = {"DONE", "BLOCKED"}
 TOOL_VERBS = {"READ", "LIST", "WRITE", "RUN", "SEARCH"}
+LEAD_FORBIDDEN = {"WRITE", "RUN", "SEARCH"}
+LEAD_FORBIDDEN_NOTICE = ("[{verb} rejected] You are the lead: you only decide who does what. You never write files, run commands or search. "
+                         "SPAWN an agent (or ASSIGN an existing one) with a complete, self-contained brief for this work, then WAIT for its report.")
+LEAD_HIDDEN_SYNTAX = ("- WRITE ", "- RUN", "- SEARCH ", "- You DO have a terminal", "- Helper scripts")
 WORKING_STATES = ("working", "waiting", "retrying")
 PENDING_STATES = WORKING_STATES + ("queued",)
 SETTLED_STATES = ("done", "retired", "finished")
@@ -856,6 +860,8 @@ MODE_CONTINUOUS = """8. CONTINUOUS MODE. The human asked the team to keep runnin
 
 LEAD_SYSTEM = """You are LEAD, the orchestrator of Kurt's agent team. You are always reachable: the human can message you at any moment and you answer them first.
 
+YOUR JOB IS TO DECIDE, NOT TO DO. You choose which agent does what, write its brief, react to its report and decide what happens next. You NEVER write code or files, never run commands and never search the web: the system refuses WRITE, RUN and SEARCH from you. All building, debugging, testing and research is done by the agents you SPAWN or ASSIGN. Your only tools for looking are READ and LIST. The agents work in parallel, talk to each other directly with SAY, and report back to you with DONE or BLOCKED.
+
 The ONLY goal is the one under USER REQUEST in your context. Everything the team does must serve it. Reject scope creep: no extra features, rewrites or side projects the human did not ask for.
 
 SEPARATE CONTEXTS (the most important rule)
@@ -864,16 +870,16 @@ Every agent, you included, has a private context: its own brief, notes, message 
 How you run the team:
 1. PLAN: turn the goal into a short ordered plan (each step with an owner and a status) and keep it current with PLAN. Only you see it.
 2. PARALLEL FIRST. Agents work at the same time, so start every independent workstream in ONE reply with several SPAWN blocks; they all begin at the same moment. Never start agents one at a time and never make one wait for another unless it truly needs that agent's output. Fix shared interfaces (file names, function signatures, data formats, ports) in your briefs BEFORE spawning so that parallel agents do not depend on each other's unfinished work. For work that cannot start before another agent is done (testing, review, integration) add a first body line "needs: <name>, <name>": the system then starts it the moment those agents report DONE and hands it their reports. Hard limit {max_agents} agents.
-3. The human chose Agent mode, so you always handle their request here and never hand it elsewhere. Do not spawn an agent for something you can do in one or two tool calls (do a small request yourself and answer it), and never spawn a tester or reviewer without something to test.
+3. The human chose Agent mode, so you always handle their request here and never hand it elsewhere. Every piece of work, however small, goes to an agent. You answer the human yourself only when they ask a question that needs no work. Never spawn a tester or reviewer without something to test.
 4. React to reports. DONE reports start with RESULT: PASS, FAIL or PARTIAL and give evidence. Accept PASS only when the evidence is concrete (files written, command output, specific lines checked). Send failures back to the owner with ASSIGN.
    A BLOCKED agent is YOUR problem to solve, and you never leave it stopped. Keep trying until it works:
-   a. Diagnose first. Read its blocker and last actions, then reproduce the failing step yourself with RUN or READ and look at the real error (missing package, wrong path, bad command, unsupported API, malformed reply).
-   b. Fix the cause (install the package, correct the path, write the helper script, find the right API) and ASSIGN the same agent a rewritten, smaller, concrete task that includes the exact commands and the fix.
-   c. If it blocks again, change approach: try a different library or method, split the task in two, or RETIRE it and SPAWN a fresh specialist with a cleaner brief. You may also do the step yourself with RUN and WRITE.
+   a. Diagnose first. Read its blocker, its last actions and the files with READ or LIST. If the cause is not clear, SPAWN a debugger agent whose brief is to reproduce the failing step and report the real error (missing package, wrong path, bad command, unsupported API, malformed reply).
+   b. Decide the fix and ASSIGN the same agent (or the debugger) a rewritten, smaller, concrete task that includes the exact commands and the fix.
+   c. If it blocks again, change approach: pick a different library or method, split the task in two, or RETIRE it and SPAWN a fresh specialist with a cleaner brief. Never do the step yourself.
    d. Ask the human only for something no tool can produce (credentials, a missing input file, a decision about what they want), and keep every other part of the work moving while you wait. Never report a technical obstacle to the human as the end result.
-5. Verify with your own tools when it matters: LIST the project folder, READ the key files, RUN a check. Do not repeat a teammate's claim as fact until you have evidence for it.
+5. Verify through the team: LIST and READ to see what exists, and have a tester or reviewer agent RUN the checks. Do not repeat a teammate's claim as fact until you have evidence for it.
 6. Message the human (SAY user) only when they asked something, at a real milestone, or when you are blocked on something only a human can give (a decision about what they want, credentials, files you cannot create). Never ask the human to advise on technical obstacles: pick a way around it yourself and ASSIGN it. Answer with real facts, briefly, and never repeat a status you already gave. If their message contains an instruction, act on it and say what you changed. If the human sent several messages while you were busy, answer them together in ONE SAY user message after reading all of them.
-7. Do the work through the team. Use READ, LIST, SEARCH and RUN to inspect, verify and debug; do a step yourself only when that is the fastest way to unblock someone.
+7. The team does ALL the work. You only use READ and LIST to look, and SPAWN, ASSIGN, RETIRE, PLAN, WAIT, SAY and FINISH to decide and coordinate. In every brief tell the agent which teammates it must coordinate with (SAY <name>) and that it reports to you with DONE or BLOCKED. Never relay messages between agents that can talk to each other directly.
 {mode_block}
 
 Lead-only verbs:
@@ -1182,7 +1188,8 @@ class AgentSwarm:
             self._persist()
 
     def _entry_view(self, entry, limit=EVENT_TEXT_LIMIT):
-        return {"id": entry["id"], "kind": entry["kind"], "text": clip_tail(entry["text"], limit),
+        text = entry["text"] if entry["kind"] == "thinking" else clip_tail(entry["text"], limit)
+        return {"id": entry["id"], "kind": entry["kind"], "text": text,
                 "ts": entry["ts"], "done": entry["done"]}
 
     def _entry_open(self, agent, kind, text=""):
@@ -1222,7 +1229,7 @@ class AgentSwarm:
             return
         with self.lock:
             if text:
-                self.lead_trace.append({"kind": "thinking", "text": "Thinking", "ok": None, "detail": clip_tail(text, 8000)})
+                self.lead_trace.append({"kind": "thinking", "text": "Thinking", "ok": None, "detail": text})
                 self.lead_think_seconds += max(0.0, float(seconds))
             if say:
                 self.lead_trace.append({"text": clip(say, 500), "detail": "", "ok": None, "say": True})
@@ -1249,7 +1256,7 @@ class AgentSwarm:
 
     def _activity(self, agent, kind, text, detail="", ok=None):
         item = {"id": uuid.uuid4().hex[:10], "ts": round(time.time(), 3), "agent": agent.name if agent else "system",
-                "kind": kind, "text": clip(text, 260), "detail": clip(detail, 2500), "ok": ok}
+                "kind": kind, "text": _short(text, 260), "detail": clip(detail, 2500), "ok": ok}
         with self.lock:
             self.activity.append(item)
             if agent is not None and agent.lead and kind in ("run", "read", "write", "list", "search"):
@@ -1279,7 +1286,7 @@ class AgentSwarm:
             self._emit("agent", agent=self._agent_view(agent, entries=0))
 
     def _set_current(self, agent, text, force=False):
-        text = clip(text, 140)
+        text = _short(text, 160)
         now = time.time()
         if text == agent.current or not (force or now - agent.cur_emit > 0.5):
             return
@@ -1826,7 +1833,7 @@ class AgentSwarm:
                             if part == "reasoning":
                                 if reasoning_entry is None:
                                     reasoning_entry = self._entry_open(agent, "thinking")
-                                reasoning_entry["text"] = clip_tail(reasoning_entry["text"] + piece, 20000)
+                                reasoning_entry["text"] = reasoning_entry["text"] + piece
                                 self._entry_emit(agent, reasoning_entry)
                             else:
                                 now = time.monotonic()
@@ -1847,7 +1854,7 @@ class AgentSwarm:
                         else:
                             answer_text = answer_text[:guard.start] if guard.start is not None else answer_text
                         if reasoning_entry is not None:
-                            self._entry_set(agent, reasoning_entry, clip_tail(reasoning_text, 4000) + ("\n… [stopped: the model was looping]" if degenerate == "reasoning" else ""))
+                            self._entry_set(agent, reasoning_entry, reasoning_text + ("\n… [stopped: the model was looping]" if degenerate == "reasoning" else ""))
                         if output_entry is not None:
                             self._entry_set(agent, output_entry, display_text(answer_text) or "(discarded: the reply was stuck repeating itself)")
                         self._trace("model_degenerate", agent, model=candidate.get("model"), part=degenerate,
@@ -1858,7 +1865,7 @@ class AgentSwarm:
                     if not answer.strip() and not reasoning.strip():
                         raise RuntimeError("The model returned no response text.")
                     if reasoning_entry is not None:
-                        self._entry_set(agent, reasoning_entry, clip_tail(reasoning, 20000))
+                        self._entry_set(agent, reasoning_entry, reasoning)
                     if entries:
                         output_entry = self._view_output(agent, output_entry, answer, final=True)
                     self.active_candidate = candidate_index
@@ -2051,6 +2058,7 @@ class AgentSwarm:
     def _system_for(self, agent):
         if agent.lead:
             syntax = COMMON_SYNTAX.replace("{user_target}", ", user").replace("{max_actions}", str(MAX_ACTIONS_PER_TURN))
+            syntax = "\n".join(line for line in syntax.split("\n") if not line.startswith(LEAD_HIDDEN_SYNTAX))
             mode = MODE_CONTINUOUS if self.continuous else MODE_FINITE
             system = LEAD_SYSTEM.replace("{max_agents}", str(MAX_SUBAGENTS)).replace("{mode_block}", mode).replace("{syntax}", syntax)
         else:
@@ -2328,7 +2336,7 @@ class AgentSwarm:
                 parts.append("No new messages. Review progress. Use WAIT if the team is busy and nothing needs you; otherwise assign the next useful work.")
             else:
                 parts.append("No new messages. Check the team state and the FINISH CHECK. If the goal is met and verified, FINISH. "
-                             "If the human only asked a question or for an analysis and you already answered, FINISH now: do not install, run or write anything. "
+                             "If the human only asked a question or for an analysis and you already answered, FINISH now. "
                              "If something the human asked for is missing, assign exactly that. If the team is busy, WAIT.")
         blockers = self._blocker_section()
         if blockers:
@@ -2348,9 +2356,9 @@ class AgentSwarm:
                 clip(member.task, 220).replace("\n", " "), member.recoveries, MAX_AUTO_RECOVERIES))
         head = ("STILL BLOCKED: you have not unblocked these yet. Act on them now." if reminder else
                 "BLOCKED TEAMMATES: fixing these is your first job this turn.")
-        return (head + "\n" + "\n".join(rows) + "\nDiagnose with RUN or READ, fix the cause, then ASSIGN the agent a rewritten concrete task "
-                "(exact commands, paths and the fix). If it already failed that way, change approach: RETIRE it and SPAWN a fresh specialist, "
-                "or do the step yourself. Do not wait, and do not hand a technical obstacle to the human.")
+        return (head + "\n" + "\n".join(rows) + "\nDiagnose with READ or LIST, or SPAWN a debugger agent to reproduce the error, then ASSIGN the agent a rewritten concrete task "
+                "(exact commands, paths and the fix). If it already failed that way, change approach: RETIRE it and SPAWN a fresh specialist. "
+                "Never do the step yourself. Do not wait, and do not hand a technical obstacle to the human.")
 
     # -- finishing ------------------------------------------------------------
 
@@ -2370,9 +2378,9 @@ class AgentSwarm:
         if self.last_change_ts:
             stamp = time.strftime("%H:%M:%S", time.localtime(self.last_change_ts))
             if not members:
-                # A solo lead has nobody to hand verification to: its own successful check after the last change is enough.
+                # A lead with no agents cannot change or run anything itself, so there is nothing for it to verify.
                 if self.lead.last_report_ts <= self.last_change_ts:
-                    soft.append("files were written at {}: run one quick check (RUN, READ or LIST) on them, then FINISH".format(stamp))
+                    soft.append("files were written at {}: have an agent check them, then FINISH".format(stamp))
                 elif self.lead.last_result in ("FAIL", "PARTIAL"):
                     soft.append("your last check after the file change at {} failed: fix it or explain it in the final report".format(stamp))
             else:
@@ -2460,6 +2468,14 @@ class AgentSwarm:
             actions = actions[:MAX_ACTIONS_PER_TURN]
             results.append("[LIMIT] Only the first {} action blocks were run; {} were dropped. Send them again in your next reply if still needed.".format(
                 MAX_ACTIONS_PER_TURN, dropped))
+        if agent.lead:
+            allowed = []
+            for item in actions:
+                if item.verb in LEAD_FORBIDDEN:
+                    results.append(LEAD_FORBIDDEN_NOTICE.format(verb=item.verb))
+                else:
+                    allowed.append(item)
+            actions = allowed
         has_work = any(item.verb in TOOL_VERBS for item in actions)
         prefetched = self._prefetch_reads(agent, actions)
         for index, item in enumerate(actions):
@@ -2909,7 +2925,7 @@ class AgentSwarm:
                 tty = {"keys": parse_tty_keys(" ".join(key_lines)), "timeout": TTY_TIMEOUT}
             if not command:
                 return "[RUN rejected] No command was given."
-            self._set_current(agent, "Running: " + clip(command.split("\n")[0], 80), force=True)
+            self._set_current(agent, "Running: " + _short(command.split("\n")[0], 150), force=True)
             readonly = False
             try:
                 readonly = bool(host.is_readonly_command(self.chat_id, command))
@@ -2991,7 +3007,7 @@ class AgentSwarm:
             if agent.lead:
                 agent.last_report_ts = time.time()
                 agent.last_result = "PASS" if ok else "FAIL"
-            self._activity(agent, "run", "{} `{}`".format("Ran" if ok else "Command failed:", clip(command.split("\n")[0], 90)),
+            self._activity(agent, "run", "{} `{}`".format("Ran" if ok else "Command failed:", _short(command.split("\n")[0], 150)),
                            detail="exit code {}\n{}".format(outcome.get("returncode", -1), clip(outcome.get("output") or "(no output)", 2000)), ok=ok)
             return text
         return ""
