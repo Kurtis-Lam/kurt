@@ -1991,6 +1991,13 @@ class AgentSwarm:
                 member.name, member.role, member.status, wait, clip(member.task, 200).replace("\n", " ") or "none", heard))
         return "\n".join(rows) or "(no agents running: you are working alone)"
 
+    def _usage_text(self):
+        """The human's token usage report, so the lead can answer questions about it (empty when the host cannot provide it)."""
+        try:
+            return str(self.host.usage_context_text(self.chat_id) or "")
+        except Exception:
+            return ""
+
     def private_context(self, agent):
         with self.lock:
             plan, goal, prior = self.plan, self.goal, self.prior
@@ -2008,7 +2015,7 @@ class AgentSwarm:
                     "PROJECT FOLDER: {}\n\nFINISH CHECK: {}").format(
                 clip(plan, 3000) or "(no plan yet)", self._notes_text(agent), self._roster_text(agent), self._mailbox_text(agent),
                 self._known_files_text(agent), self._workspace_label(), self._finish_summary_line())
-            return head + body
+            return head + body + self._usage_text()
         return ("YOUR PRIVATE CONTEXT. Only you can see this. You do not see the human's request, the lead's plan or any teammate's work or thinking.\n\n"
                 "YOUR CURRENT TASK (stay on this and nothing else):\n{}\n\nYOUR NOTES:\n{}\n\n"
                 "TEAMMATES YOU CAN MESSAGE (SAY <name>; you know only what they tell you):\n{}\n\n"
