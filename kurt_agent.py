@@ -1991,6 +1991,13 @@ class AgentSwarm:
                 member.name, member.role, member.status, wait, clip(member.task, 200).replace("\n", " ") or "none", heard))
         return "\n".join(rows) or "(no agents running: you are working alone)"
 
+    def _clock_text(self, location):
+        """Today's date, local time and (lead only) the user's IP and location from the host; empty when unavailable."""
+        try:
+            return str(self.host.time_context_text(include_location=location) or "")
+        except Exception:
+            return ""
+
     def _usage_text(self):
         """The human's token usage report, so the lead can answer questions about it (empty when the host cannot provide it)."""
         try:
@@ -2015,7 +2022,7 @@ class AgentSwarm:
                     "PROJECT FOLDER: {}\n\nFINISH CHECK: {}").format(
                 clip(plan, 3000) or "(no plan yet)", self._notes_text(agent), self._roster_text(agent), self._mailbox_text(agent),
                 self._known_files_text(agent), self._workspace_label(), self._finish_summary_line())
-            return head + body + self._usage_text()
+            return head + body + self._clock_text(True) + self._usage_text()
         return ("YOUR PRIVATE CONTEXT. Only you can see this. You do not see the human's request, the lead's plan or any teammate's work or thinking.\n\n"
                 "YOUR CURRENT TASK (stay on this and nothing else):\n{}\n\nYOUR NOTES:\n{}\n\n"
                 "TEAMMATES YOU CAN MESSAGE (SAY <name>; you know only what they tell you):\n{}\n\n"
@@ -2023,7 +2030,7 @@ class AgentSwarm:
                 "FILES YOU HAVE WRITTEN OR READ (teammates may have added others: LIST the project folder):\n{}\n\n"
                 "PROJECT FOLDER: {}").format(
             clip(agent.task, 3500) or "(none: ask lead)", self._notes_text(agent), self._roster_text(agent), self._mailbox_text(agent),
-            self._known_files_text(agent), self._workspace_label())
+            self._known_files_text(agent), self._workspace_label()) + self._clock_text(False)
 
     def _workspace_label(self):
         try:
