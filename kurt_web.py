@@ -54,6 +54,36 @@ TRACE_SECRET_RE = re.compile(
     r"(?i)(?:\bbearer\s+[A-Za-z0-9._~+/=\-]{16,}|\bsk-[A-Za-z0-9_\-]{20,}|\bAIza[0-9A-Za-z_\-]{30,}|\bxai-[A-Za-z0-9]{20,})")
 CHAT_ID_RE = re.compile(r"[0-9a-fA-F]{32}")
 MAX_USAGE_RECORDS = 20000
+IP_INFO_TTL = 1800
+IP_INFO_RETRY = 120
+IP_INFO_SOURCES = ("https://ipinfo.io/json", "https://ipapi.co/json/", "https://api.ipify.org?format=json")
+
+
+def _fetch_ip_info():
+    """Public IP and approximate location from the first lookup service that answers ({} when offline or blocked)."""
+    for url in IP_INFO_SOURCES:
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": "Kurt", "Accept": "application/json"})
+            with urllib.request.urlopen(request, timeout=4) as response:
+                data = json.loads(response.read(20000).decode("utf-8", "replace"))
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        ip = str(data.get("ip") or "").strip()[:64]
+        if not ip:
+            continue
+
+        def field(*names):
+            for name in names:
+                value = " ".join(str(data.get(name) or "").split())[:80]
+                if value:
+                    return value
+            return ""
+
+        return {"ip": ip, "city": field("city"), "region": field("region"), "country": field("country_name", "country"),
+                "timezone": field("timezone"), "org": field("org"), "source": urlparse(url).netloc}
+    return {}
 WEB_PORT = int(os.environ.get("KURT_WEB_PORT", "1277"))
 MAX_BODY = 32 * 1024 * 1024
 MAX_IMPORT_BYTES = 20 * 1024 * 1024
@@ -1706,6 +1736,7 @@ body.modal-open .status-dot,body.modal-open .message,body.modal-open .message.li
 <section class="settings-panel active" data-settings-panel="general">
 <h3>Profile</h3><div class="profile-edit"><span class="avatar big" id="profilePreview"><svg viewBox="0 0 20 16" aria-hidden="true"><use href="#kurt-k"/></svg></span><div class="profile-fields"><div class="field"><label for="profileNameInput">Your name</label><input id="profileNameInput" maxlength="60" autocomplete="off" placeholder="What should Kurt call you?"></div><div class="row"><input type="file" id="profileAvatarFile" accept="image/*" hidden><button type="button" id="profileAvatarBtn">Upload picture</button><button type="button" class="ghost" id="profileAvatarRemove">Remove picture</button><button type="button" class="primary" id="saveProfile">Save name</button></div></div></div>
 <h3>General</h3><div class="inline-note">Each conversation gets a private workspace. Kurt can read any file accessible to your macOS account and can propose changes to any of them. Use Link folder in the composer to make a chosen folder this session’s working root. File changes, deletions, and commands ask for approval unless Always allow is on.</div>
+<div class="always-allow-row"><input type="checkbox" id="shareLocation"><label for="shareLocation"><b>Share date, time and location</b><small>Kurt always knows today's date and your local time from your computer's clock. With this on, it also looks up your public IP address and approximate location so it can answer questions about where you are. Turn this off to stop the lookup.</small></label></div>
 <div class="always-allow-row"><input type="checkbox" id="alwaysAllow"><label for="alwaysAllow"><b>Always allow</b><small>Kurt writes, modifies, and deletes files and runs commands anywhere your account can, without asking each time. Turn this off to be asked again.</small></label></div>
 <div class="settings-grid"><div class="field"><label>Default chat route</label><select id="settingsModel"></select></div><div class="field"><label>Default working environment</label><input value="Private isolated workspace per chat" disabled><div class="inline-note">Link a folder from the bottom of the composer to work directly in that folder. Unlinking returns this chat to its private workspace.</div></div></div>
 <div class="field"><label>System prompt</label><textarea id="systemPrompt" style="min-height:180px"></textarea><div class="inline-note">Edit the prompt here and select Save settings, or ask Kurt to revise it in chat. Kurt can prepare a complete replacement prompt and show an Apply prompt to Kurt review action. Type /system-prompt to inspect the active prompt or /edit-system-prompt to open this editor.</div></div>
@@ -2189,7 +2220,7 @@ async function downloadChatHistory(){
 }
 function autosize(){const t=$('prompt');t.style.height='auto';t.style.height=Math.min(t.scrollHeight,220)+'px'}
 function updateSend(){$('sendBtn').disabled=!!state.busy||!$('prompt').value.trim()}
-function syncAlwaysAllow(){const box=$('alwaysAllow');if(box)box.checked=!!(state.settings&&state.settings.always_allow)}
+function syncAlwaysAllow(){const box=$('alwaysAllow');if(box)box.checked=!!(state.settings&&state.settings.always_allow);const loc=$('shareLocation');if(loc)loc.checked=!state.settings||state.settings.share_location!==false}
 function hint(){
  const count=state.contextCount?state.contextCount+' uploaded item(s). ':'';
  const folder=state.linkedFolder?(String(state.linkedFolder).replace(/[\\/]+$/,'').split(/[\\/]/).pop()||String(state.linkedFolder)):'';
@@ -3959,7 +3990,7 @@ function openComposerFilePicker(){const picker=$('composerFiles');if(!picker)ret
 async function handleComposerFiles(){const picker=$('composerFiles');if(!picker.files||!picker.files.length)return;stageLocalFiles(picker);updateSend();$('prompt').focus()}
 async function startDownload(){const model=$('downloadModel').value.trim();if(!model){toast('Enter a model ID, repository or URL');return}try{const d=await api('/api/download',{model,source:$('downloadSource').value});$('downloadCaption').textContent='Queued: '+model;$('localDownloadStatus').textContent='Download queued: '+model;$('downloadModel').value='';toast('Download started in background');pollDownload()}catch(e){toast(e.message)}}
 async function pollDownload(){try{const d=await api('/api/download/status');const job=d.job;if(!job)return;const percent=job.total?job.completed/job.total*100:0;$('downloadFill').style.width=(job.state==='done'?100:percent)+'%';$('downloadCaption').textContent=job.state==='running'?`${job.model} · ${percent.toFixed(1)}% · ${job.human}`:`${job.model} · ${job.state}${job.error?' · '+job.error:''}`;if(job.state==='done'){await refreshBootstrap();$('localDownloadStatus').textContent=job.model+' installed successfully.';toast('Model download complete')}else if(job.state==='error'){$('localDownloadStatus').textContent=job.error||'Download failed';toast(job.error||'Download failed')}else{$('localDownloadStatus').textContent=job.model+' · '+percent.toFixed(1)+'% · '+job.human;setTimeout(pollDownload,1000)}}catch(e){console.error(e)}}
-$('sidebarSettings').onclick=openSettings;$('chatSearch').oninput=()=>renderChats();wirePlusMenu();$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('alwaysAllow').onchange=async()=>{const box=$('alwaysAllow'),value=box.checked;if(value&&!await confirmInApp('Turn on Always allow?','Kurt will write, modify, and delete files and run commands without asking you first, anywhere your account has permission. You can turn this off at any time.','Always allow',true)){box.checked=false;return}try{await api('/api/settings',{always_allow:value});state.settings.always_allow=value;hint();toast(value?'Always allow is on':'Always allow is off')}catch(error){box.checked=!value;toast(error.message)}};$('reloadSettings').onclick=()=>refreshBootstrap(true).then(()=>toast('Settings reloaded')).catch(error=>toast(error.message));$('systemPrompt').addEventListener('input',()=>{$('systemPrompt').dataset.dirty='1'});$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:'default',label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=()=>{if(!state.chatId&&!state.selectedFiles.length&&!state.selectedFolders.length){$('filesModal').classList.remove('show');updateSend();toast('Files will be added when you send your first message');return}attachFiles()};$('startDownload').onclick=startDownload;document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout();if(!event.target.closest('#plusMenu,#contextBtn'))closePlusMenu()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout();closePlusMenu()}});
+$('sidebarSettings').onclick=openSettings;$('chatSearch').oninput=()=>renderChats();wirePlusMenu();$('composerFiles').onchange=handleComposerFiles;$('topModel').onchange=async()=>{renderRoutePicker();try{await api('/api/settings',{default_route:$('topModel').value});$('settingsModel').value=$('topModel').value;syncSelect($('settingsModel'));state.settings.default_route=$('topModel').value;toast('Chat route selected')}catch(error){toast(error.message)}};$('settingsModel').onchange=()=>{$('topModel').value=$('settingsModel').value;$('topModel').dispatchEvent(new Event('change',{bubbles:true}))};$('saveSettings').onclick=saveSettings;$('shareLocation').onchange=async()=>{const box=$('shareLocation'),value=box.checked;try{await api('/api/settings',{share_location:value});state.settings.share_location=value;toast(value?'Kurt can now see your date, time and location':'Kurt no longer looks up your location')}catch(error){box.checked=!value;toast(error.message)}};$('alwaysAllow').onchange=async()=>{const box=$('alwaysAllow'),value=box.checked;if(value&&!await confirmInApp('Turn on Always allow?','Kurt will write, modify, and delete files and run commands without asking you first, anywhere your account has permission. You can turn this off at any time.','Always allow',true)){box.checked=false;return}try{await api('/api/settings',{always_allow:value});state.settings.always_allow=value;hint();toast(value?'Always allow is on':'Always allow is off')}catch(error){box.checked=!value;toast(error.message)}};$('reloadSettings').onclick=()=>refreshBootstrap(true).then(()=>toast('Settings reloaded')).catch(error=>toast(error.message));$('systemPrompt').addEventListener('input',()=>{$('systemPrompt').dataset.dirty='1'});$('addKey').onclick=async()=>{const value=$('keyValue').value.trim();if(!value){toast('Enter an API key');return}try{await api('/api/settings',{key_action:'add',provider:$('keyProvider').value,group:'default',label:$('keyLabel').value,value});$('keyValue').value='';await refreshBootstrap();toast('API key saved locally')}catch(error){toast(error.message)}};$('keySort').onchange=()=>{state.keySort=$('keySort').value;renderKeys()};$('addFailoverMember').onclick=()=>addFailoverMember();$('saveFailoverGroup').onclick=saveFailoverGroup;$('cancelFailoverGroup').onclick=resetFailoverForm;$('refreshFiles').onclick=browseFiles;$('selectCurrentFolder').onclick=()=>{const path=$('fileFolder').value.trim();if(!state.selectedFolders.includes(path))state.selectedFolders.push(path);renderPendingUploads();toast('Current folder staged for this chat')};$('chooseLocalFiles').onclick=()=>$('localFiles').click();$('chooseLocalFolder').onclick=()=>$('localFolder').click();$('localFiles').onchange=()=>stageLocalFiles($('localFiles'));$('localFolder').onchange=()=>stageLocalFiles($('localFolder'));$('attachFiles').onclick=()=>{if(!state.chatId&&!state.selectedFiles.length&&!state.selectedFolders.length){$('filesModal').classList.remove('show');updateSend();toast('Files will be added when you send your first message');return}attachFiles()};$('startDownload').onclick=startDownload;document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).classList.remove('show'));document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.onclick=event=>{if(event.target===backdrop)backdrop.classList.remove('show')});document.addEventListener('click',event=>{if(!event.target.closest('#chatContextMenu,.chat-more'))closeChatMenu();if(!event.target.closest('.custom-select'))closeCustomSelects();if(!event.target.closest('#routePicker,#routeFlyout'))closeRouteFlyout();if(!event.target.closest('#plusMenu,#contextBtn'))closePlusMenu()});document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeChatMenu();closeCustomSelects();closeRouteFlyout();closePlusMenu()}});
 const toggleSidebar=()=>{if(matchMedia('(max-width:700px)').matches){document.body.classList.toggle('nav-open')}else{const collapsed=document.documentElement.classList.toggle('side-collapsed');try{localStorage.setItem('kurt-side-collapsed',collapsed?'1':'0')}catch(error){}}};$('menuBtn').onclick=toggleSidebar;$('sideToggle').onclick=toggleSidebar;$('scrim').onclick=()=>document.body.classList.remove('nav-open');document.querySelector('.sidebar').addEventListener('click',event=>{if(event.target.closest('.chat-item,#newChat,#sidebarSettings'))document.body.classList.remove('nav-open')});$('exportChatBtn').onclick=downloadChatHistory;wireChatFiles();$('themeBtn').onclick=()=>{const root=document.documentElement;root.classList.add('theme-fade');setTimeout(()=>root.classList.remove('theme-fade'),420);const theme=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=theme;try{localStorage.setItem('kurt-theme',theme)}catch(error){}syncThemeIcon()};syncThemeIcon();enhanceAllSelects();
 (()=>{const sync=()=>document.body.classList.toggle('modal-open',!!document.querySelector('.modal-backdrop.show,.dialog-backdrop.show'));const observer=new MutationObserver(sync);document.querySelectorAll('.modal-backdrop,.dialog-backdrop').forEach(node=>observer.observe(node,{attributes:true,attributeFilter:['class']}));sync()})();
 $('showApiModelForm').onclick=()=>openApiModelForm(null);$('cancelApiModel').onclick=closeApiModelForm;$('addApiModel').onclick=saveApiModel;
@@ -4589,10 +4620,17 @@ class KurtWebApp:
         self.settings.setdefault("always_allow", False)
         self.settings.setdefault("user_name", "")
         self.settings.setdefault("user_avatar", "")
+        self.settings.setdefault("share_location", True)
         self.settings.setdefault("api_groups", [])
         self.settings.setdefault("mcp_servers", [])
         self.model_lock = threading.RLock()
         self.usage_lock = threading.Lock()
+        self.ip_lock = threading.Lock()
+        self.ip_info = {}
+        self.ip_info_ts = 0.0
+        self.ip_fetching = False
+        self.ip_attempted = False
+        self.refresh_ip_info()
         self.trace_lock = threading.Lock()
         self.mcp_media_allowlist = {}
         self.preview_caps = {}
@@ -5302,6 +5340,68 @@ class KurtWebApp:
             "totals": totals, "windows": by_window, "models": models, "days": days,
             "records": len(records), "first_ts": records[0].get("ts") if records and isinstance(records[0], dict) else None,
         }
+
+    def refresh_ip_info(self, force=False):
+        """Look up the public IP in a background thread so a chat request never waits for the network."""
+        if not self.settings.get("share_location", True):
+            return
+        with self.ip_lock:
+            age = time.time() - self.ip_info_ts
+            ttl = IP_INFO_TTL if self.ip_info else IP_INFO_RETRY
+            if self.ip_fetching or (self.ip_attempted and not force and age < ttl):
+                return
+            self.ip_fetching = True
+
+        def work():
+            info = {}
+            try:
+                info = _fetch_ip_info()
+            except Exception:
+                info = {}
+            with self.ip_lock:
+                if info:
+                    self.ip_info = info
+                self.ip_info_ts = time.time()
+                self.ip_attempted = True
+                self.ip_fetching = False
+
+        threading.Thread(target=work, name="kurt-ip-info", daemon=True).start()
+
+    def time_context_text(self, include_location=True):
+        """Today's date, the user's local time and, when allowed, their IP and approximate location, for the system prompt."""
+        now = datetime.datetime.now().astimezone()
+        offset = now.strftime("%z")
+        offset = "{}:{}".format(offset[:3], offset[3:]) if len(offset) == 5 else offset
+        lines = ["", "CURRENT DATE AND TIME (read from the user's computer clock when this message was sent): {}, {} {} {}, {} (UTC{}, {}). ISO: {}. "
+                     "Use this as the real current date and time. Never assume the date or year from your training data. "
+                     "When the user says today, now, tonight, tomorrow or this week, they mean relative to this moment in their timezone.".format(
+                         now.strftime("%A"), now.day, now.strftime("%B"), now.year, now.strftime("%H:%M:%S"), offset, now.tzname() or "local time",
+                         now.isoformat(timespec="seconds"))]
+        if not include_location:
+            return "\n".join(lines)
+        if not self.settings.get("share_location", True):
+            lines.append("USER LOCATION: the user turned off IP location in Settings, so Kurt does not know their IP address or where they are. "
+                         "If it matters, ask them. Their timezone above still comes from their computer clock.")
+            return "\n".join(lines)
+        self.refresh_ip_info()
+        with self.ip_lock:
+            info = dict(self.ip_info)
+            attempted, fetching = self.ip_attempted, self.ip_fetching
+        if info:
+            place = ", ".join(part for part in (info.get("city"), info.get("region"), info.get("country")) if part) or "unknown place"
+            detail = "public IP address {}; approximate location {}".format(info["ip"], place)
+            if info.get("timezone"):
+                detail += "; IP timezone {}".format(info["timezone"])
+            if info.get("org"):
+                detail += "; network {}".format(info["org"])
+            lines.append("USER LOCATION (approximate, looked up from the user's public IP address via {}; it can be wrong or point at the ISP or a VPN): {}. "
+                         "Use it for location-relevant questions such as weather, local events, nearby places, currency or local time elsewhere, "
+                         "and tell the user their IP and location plainly when they ask. Do not bring it up unprompted.".format(info.get("source") or "a lookup service", detail))
+        elif fetching or not attempted:
+            lines.append("USER LOCATION: the IP lookup is still running, so the location is not known yet. Say so if asked, or ask the user where they are.")
+        else:
+            lines.append("USER LOCATION: the IP lookup failed (the computer may be offline or the lookup service blocked). Say so if asked, or ask the user where they are.")
+        return "\n".join(lines)
 
     def usage_context_text(self, chat_id=None):
         """Compact, model-readable token usage report (the same data as Settings > Usage) for the system prompt."""
@@ -6036,6 +6136,7 @@ class KurtWebApp:
                        "When asked to generate an image, say that an image-generation MCP must be "
                        "connected in Settings > MCP servers (for example local ComfyUI MCP) before "
                        "Kurt can generate it. Do not claim that you generated an image.")
+        prompt += self.time_context_text()
         prompt += self.usage_context_text(chat_id)
         try:
             snapshot_dir = self.chat_workspace(chat_id) / ".kurt"
@@ -6966,7 +7067,7 @@ class Handler(BaseHTTPRequestHandler):
                     "keys": self.app.sanitized_keys(), "api_groups": self.app.api_groups_view(),
                     "mcp_servers": self.app.mcp_server_summaries(), "mcp_tools": self.app.mcp_tools_view(),
                     "skills": list_skills(self.app.skills_directory),
-                    "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""), "system_prompt": self.app.editable_system_prompt(), "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False)), "always_allow": bool(self.app.settings.get("always_allow", False)), "user_name": str(self.app.settings.get("user_name") or ""), "user_avatar": str(self.app.settings.get("user_avatar") or "")},
+                    "settings": {"model": K.MODEL, "default_route": self.app.settings.get("default_route", ""), "system_prompt": self.app.editable_system_prompt(), "allow_project_writes": bool(self.app.settings.get("allow_project_writes", False)), "always_allow": bool(self.app.settings.get("always_allow", False)), "user_name": str(self.app.settings.get("user_name") or ""), "user_avatar": str(self.app.settings.get("user_avatar") or ""), "share_location": bool(self.app.settings.get("share_location", True))},
                     "project_root": str(self.app.workspace()),
                 })
             elif parsed.path == "/api/agent/poll":
@@ -7675,6 +7776,10 @@ class Handler(BaseHTTPRequestHandler):
             self.app.settings["default_effort"] = value
         if "always_allow" in data:
             self.app.settings["always_allow"] = bool(data.get("always_allow"))
+        if "share_location" in data:
+            self.app.settings["share_location"] = bool(data.get("share_location"))
+            if self.app.settings["share_location"]:
+                self.app.refresh_ip_info(force=True)
         if "user_name" in data:
             user_name = " ".join(str(data.get("user_name") or "").split())
             if len(user_name) > 60:
