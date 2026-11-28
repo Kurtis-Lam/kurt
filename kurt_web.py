@@ -872,7 +872,8 @@ html.side-collapsed .menu-btn{display:inline-grid}
 .response-metrics{min-width:0;color:var(--faint);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
 
 /* Thinking and work log */
-.think-head{display:inline-flex;align-items:center;gap:6px;background:transparent;border:0;padding:3px 0;color:var(--muted);font-size:13px;font-weight:450;border-radius:6px}
+.think-head{display:inline-flex;align-items:center;justify-content:flex-start;gap:6px;max-width:100%;min-width:0;background:transparent;border:0;padding:3px 0;color:var(--muted);font-size:13px;font-weight:450;border-radius:6px;text-align:left}
+.think-head .think-label{min-width:0;text-align:left;white-space:normal;overflow-wrap:anywhere}
 .think-head:hover{background:transparent;color:var(--text)}
 .think-head .chev{width:14px;height:14px;transition:transform .22s var(--ease);transform:rotate(-90deg)}
 .think-head.open .chev{transform:none}
@@ -884,11 +885,11 @@ html.side-collapsed .menu-btn{display:inline-grid}
 .work-log-body{display:block;max-height:0;overflow:hidden;opacity:0;padding:0 0 0 14px;color:var(--muted);font:13px/1.65 var(--sans);overflow-wrap:anywhere;transition:max-height .24s ease,opacity .2s}
 .work-log.open .work-log-body{max-height:none;overflow:visible;opacity:1;padding:4px 0 4px 14px}
 .think-text{color:var(--muted);font:13.5px/1.65 var(--sans);white-space:pre-wrap;overflow-wrap:anywhere;padding:2px 0 6px}
-.work-step{position:relative;padding:5px 0 5px 18px;color:var(--muted)}
+.work-step{position:relative;padding:5px 0 5px 18px;color:var(--muted);text-align:left}
 .work-step::before{content:"";position:absolute;left:2px;top:.95em;width:7px;height:7px;border-radius:50%;background:var(--faint)}
 .work-step.ok::before{background:var(--ok)}
 .work-step.fail::before{background:var(--bad)}
-.work-step summary{cursor:pointer;color:var(--text);font-weight:500;list-style:none}
+.work-step summary{cursor:pointer;color:var(--text);font-weight:500;list-style:none;text-align:left}
 .work-step summary::-webkit-details-marker{display:none}
 .work-step.fail summary{color:var(--bad)}
 .work-detail{margin:6px 0 2px;padding:8px 12px;background:var(--code);border:1px solid var(--line);border-radius:9px;color:var(--muted);font:12px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}
@@ -1259,7 +1260,7 @@ html.side-collapsed .menu-btn{display:inline-grid}
 .st-waiting .ac-pill,.st-retrying .ac-pill{background:var(--warn-soft);color:var(--warn)}
 .ac-chev{width:15px;height:15px;color:var(--faint);transition:transform .2s var(--ease)}
 .ac.open .ac-chev{transform:rotate(180deg)}
-.ac-now{display:flex;align-items:center;gap:9px;min-width:0;margin:0 13px 12px;padding:7px 11px;border-radius:10px;background:var(--raise);font-size:12.5px;line-height:1.4}
+.ac-now{display:flex;align-items:center;justify-content:flex-start;text-align:left;gap:9px;min-width:0;margin:0 13px 12px;padding:7px 11px;border-radius:10px;background:var(--raise);font-size:12.5px;line-height:1.4}
 .ac-now i{flex:none;width:7px;height:7px;border-radius:50%;background:var(--info)}
 .ac.active .ac-now i{animation:blink 1.2s ease-in-out infinite}
 .ac-now span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1310,7 +1311,8 @@ html.side-collapsed .menu-btn{display:inline-grid}
 .agent-note{align-self:center;max-width:min(680px,92%);margin:6px auto;padding:6px 12px;border-radius:999px;background:var(--raise);color:var(--muted);font-size:12.5px;line-height:1.45;text-align:center}
 .ac-alert p{margin:3px 0 0;max-height:130px;overflow:auto;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
 .th{border:1px solid var(--line);border-radius:12px;background:var(--code);overflow:hidden}
-.th-head{display:flex;align-items:center;gap:8px;width:100%;padding:8px 11px;border:0;border-radius:0;background:transparent;color:var(--muted);font:500 12.5px var(--sans);text-align:left}
+.th-head{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;padding:8px 11px;border:0;border-radius:0;background:transparent;color:var(--muted);font:500 12.5px var(--sans);text-align:left}
+.th-head .th-label{min-width:0;text-align:left;overflow-wrap:anywhere}
 .th-head:hover{color:var(--text);background:transparent}
 .th-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--faint)}
 .th.live .th-dot{background:var(--info);animation:blink 1s ease-in-out infinite}
@@ -3401,11 +3403,11 @@ function agentFillThought(c,ag){
  c.th.classList.toggle('live',live);c.thLabel.textContent=live?'Thinking…':'Last thought';
  c.thTime.dataset.ts=String(last.ts);c.thTime.dataset.live=live?'1':'';c.thTime.textContent=live?agDur(agNow()-last.ts):agAgo(last.ts);
  c.thText.hidden=false;
- const text=String(last.text).trim(),shown=open?text.slice(-6000):text.slice(-560);
+ const shown=String(last.text).trim();
  if(c.thText.__v!==shown){c.thText.textContent=shown;c.thText.__v=shown;c.thText.scrollTop=c.thText.scrollHeight}
  const earlier=all.slice(0,-1).slice(-5).reverse();c.thMore.hidden=!earlier.length;
  const sig=earlier.map(e=>e.id).join(',');
- if(c.thMore.__sig!==sig){c.thMore.__sig=sig;c.thSum.textContent='Earlier thoughts ('+earlier.length+')';c.thList.replaceChildren();earlier.forEach(e=>{const p=agEl('p','th-old',String(e.text).trim().slice(-900));p.onclick=()=>p.classList.toggle('open');c.thList.appendChild(p)})}
+ if(c.thMore.__sig!==sig){c.thMore.__sig=sig;c.thSum.textContent='Earlier thoughts ('+earlier.length+')';c.thList.replaceChildren();earlier.forEach(e=>{const p=agEl('p','th-old',String(e.text).trim());p.onclick=()=>p.classList.toggle('open');c.thList.appendChild(p)})}
 }
 function agentFillMemory(c,ag){
  const notes=(ag.notes||[]).slice(0,8),peers=ag.peers||[],files=(ag.files||[]).slice(-8);
