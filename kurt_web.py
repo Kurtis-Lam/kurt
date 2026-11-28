@@ -5303,6 +5303,54 @@ class KurtWebApp:
             "records": len(records), "first_ts": records[0].get("ts") if records and isinstance(records[0], dict) else None,
         }
 
+    def usage_context_text(self, chat_id=None):
+        """Compact, model-readable token usage report (the same data as Settings > Usage) for the system prompt."""
+        try:
+            summary = self.usage_summary()
+            with self.usage_lock:
+                records = _load_json(USAGE_FILE, [])
+        except Exception:
+            return ""
+
+        def fmt(bucket):
+            tin, tout = int(bucket.get("input_tokens") or 0), int(bucket.get("output_tokens") or 0)
+            return "{:,} total ({:,} input + {:,} output) over {:,} request(s)".format(tin + tout, tin, tout, int(bucket.get("requests") or 0))
+
+        lines = ["", "TOKEN USAGE (recorded by Kurt on this computer; the same numbers as Settings > Usage). "
+                     "When the user asks how many tokens they have spent or used, answer from these figures and give the exact numbers. "
+                     "They cover finished requests only, so the reply being written right now is not included. "
+                     "Kurt records tokens, not money: never invent a price or a cost."]
+        if not summary.get("records"):
+            lines.append("- No usage has been recorded yet.")
+            return "\n".join(lines)
+        mine = {"requests": 0, "input_tokens": 0, "output_tokens": 0}
+        for item in records:
+            if isinstance(item, dict) and chat_id and str(item.get("chat_id") or "") == str(chat_id):
+                mine["requests"] += 1
+                mine["input_tokens"] += int(item.get("input_tokens") or 0)
+                mine["output_tokens"] += int(item.get("output_tokens") or 0)
+        if chat_id:
+            lines.append("- This chat so far: " + (fmt(mine) if mine["requests"] else "nothing recorded yet"))
+        windows = summary.get("windows") or {}
+        lines.append("- Today: " + fmt(windows.get("today") or {}))
+        lines.append("- Last 7 days: " + fmt(windows.get("week") or {}))
+        lines.append("- Last 30 days: " + fmt(windows.get("month") or {}))
+        totals = summary.get("totals") or {}
+        first = summary.get("first_ts")
+        since = " since " + time.strftime("%Y-%m-%d", time.localtime(float(first))) if first else ""
+        lines.append("- All time{}: {}".format(since, fmt(totals)))
+        models = summary.get("models") or []
+        if models:
+            lines.append("- By model: " + "; ".join("{} {:,} tokens ({:,} request(s))".format(
+                row.get("label") or row.get("model"), int(row.get("input_tokens") or 0) + int(row.get("output_tokens") or 0),
+                int(row.get("requests") or 0)) for row in models[:6]))
+        estimated = int(totals.get("estimated_requests") or 0)
+        if estimated:
+            lines.append("- {:,} of {:,} recorded request(s) have token counts estimated by Kurt (about 4 characters per token) because the provider did not report them.".format(
+                estimated, int(totals.get("requests") or 0)))
+        lines.append("- Usage history keeps at most the last {:,} requests.".format(MAX_USAGE_RECORDS))
+        return "\n".join(lines)
+
     def reset_usage(self):
         with self.usage_lock:
             _atomic_json(USAGE_FILE, [])
@@ -5988,6 +6036,7 @@ class KurtWebApp:
                        "When asked to generate an image, say that an image-generation MCP must be "
                        "connected in Settings > MCP servers (for example local ComfyUI MCP) before "
                        "Kurt can generate it. Do not claim that you generated an image.")
+        prompt += self.usage_context_text(chat_id)
         try:
             snapshot_dir = self.chat_workspace(chat_id) / ".kurt"
             snapshot_dir.mkdir(parents=True, exist_ok=True)
