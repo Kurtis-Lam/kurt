@@ -39,6 +39,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import kurt as K
+import kurt_docs as KD
 from kurt_sandbox import is_code_file, validate_content, run_workspace_command
 from kurt_integrations import (MCPError, call_mcp_tool, delete_skill, get_skill, list_mcp_tools, list_skills, save_skill, validate_mcp_config)
 from kurt_agent import AgentManager, ModelGate
@@ -209,6 +210,14 @@ KURT ACTION BLOCK SYNTAX:
 @@@ RUN
 <one shell command chosen for the user's current request>
 @@@ END
+- A RUN block may span several lines: heredocs and multi-line python3 scripts keep their line
+  breaks. For anything longer than a few lines, prefer @@@ WRITE of a small helper script (for
+  example edit.py) and then @@@ RUN python3 edit.py.
+- To change XML, MusicXML, JSON, YAML, CSV, HTML or any other structured file, parse it with a real
+  parser in a script (xml.etree, json, csv), change only what was asked, validate the result, and
+  save it as a new or edited file. Never rewrite a whole structured file by hand when a script can do it.
+- If a command fails, read the error, fix the cause and run it again in the same turn. Do not stop
+  after a failed command with only a promise such as "let me try again".
 - To read a file: @@@ READ on one line, the absolute or relative path on the next line, then @@@ END.
 - To list a directory: @@@ LIST, the path on the next line, then @@@ END.
 - To delete one regular local file: @@@ DELETE followed by its exact absolute or working-root-relative
@@ -338,6 +347,13 @@ KURT COMPLETION SUMMARY (fixed application rule; always applies):
 - Never end with only "done" or a one-line confirmation. The user does not see your reasoning as an
   answer, so never assume that explaining something in your reasoning has told them.
 """
+
+STALL_NUDGE_MESSAGE = (
+    "You said what you would do next but did not do it. Do it now: emit exactly one complete @@@ block "
+    "(RUN, WRITE, READ ...) that performs the next step toward the user's request. Multi-line commands "
+    "are fine inside RUN, or WRITE a small script and RUN it. If the task is already finished, reply "
+    "with the final answer in plain text instead of promising more work."
+)
 
 COMPLETION_SUMMARY_MESSAGE = (
     "Your last message was too brief to count as the final answer. Reply now in visible text, not in your reasoning, "
@@ -2086,6 +2102,7 @@ function formatThought(seconds){const s=Number(seconds);if(!Number.isFinite(s)||
 function setReasoningOpen(panel,open){panel.classList.toggle('open',open);if(panel._head){panel._head.classList.toggle('open',open);panel._head.setAttribute('aria-expanded',String(open))}}
 function reasoningBlock(){return null}
 function thinkBlock(){const d=document.createElement('div');d.className='think work-log';d.innerHTML='<div class="work-log-body"></div>';return d}
+function collapseThink(node){const entries=node.__worklog||[];const waiting=entries.some(x=>x&&x.kind==='approval'&&(x.approved===null||x.approved===undefined));if(!waiting)setThinkOpen(node,false)}
 function setThinkOpen(node,open){const panel=node.querySelector('.work-log'),head=node.querySelector('.think-head');if(!panel||!head)return;panel.classList.toggle('open',open);head.classList.toggle('open',open);head.setAttribute('aria-expanded',String(open))}
 function setThinkLabel(node,live,seconds){const head=node.querySelector('.think-head');const label=head&&head.querySelector('.think-label');if(!label)return;head.classList.toggle('live',!!live);if(live){label.textContent='Thinking…';return}const t=formatThought(seconds);label.textContent=t?'Thought for '+t:'Thought'}
 function setReasoning(node,text,live=false){
@@ -2113,7 +2130,7 @@ function setThink(node,entries){
   const label=String(data.text||'Step'),detail=String(data.detail||'');
   const row=document.createElement(detail&&detail!==label?'details':'div');
   row.className='work-step'+(data.ok===true?' ok':data.ok===false?' fail':'');
-  if(row.tagName==='DETAILS'){row.open=true;const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;
+  if(row.tagName==='DETAILS'){row.open=node.classList.contains('live');const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='work-detail';content.textContent=detail;row.append(summary,content)}else row.textContent=label;
   body.appendChild(row);
  });
  if(nearBottom)body.scrollTop=body.scrollHeight;
@@ -2190,7 +2207,7 @@ function resolveApprovalPause(node,event){
 
 
 
-function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const seconds=node.__thinkSeconds||(node.__t0?(performance.now()-node.__t0)/1000:0);setThinkLabel(node,false,seconds);if(!node.__userToggled)setThinkOpen(node,true)}
+function endThink(node){const status=node.querySelector('.assistant-status');if(status)status.textContent='';const seconds=node.__thinkSeconds||(node.__t0?(performance.now()-node.__t0)/1000:0);setThinkLabel(node,false,seconds);collapseThink(node)}
 function setApprovalOutput(node,event){const entries=node.__worklog||[];const item=entries.find(value=>value&&value.kind==='approval'&&value.approval&&value.approval.id===event.approval_id);if(item){item.output=event.output;setThink(node,entries)}}
 
 
@@ -2277,7 +2294,7 @@ function renderMessage(role,content,artifacts,extra){
   const contentNode=bubble.querySelector('.content');contentNode.innerHTML=renderMarkdown(safeContent);typesetMath(contentNode);bindFileLinks(contentNode);renderMcpMedia(contentNode,extra?.media||[]);bindCopy(wrap);
   wrap.__worklog=Array.isArray(extra?.worklog)?extra.worklog.slice():[];
   if(extra?.reasoning&&!wrap.__worklog.some(entry=>entry&&entry.kind==='thinking'))wrap.__worklog.unshift({kind:'thinking',text:'Thinking',ok:null,detail:extra.reasoning});
-  setThink(wrap,wrap.__worklog);setThinkLabel(wrap,false,extra?.thinkingSeconds||(extra?.stats&&extra.stats.thought_seconds)||0);if(wrap.__worklog.length)setThinkOpen(wrap,true);
+  setThink(wrap,wrap.__worklog);setThinkLabel(wrap,false,extra?.thinkingSeconds||(extra?.stats&&extra.stats.thought_seconds)||0);setThinkOpen(wrap,false);
   setResponseMeta(wrap,extra?.stats,extra?.model);renderArtifactTriggers(bubble.querySelector('.message-artifacts'),artifacts||[]);
   wrap.__artifacts=Array.isArray(artifacts)?artifacts.slice():[];
   bubble.querySelector('.copy-msg').onclick=()=>navigator.clipboard.writeText(wrap.dataset.raw||'').then(()=>toast('Message copied'));
@@ -3646,7 +3663,7 @@ function agentLiveEnd(){
  if(!node.__worklog.length&&!node.dataset.raw){node.remove();return}
  setThink(node,node.__worklog);setThinkLabel(node,false,Date.now()/1000-a.liveStart);
  const status=node.querySelector('.assistant-status');if(status)status.textContent='';
- if(!node.__userToggled)setThinkOpen(node,true);
+ collapseThink(node);
 }
 function agentLiveFinish(message){
  const a=state.agent,node=a.liveNode&&a.liveNode.isConnected?a.liveNode:null;
@@ -3665,7 +3682,7 @@ function agentLiveFinish(message){
  const seconds=message.thinking_seconds||(Date.now()/1000-a.liveStart);
  setThink(node,node.__worklog);setThinkLabel(node,false,seconds);
  const status=node.querySelector('.assistant-status');if(status)status.textContent='';
- if(!node.__userToggled)setThinkOpen(node,true);
+ collapseThink(node);
  a.liveNode=null;a.liveItems=new Map();follow=true;scrollEnd(true);
 }
 function agentSyncLive(){
@@ -4228,8 +4245,12 @@ def _clean_action_text(text):
     return text
 
 
-def action_argument(match):
-    """Join an action header and optional body; tolerate commands split across lines."""
+def action_argument(match, keep_newlines=False):
+    """Join an action header and optional body; tolerate commands split across lines.
+
+    keep_newlines=True is used for RUN blocks: multi-line scripts, heredocs and quoted
+    python -c bodies must reach the shell with their line breaks intact.
+    """
     header = _clean_action_text(match.group(1))
     body = _clean_action_text(match.group(2))
     if not re.search(ACTION_MARKER_RE + r"\s*END\s*$", match.group(0), re.I):
@@ -4237,6 +4258,12 @@ def action_argument(match):
             return header
         first_line = next((line.strip() for line in body.splitlines() if line.strip()), "")
         return first_line
+    if keep_newlines:
+        body = str(match.group(2) or "").strip("\r\n")
+        body = re.sub(r"<\|tool_call_(?:start|end)\|>", "", body, flags=re.I).rstrip()
+        if header and body:
+            return header + "\n" + body
+        return header or body
     if header and body:
         return header + " " + re.sub(r"\s+", " ", body)
     return header or re.sub(r"\s+", " ", body)
@@ -6060,17 +6087,22 @@ class KurtWebApp:
             path.relative_to(root).as_posix().lower(),
         ))
         for path in paths:
+            extracted_note = ''
             try:
                 raw = path.read_bytes()
-                if b'\x00' in raw[:4096]:
-                    skipped += 1
-                    continue
-                content = raw.decode('utf-8')
+                if b'\x00' in raw[:4096] or path.suffix.lower() in KD.EXTRACTABLE:
+                    content = KD.extract_text(path, raw)
+                    if not content:
+                        skipped += 1
+                        continue
+                    extracted_note = ' (text extracted from ' + path.suffix.lower().lstrip('.') + '; edit the original with a script)'
+                else:
+                    content = KD.decode_text(raw)
             except (OSError, UnicodeError):
                 skipped += 1
                 continue
             rel = path.relative_to(root).as_posix()
-            header = f'\n--- FILE: {rel} ---\n'
+            header = f'\n--- FILE: {rel}{extracted_note} ---\n'
             remaining = MAX_WORKSPACE_CONTEXT - used - len(header) - 1
             if remaining <= 0:
                 skipped += 1
@@ -8578,6 +8610,7 @@ class Handler(BaseHTTPRequestHandler):
             max_rounds = 12
             file_action_retries = 0
             summary_requests = 0
+            stall_nudges = 0
             work_recap = []
             for round_index in range(max_rounds):
                 if round_index == 0 and DESKTOP_VISUAL_REQUEST_RE.search(user_text):
@@ -8628,7 +8661,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 tool_actions = []
                 for match in RUN_ACTION_RE.finditer(raw):
-                    tool_actions.append((match.start(), "RUN", action_argument(match)))
+                    tool_actions.append((match.start(), "RUN", action_argument(match, keep_newlines=True)))
                 for match in SEARCH_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "SEARCH", action_argument(match)))
                 for match in READ_ACTION_RE.finditer(raw):
@@ -8638,7 +8671,7 @@ class Handler(BaseHTTPRequestHandler):
                 for match in DELETE_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "DELETE", action_argument(match)))
                 for match in AGENT_RUN_ACTION_RE.finditer(raw):
-                    tool_actions.append((match.start(), "AGENT_RUN", action_argument(match)))
+                    tool_actions.append((match.start(), "AGENT_RUN", action_argument(match, keep_newlines=True)))
                 for match in AGENT_READ_ACTION_RE.finditer(raw):
                     tool_actions.append((match.start(), "AGENT_READ", action_argument(match)))
                 for match in AGENT_LIST_ACTION_RE.finditer(raw):
@@ -8957,6 +8990,17 @@ class Handler(BaseHTTPRequestHandler):
                         "content": "The application rejected these file changes during syntax/structure validation:\n" + details + "\nFix the reported problems, provide a concise Change summary, and return complete corrected file actions. Do not claim checks passed unless they do.",
                     })
                     continue
+                if not tool_actions and stall_nudges < 3 and round_index < max_rounds - 1:
+                    stall_probe = K.BLOCK_RE.sub("", strip_unsupported_actions(split_thinking(raw)[1])).strip()
+                    last_failed = bool(work_recap) and work_recap[-1][0] == "command" and not work_recap[-1][2]
+                    promises = re.search(r"(?i)\b(let me|i(?:'|’)ll|i will|i(?:'|’)m going to|next,? i|now i|going to)\b", stall_probe)
+                    if len(stall_probe) < 600 and promises and (last_failed or not work_recap):
+                        stall_nudges += 1
+                        log_step("The reply promised another step but contained no action. Asking Kurt to continue.", False, status="Continuing…",
+                                 detail="The application detected a reply that stopped after saying what it would do next. It is asking the model to emit the action block or finish the task.")
+                        messages.append({"role": "assistant", "content": raw})
+                        messages.append({"role": "user", "content": STALL_NUDGE_MESSAGE})
+                        continue
                 if work_recap and summary_requests < 1 and round_index < max_rounds - 1:
                     thin_probe = K.BLOCK_RE.sub("", strip_unsupported_actions(split_thinking(raw)[1])).strip()
                     if len(re.sub(r"\s+", " ", thin_probe)) < 220:
